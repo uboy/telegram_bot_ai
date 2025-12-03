@@ -144,12 +144,30 @@ def _n8n_status_text() -> str:
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главный обработчик callback'ов"""
     query = update.callback_query
-    await query.answer()
+    if not query:
+        return
+    
+    # Пытаемся ответить на callback query (если он еще валиден)
+    try:
+        await query.answer()
+    except BadRequest as e:
+        error_msg = str(e).lower()
+        if 'query is too old' in error_msg or 'query id is invalid' in error_msg:
+            # Query слишком старый или невалидный - просто игнорируем
+            logger.debug(f"Callback query слишком старый или невалидный: {e}")
+            return
+        else:
+            # Другая ошибка - логируем и продолжаем
+            logger.warning(f"Ошибка при ответе на callback query: {e}")
+    
     data = query.data
     
     # Обработка невалидных callback_data (старые кнопки)
     if not data:
-        await query.answer("Эта кнопка устарела. Пожалуйста, отправьте /start для обновления меню.", show_alert=True)
+        try:
+            await query.answer("Эта кнопка устарела. Пожалуйста, отправьте /start для обновления меню.", show_alert=True)
+        except BadRequest:
+            pass  # Query уже обработан или слишком старый
         return
     
     user_id = str(query.from_user.id)
@@ -968,12 +986,15 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             if path.startswith(('http://', 'https://')):
                 try:
                     parsed = urlparse(path)
+                    # Для вики Gitee: каждая страница должна быть отдельным источником
+                    # Не группируем страницы вики вместе
+                    if '/wikis' in path:
+                        # Для вики используем полный URL как ключ (не группируем)
+                        return path
                     # Убираем trailing slash из path
                     normalized_path = parsed.path.rstrip('/') or '/'
-                    # Для вики Gitee: если это export URL, не группируем их вместе
-                    # (каждая страница должна быть отдельным источником)
+                    # Для export URL оставляем как есть (не группируем)
                     if '/wikis/pages/export' in path:
-                        # Для export URL оставляем как есть (не группируем)
                         return path
                     # Убираем query параметры для группировки (они могут различаться)
                     normalized = urlunparse((
@@ -992,6 +1013,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             return path
         
         # Получаем источники с нормализованным путем
+        # ВАЖНО: группируем по source_path, чтобы каждая страница вики была отдельным источником
         sources_query = (
             session.query(
                 KnowledgeChunk.source_path,
@@ -1000,11 +1022,14 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 func.count(KnowledgeChunk.id).label('chunks_count')
             )
             .filter_by(knowledge_base_id=kb_id)
+            .group_by(KnowledgeChunk.source_path, KnowledgeChunk.source_type)
             .all()
         )
         
+        logger.debug(f"[kb_sources] Найдено уникальных источников в запросе: {len(sources_query)}")
+        
         # Группируем по нормализованному пути
-        # НО: для файлов (не URL) не группируем - каждый файл отдельный источник
+        # НО: для файлов (не URL) и вики не группируем - каждый файл/страница отдельный источник
         sources_dict = {}
         for source_path, source_type, last_updated, chunks_count in sources_query:
             if not source_path:
@@ -1013,8 +1038,12 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             # Для файлов (не URL) используем полный путь как ключ (не группируем)
             if not source_path.startswith(('http://', 'https://')):
                 key = (source_path, source_type)
+            elif '/wikis' in source_path:
+                # Для вики используем полный URL как ключ (не группируем страницы)
+                # ВАЖНО: используем исходный source_path как есть, без нормализации
+                key = (source_path, source_type)
             else:
-                # Для URL нормализуем для группировки
+                # Для других URL нормализуем для группировки
                 normalized_path = normalize_source_path(source_path)
                 key = (normalized_path, source_type)
             
@@ -1025,15 +1054,19 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                     'last_updated': last_updated,
                     'chunks_count': chunks_count
                 }
+                logger.debug(f"[kb_sources] Добавлен источник: {source_path} ({chunks_count} чанков)")
             else:
                 # Объединяем данные: берем максимальную дату и суммируем chunks
+                # Это не должно происходить для вики, так как мы используем полный URL как ключ
                 existing = sources_dict[key]
                 if last_updated and (not existing['last_updated'] or last_updated > existing['last_updated']):
                     existing['last_updated'] = last_updated
                 existing['chunks_count'] += chunks_count
+                logger.warning(f"[kb_sources] Объединены источники с одинаковым ключом: {key} (это не должно происходить для вики)")
         
         # Преобразуем обратно в список и сортируем
         sources_list = list(sources_dict.values())
+        logger.info(f"[kb_sources] Всего уникальных источников после группировки: {len(sources_list)}")
         from datetime import datetime as dt_min
         sources_list.sort(key=lambda x: x['last_updated'] or dt_min.min.replace(tzinfo=timezone.utc), reverse=True)
         sources_list = sources_list[:50]  # Ограничиваем до 50
@@ -1041,37 +1074,87 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         if not sources_list:
             text = "В этой базе знаний нет загруженных источников."
         else:
-            lines = ["📋 Список источников в базе знаний:\n"]
+            lines = ["📋 <b>Список источников в базе знаний:</b>\n"]
+            displayed_count = 0
             for source_data in sources_list:
                 source_path = source_data['source_path']
                 source_type = source_data['source_type']
                 last_updated = source_data['last_updated']
                 chunks_count = source_data['chunks_count']
                 if '.keep' in (source_path or '').lower():
+                    logger.debug(f"[kb_sources] Пропущен источник с .keep: {source_path}")
                     continue
+                
+                displayed_count += 1
                 
                 # Нормализуем URL для вики
                 display_path = _normalize_wiki_url_for_display(source_path or '')
-                if display_path != source_path:
-                    path_display = display_path
+                
+                # Формируем отображаемое имя и ссылку
+                from html import escape
+                if display_path and display_path.startswith(('http://', 'https://')):
+                    # Для URL создаем HTML ссылку
+                    # Используем оригинальный source_path для ссылки
+                    url_for_link = source_path if source_path else display_path
+                    
+                    # Извлекаем название из пути для отображения
+                    if '/' in url_for_link:
+                        # Берем последнюю непустую часть пути
+                        parts = [p for p in url_for_link.split('/') if p]
+                        if parts:
+                            title = parts[-1]
+                        else:
+                            title = url_for_link
+                    else:
+                        title = url_for_link
+                    
+                    # Декодируем URL для читаемости (убираем %26 -> &, %20 -> пробел и т.д.)
+                    from urllib.parse import unquote
+                    title = unquote(title)
+                    
+                    # Если title все еще пустой или слишком короткий, используем весь путь
+                    if not title or len(title) < 2:
+                        # Пытаемся взять предпоследнюю часть
+                        parts = [p for p in url_for_link.split('/') if p]
+                        if len(parts) > 1:
+                            title = unquote(parts[-2])
+                        else:
+                            title = url_for_link
+                    
+                    # Экранируем для HTML (но не двойное экранирование)
+                    title_escaped = escape(title)
+                    url_escaped = escape(url_for_link)
+                    path_display = f'<a href="{url_escaped}">{title_escaped}</a>'
                 elif '::' in (source_path or ''):
                     # Для архивов показываем имя файла внутри архива
-                    path_display = source_path.split('::')[-1]
+                    file_name = source_path.split('::')[-1]
+                    path_display = f"<code>{escape(file_name)}</code>"
                 elif '/' in (source_path or ''):
-                    # Для URL показываем последний сегмент или весь URL если короткий
-                    path_display = source_path.split('/')[-1] if len(source_path) > 60 else source_path
+                    # Для обычных файлов показываем имя файла
+                    file_name = source_path.split('/')[-1]
+                    path_display = f"<code>{escape(file_name)}</code>"
                 else:
-                    path_display = source_path or 'не указан'
+                    path_display = escape(source_path or 'не указан')
                 
                 date_str = last_updated.strftime("%Y-%m-%d %H:%M") if last_updated else "?"
                 lines.append(f"• {path_display}")
                 lines.append(f"  Тип: {source_type}, фрагментов: {chunks_count}, обновлено: {date_str}\n")
             
             text = "\n".join(lines)
+            logger.info(f"[kb_sources] Отображается {displayed_count} источников из {len(sources_list)}")
             if len(text) > 4000:
-                text = text[:3900] + "\n\n... (показаны первые источники, всего больше)"
+                text = text[:3900] + f"\n\n... (показаны первые источники, всего {len(sources_list)})"
         
-        await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        # Отправляем с HTML форматированием
+        try:
+            await query.edit_message_text(text, reply_markup=kb_actions_menu(kb_id), parse_mode='HTML')
+        except BadRequest as e:
+            # Если HTML не работает, отправляем без форматирования
+            logger.warning(f"Ошибка форматирования HTML в списке источников: {e}")
+            # Убираем HTML теги для простого текста
+            import re
+            text_plain = re.sub(r'<[^>]+>', '', text)
+            await safe_edit_message_text(query, text_plain, reply_markup=kb_actions_menu(kb_id))
         return
     
     if data.startswith('kb_clear:'):

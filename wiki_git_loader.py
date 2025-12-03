@@ -139,38 +139,52 @@ def _restore_wiki_url_from_path(file_path: str, wiki_root: str) -> str:
         file_path: "Sync&Build/Sync&Build.md"
         wiki_root: "https://gitee.com/mazurdenis/open-harmony/wikis"
         -> "https://gitee.com/mazurdenis/open-harmony/wikis/Sync&Build/Sync%26Build"
+    
+    Для Gitee вики структура обычно:
+    - Файл: "Category/Page.md" -> URL: "wikis/Category/Page"
+    - Файл: "Category/Category.md" -> URL: "wikis/Category"
     """
     try:
         # Убрать расширение .md
+        original_path = file_path
         if file_path.endswith('.md'):
             file_path = file_path[:-3]
         
         # Разделить путь на части
-        path_parts = file_path.split('/')
+        path_parts = [p for p in file_path.split('/') if p]  # Убираем пустые части
+        
+        if not path_parts:
+            logger.warning(f"[wiki-git] Пустой путь после обработки: {original_path}")
+            return wiki_root
         
         # URL-кодировать каждую часть
+        from urllib.parse import quote
         encoded_parts = []
         for part in path_parts:
             if part:
-                # Двойное кодирование для специальных символов (например, & -> %26)
-                encoded = unquote(part)  # Сначала декодируем, если было закодировано
-                encoded = encoded.replace('&', '%26')  # Затем кодируем специальные символы
+                # Кодируем специальные символы для URL
+                # Gitee использует URL-кодирование для путей вики
+                encoded = quote(part, safe='')  # Кодируем все специальные символы
                 encoded_parts.append(encoded)
         
         # Собрать URL
         if encoded_parts:
             wiki_path = '/'.join(encoded_parts)
-            # Если последняя часть совпадает с предпоследней (например, Sync&Build/Sync&Build),
-            # это означает, что это страница с таким же именем как каталог
+            
+            # Для Gitee: если последняя часть совпадает с предпоследней (например, Category/Category),
+            # это означает, что это индексная страница категории
+            # В этом случае используем только путь до последней части
             if len(encoded_parts) >= 2 and encoded_parts[-1] == encoded_parts[-2]:
-                # Используем только путь до последней части
                 wiki_path = '/'.join(encoded_parts[:-1])
             
-            return f"{wiki_root}/{wiki_path}"
+            result_url = f"{wiki_root}/{wiki_path}"
+            logger.debug(f"[wiki-git] Восстановлен URL: {original_path} -> {result_url}")
+            return result_url
         else:
+            logger.warning(f"[wiki-git] Не удалось создать путь из частей: {path_parts}")
             return wiki_root
     except Exception as e:
-        logger.warning(f"[wiki-git] Ошибка при восстановлении URL из пути {file_path}: {e}")
+        logger.error(f"[wiki-git] Ошибка при восстановлении URL из пути {file_path}: {e}", exc_info=True)
         return wiki_root
 
 
@@ -226,6 +240,7 @@ def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
                 
                 # Восстановить URL страницы вики
                 wiki_page_url = _restore_wiki_url_from_path(rel_path, wiki_root)
+                logger.debug(f"[wiki-git] Файл: {rel_path} -> URL: {wiki_page_url}")
                 
                 # Загрузить содержимое файла
                 try:
@@ -276,7 +291,7 @@ def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
             logger.warning(f"[wiki-git] Не удалось удалить временную директорию {temp_dir}: {e}")
 
 
-def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
+def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> Dict[str, any]:
     """
     Загрузить вики Gitee из ZIP архива и восстановить ссылки на оригинальные страницы.
     
@@ -284,9 +299,10 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
         zip_path: Путь к ZIP архиву с файлами вики
         wiki_url: URL вики (например, https://gitee.com/mazurdenis/open-harmony/wikis)
         knowledge_base_id: ID базы знаний
+        session: SQLAlchemy сессия для записи в журнал загрузок (опционально)
     
     Returns:
-        Словарь со статистикой загрузки
+        Словарь со статистикой загрузки и списком обработанных файлов
     """
     wiki_root = _normalize_base_url(wiki_url)
     
@@ -300,19 +316,25 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
     
     chunks_added = 0
     files_processed = 0
+    files_skipped = 0
+    files_with_errors = 0
+    processed_files = []  # Список обработанных файлов с их URL и статистикой
     
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
             # Получить список всех файлов в архиве
             file_list = [name for name in zf.namelist() if not name.endswith('/')]
+            logger.info(f"[wiki-zip] Найдено {len(file_list)} файлов в архиве")
             
             for file_name in file_list:
                 # Пропустить служебные файлы
                 if '.keep' in file_name.lower() or file_name.endswith('.keep'):
+                    files_skipped += 1
                     continue
                 
                 # Обрабатываем только markdown файлы
                 if not file_name.endswith('.md'):
+                    files_skipped += 1
                     continue
                 
                 # Извлечь файл во временный файл
@@ -335,6 +357,7 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
                     # Фильтруем пустые чанки
                     chunks = [chunk for chunk in chunks if chunk.get('content', '').strip() and len(chunk.get('content', '').strip()) > 10]
                     
+                    file_chunks = 0
                     # Добавить чанки в базу знаний
                     for chunk in chunks:
                         metadata = dict(chunk.get("metadata") or {})
@@ -351,10 +374,18 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
                             metadata=metadata,
                         )
                         chunks_added += 1
+                        file_chunks += 1
                     
                     files_processed += 1
+                    processed_files.append({
+                        'file_name': file_name,
+                        'wiki_url': wiki_page_url,
+                        'chunks': file_chunks
+                    })
+                    logger.info(f"[wiki-zip] Обработан файл: {file_name} -> {wiki_page_url} ({file_chunks} чанков)")
                 except Exception as e:
-                    logger.warning(f"[wiki-zip] Ошибка обработки файла {file_name}: {e}")
+                    files_with_errors += 1
+                    logger.warning(f"[wiki-zip] Ошибка обработки файла {file_name}: {e}", exc_info=True)
                 finally:
                     # Удалить временный файл
                     try:
@@ -364,7 +395,8 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
         
         logger.info(
             f"[wiki-zip] Загрузка завершена: kb_id={knowledge_base_id}, "
-            f"удалено={deleted_chunks}, файлов={files_processed}, фрагментов={chunks_added}"
+            f"удалено={deleted_chunks}, файлов обработано={files_processed}, "
+            f"пропущено={files_skipped}, ошибок={files_with_errors}, фрагментов={chunks_added}"
         )
         
         return {
@@ -372,6 +404,7 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
             "files_processed": files_processed,
             "chunks_added": chunks_added,
             "wiki_root": wiki_root,
+            "processed_files": processed_files,  # Список обработанных файлов
         }
     
     except Exception as e:

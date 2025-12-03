@@ -7,7 +7,7 @@ import logging
 from typing import List, Dict, Optional
 from datetime import datetime
 import numpy as np
-from database import Base, Session, KnowledgeBase, KnowledgeChunk
+from database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog
 
 logger = logging.getLogger(__name__)
 
@@ -526,11 +526,18 @@ class RAGSystem:
         return results
     
     def delete_knowledge_base(self, knowledge_base_id: int) -> bool:
-        """Удалить базу знаний и все её фрагменты"""
+        """Удалить базу знаний, все её фрагменты и журнал загрузок"""
+        # Удалить все фрагменты
         chunks = self.session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
         for chunk in chunks:
             self.session.delete(chunk)
         
+        # Удалить все записи из журнала загрузок для этой базы знаний
+        logs = self.session.query(KnowledgeImportLog).filter_by(knowledge_base_id=knowledge_base_id).all()
+        for log in logs:
+            self.session.delete(log)
+        
+        # Удалить саму базу знаний
         kb = self.session.query(KnowledgeBase).filter_by(id=knowledge_base_id).first()
         if kb:
             self.session.delete(kb)
@@ -544,10 +551,17 @@ class RAGSystem:
         return False
     
     def clear_knowledge_base(self, knowledge_base_id: int) -> bool:
-        """Очистить базу знаний от всех фрагментов"""
+        """Очистить базу знаний от всех фрагментов и журнала загрузок"""
+        # Удалить все фрагменты
         chunks = self.session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
         for chunk in chunks:
             self.session.delete(chunk)
+        
+        # Удалить все записи из журнала загрузок для этой базы знаний
+        logs = self.session.query(KnowledgeImportLog).filter_by(knowledge_base_id=knowledge_base_id).all()
+        for log in logs:
+            self.session.delete(log)
+        
         self.session.commit()
         
         # Пересоздать индекс

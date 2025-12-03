@@ -145,13 +145,10 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
 ### Example:
 
 **Основной ответ:**
-Для синхронизации и сборки master версии O HoS используйте следующие команды:
-1. Клонирование репозитория: `git clone https://...` [sync_build_guide]
-2. Сборка: `cmake .. && make` [sync_build_guide]
+
 
 **Дополнительно найдено:**
-• Информация о настройке окружения [environment_setup]
-• Документация по API [api_docs]
+
 
 Если <source_id> отсутствует, ответ должен пропустить citation.
 

@@ -554,7 +554,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=query,
         ))
         session.commit()
-
+        
         # Получить настройки RAG из конфига
         try:
             from config import RAG_TOP_K, RAG_MAX_CANDIDATES
@@ -948,7 +948,7 @@ async def load_document_to_kb(query_or_update, context, document_info, kb_id):
             )
 
             chunks = document_loader_manager.load_document(temp_path, document_info['file_type'])
-
+            
             # Версия документа
             existing_logs = session.query(KnowledgeImportLog).filter_by(
                 knowledge_base_id=kb_id,
@@ -975,7 +975,7 @@ async def load_document_to_kb(query_or_update, context, document_info, kb_id):
                     metadata=base_meta,
                 )
                 added += 1
-
+            
             total_chunks = added
             # Записать в журнал загрузок
             log = KnowledgeImportLog(
@@ -1001,7 +1001,7 @@ async def load_document_to_kb(query_or_update, context, document_info, kb_id):
                 },
             )
 
-            response_text = f"✅ Загружено {added} фрагментов в базу знаний!"
+        response_text = f"✅ Загружено {added} фрагментов в базу знаний!"
         
         if is_update:
             await message.reply_text(response_text, reply_markup=admin_menu())
@@ -1075,6 +1075,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files = stats.get("files_processed", 0)
             added = stats.get("chunks_added", 0)
             wiki_root = stats.get("wiki_root", wiki_url)
+            processed_files = stats.get("processed_files", [])
             
             # Обновить индекс RAG системы для доступа к новым чанкам
             try:
@@ -1084,21 +1085,24 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as idx_error:
                 logger.warning(f"[wiki-zip] Не удалось обновить индекс: {idx_error}")
             
-            # Записать в журнал загрузок
+            # Записать в журнал загрузок для каждого файла отдельно
             from database import KnowledgeImportLog, User
             tg_id = str(update.effective_user.id) if update.effective_user else ""
             db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
             username = db_user.username if db_user else tg_id
             user_info = {"telegram_id": tg_id, "username": username}
-            log = KnowledgeImportLog(
-                knowledge_base_id=kb_id,
-                user_telegram_id=tg_id,
-                username=username,
-                action_type="wiki_zip",
-                source_path=wiki_root,
-                total_chunks=added,
-            )
-            session.add(log)
+            
+            # Записываем каждый файл отдельно в журнал
+            for file_info in processed_files:
+                log = KnowledgeImportLog(
+                    knowledge_base_id=kb_id,
+                    user_telegram_id=tg_id,
+                    username=username,
+                    action_type="archive",  # Используем "archive" как в примере пользователя
+                    source_path=file_info['wiki_url'],  # URL страницы вики
+                    total_chunks=file_info['chunks'],
+                )
+                session.add(log)
             session.commit()
             
             try:
@@ -1193,7 +1197,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Выбрать модель пользователя для изображений (если не указана, использовать текстовую)
         image_model = getattr(user, 'preferred_image_model', None) or (user.preferred_model if user.preferred_model else None)
-
+        
         if kb_id:
             # Обновление: удалить старый фрагмент для этого изображения (если был)
             source_path = f"photo_{photo.file_id}.jpg"
@@ -1299,7 +1303,7 @@ async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url:
                 metadata=base_meta,
             )
             added += 1
-
+        
         # Записать в журнал загрузок
         tg_id = str(update.effective_user.id) if update.effective_user else ""
         db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
