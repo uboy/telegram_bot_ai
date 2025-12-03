@@ -1,0 +1,1185 @@
+"""
+Обработчики callback'ов для кнопок
+"""
+import os
+import tempfile
+from datetime import datetime, timezone
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
+from telegram.ext import ContextTypes
+from database import Session, User, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog
+from ai_providers import ai_manager
+from rag_system import rag_system
+from document_loaders import document_loader_manager
+from image_processor import image_processor
+from templates.buttons import (
+    main_menu, admin_menu, settings_menu, ai_providers_menu, ollama_models_menu,
+    user_management_menu, knowledge_base_menu, kb_actions_menu,
+    document_type_menu, confirm_menu, n8n_menu, rag_settings_menu
+)
+try:
+    from config import ADMIN_IDS, N8N_PUBLIC_URL
+except ImportError:
+    # Fallback если config.py не найден
+    import os
+    ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
+    ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(",") if id.strip()] if ADMIN_IDS_STR else []
+    N8N_PUBLIC_URL = os.getenv("N8N_PUBLIC_URL", "http://localhost:5678")
+from logging_config import logger
+from n8n_client import n8n_client
+
+session = Session()
+
+
+def update_env_file(var_name: str, var_value: str) -> bool:
+    """Обновить переменную окружения в .env файле"""
+    env_file_path = ".env"
+    
+    if not os.path.exists(env_file_path):
+        logger.warning(f"Файл .env не найден, создаю новый")
+        try:
+            with open(env_file_path, 'w', encoding='utf-8') as f:
+                f.write(f"# Auto-generated .env file\n")
+                f.write(f"{var_name}={var_value}\n")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка создания .env файла: {e}")
+            return False
+    
+    try:
+        # Читаем весь файл
+        with open(env_file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Ищем переменную и обновляем её значение
+        found = False
+        updated_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            # Проверяем, является ли строка нашей переменной (с учетом комментариев)
+            if stripped.startswith(f"{var_name}=") and not stripped.startswith('#'):
+                # Обновляем значение
+                updated_lines.append(f"{var_name}={var_value}\n")
+                found = True
+            elif stripped.startswith(f"# {var_name}="):
+                # Если переменная закомментирована, раскомментируем и обновим
+                updated_lines.append(f"{var_name}={var_value}\n")
+                found = True
+            else:
+                updated_lines.append(line)
+        
+        # Если переменная не найдена, добавляем в конец
+        if not found:
+            updated_lines.append(f"\n# RAG Configuration\n")
+            updated_lines.append(f"{var_name}={var_value}\n")
+        
+        # Записываем обратно
+        with open(env_file_path, 'w', encoding='utf-8') as f:
+            f.writelines(updated_lines)
+        
+        logger.info(f"Обновлена переменная {var_name} в .env файле: {var_value}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления .env файла: {e}", exc_info=True)
+        return False
+
+
+async def safe_edit_message_text(query, text: str, reply_markup=None):
+    """Безопасное редактирование сообщения с обработкой ошибок"""
+    from telegram import ReplyKeyboardMarkup
+    
+    # edit_message_text не поддерживает ReplyKeyboardMarkup, только InlineKeyboardMarkup
+    # Если передан ReplyKeyboardMarkup, сразу отправляем новое сообщение
+    if reply_markup and isinstance(reply_markup, ReplyKeyboardMarkup):
+        try:
+            await query.message.reply_text(text, reply_markup=reply_markup)
+            await query.delete_message()
+            return
+        except Exception as e:
+            logger.error("Не удалось отправить сообщение с ReplyKeyboardMarkup: %s", e)
+            await query.answer("Ошибка отправки сообщения. Пожалуйста, отправьте /start.", show_alert=True)
+            return
+    
+    # Для InlineKeyboardMarkup пытаемся отредактировать сообщение
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+    except BadRequest as e:
+        error_msg = str(e).lower()
+        if 'button_data_invalid' in error_msg or 'inline keyboard expected' in error_msg or 'message is not modified' in error_msg:
+            # Старые кнопки или невалидный формат - отправляем новое сообщение
+            logger.warning("Не удалось отредактировать сообщение (старые кнопки?), отправляю новое: %s", e)
+            try:
+                # Для InlineKeyboardMarkup можно использовать
+                await query.message.reply_text(text, reply_markup=reply_markup)
+                await query.delete_message()
+            except Exception as e2:
+                logger.error("Не удалось отправить новое сообщение: %s", e2)
+                # Попробуем просто ответить без клавиатуры
+                try:
+                    await query.message.reply_text(text)
+                    await query.delete_message()
+                except Exception as e3:
+                    logger.error("Не удалось отправить сообщение даже без клавиатуры: %s", e3)
+                    await query.answer("Эта кнопка устарела. Пожалуйста, отправьте /start для обновления меню.", show_alert=True)
+        else:
+            raise
+
+
+def _n8n_status_text() -> str:
+    """Сформировать текст статуса интеграции n8n."""
+    lines = ["🤖 Интеграция n8n"]
+    base_url = n8n_client.base_url or "—"
+    lines.append(f"Базовый URL: {base_url}")
+    lines.append(f"Webhook: {'настроен' if n8n_client.has_webhook() else 'не указан'}")
+    lines.append(
+        "API-ключ: настроен" if n8n_client.api_key else "API-ключ: не указан (нужен только для запуска workflow)"
+    )
+    lines.append("")
+    lines.append("n8n используется для автоматизации процессов (webhook после загрузок, тестовые события и т.д.).")
+    lines.append("Настройте переменные окружения N8N_BASE_URL и N8N_DEFAULT_WEBHOOK, чтобы включить интеграцию.")
+    return "\n".join(lines)
+
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главный обработчик callback'ов"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    # Обработка невалидных callback_data (старые кнопки)
+    if not data:
+        await query.answer("Эта кнопка устарела. Пожалуйста, отправьте /start для обновления меню.", show_alert=True)
+        return
+    
+    user_id = str(query.from_user.id)
+    user = session.query(User).filter_by(telegram_id=user_id).first()
+    
+    if not user or not user.approved:
+        await safe_edit_message_text(query, "Вы не одобрены для использования бота.")
+        return
+    
+    # Обработка одобрения/отклонения пользователей (только для админов)
+    if data.startswith("approve:") or data.startswith("decline:"):
+        if user_id not in [str(aid) for aid in ADMIN_IDS]:
+            return
+        
+        _, tg_id = data.split(":")
+        target_user = session.query(User).filter_by(telegram_id=tg_id).first()
+        if target_user:
+            if data.startswith("approve:"):
+                target_user.approved = True
+                target_user.role = 'user'
+                session.commit()
+                await safe_edit_message_text(query, "✅ Пользователь одобрен")
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(tg_id),
+                        text="✅ Ваша заявка одобрена! Теперь вы можете использовать бота.",
+                        reply_markup=main_menu()
+                    )
+                except:
+                    pass
+            else:
+                session.delete(target_user)
+                session.commit()
+                await safe_edit_message_text(query, "❌ Пользователь отклонен")
+        return
+    
+    # Главное меню
+    if data == 'main_menu':
+        menu = main_menu(is_admin=(user.role == 'admin'))
+        # main_menu возвращает ReplyKeyboardMarkup, поэтому отправляем новое сообщение
+        try:
+            await query.message.reply_text("Выберите действие:", reply_markup=menu)
+            await query.delete_message()
+        except Exception as e:
+            logger.warning("Ошибка при отправке главного меню: %s", e)
+            # Если не удалось удалить старое сообщение, просто отправим новое
+            try:
+                await query.message.reply_text("Выберите действие:", reply_markup=menu)
+            except Exception:
+                await query.answer("Пожалуйста, отправьте /start для обновления меню.", show_alert=True)
+        return
+    
+    # Настройки
+    if data == 'settings':
+        await safe_edit_message_text(query, "⚙️ Настройки:", reply_markup=settings_menu())
+        return
+    
+    # Выбор провайдера ИИ
+    if data == 'select_provider':
+        providers = ai_manager.list_providers()
+        current = ai_manager.current_provider or 'ollama'
+        await safe_edit_message_text(query, "🤖 Выберите провайдер ИИ:", reply_markup=ai_providers_menu(providers, current))
+        return
+    
+    if data.startswith('provider:'):
+        provider_name = data.split(':', 1)[1]
+        if ai_manager.set_provider(provider_name):
+            user.preferred_provider = provider_name
+            session.commit()
+            
+            # Если выбран Ollama, можно дальше выбрать модели в настройках
+            if provider_name == 'ollama':
+                await safe_edit_message_text(
+                    query,
+                    "✅ Провайдер изменен на Ollama.\nТеперь выберите модели для текста и изображений в настройках.",
+                    reply_markup=settings_menu(),
+                )
+            else:
+                await safe_edit_message_text(query, f"✅ Провайдер изменен на {provider_name}", reply_markup=settings_menu())
+        else:
+            await query.answer("Ошибка выбора провайдера", show_alert=True)
+        return
+    
+    # Выбор моделей Ollama
+    if data == 'select_text_model':
+        try:
+            provider = ai_manager.get_provider('ollama')
+            if not provider:
+                logger.warning("Провайдер Ollama не найден в ai_manager")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Провайдер Ollama недоступен. Проверьте настройки OLLAMA_BASE_URL.",
+                    reply_markup=settings_menu(),
+                )
+                return
+            
+            if not hasattr(provider, 'list_models'):
+                logger.warning("Провайдер Ollama не имеет метода list_models")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Провайдер Ollama не поддерживает список моделей.",
+                    reply_markup=settings_menu(),
+                )
+                return
+            
+            models = provider.list_models()
+            logger.info(f"Получен список моделей Ollama: {models}")
+            
+            if not models:
+                logger.warning("Список моделей Ollama пуст")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Не удалось загрузить список моделей Ollama.\n\nПроверьте:\n1. Запущен ли Ollama сервер\n2. Правильно ли настроен OLLAMA_BASE_URL\n3. Есть ли модели в Ollama",
+                    reply_markup=settings_menu(),
+                )
+                return
+            
+            current_model = user.preferred_model or (provider.model if hasattr(provider, 'model') else '')
+            logger.info(f"Текущая модель для текста: {current_model}")
+            
+            await safe_edit_message_text(
+                query,
+                f"💬 Выберите модель Ollama для текстовых запросов:\n\nТекущая: {current_model or 'не выбрана'}",
+                reply_markup=ollama_models_menu(models, current_model, target='text'),
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка моделей Ollama: {e}", exc_info=True)
+            await safe_edit_message_text(
+                query,
+                f"❌ Ошибка при загрузке списка моделей: {str(e)}",
+                reply_markup=settings_menu(),
+            )
+        return
+
+    if data == 'select_image_model':
+        try:
+            provider = ai_manager.get_provider('ollama')
+            if not provider:
+                logger.warning("Провайдер Ollama не найден в ai_manager")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Провайдер Ollama недоступен. Проверьте настройки OLLAMA_BASE_URL.",
+                    reply_markup=settings_menu(),
+                )
+                return
+            
+            if not hasattr(provider, 'list_models'):
+                logger.warning("Провайдер Ollama не имеет метода list_models")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Провайдер Ollama не поддерживает список моделей.",
+                    reply_markup=settings_menu(),
+                )
+                return
+            
+            models = provider.list_models()
+            logger.info(f"Получен список моделей Ollama для изображений: {models}")
+            
+            if not models:
+                logger.warning("Список моделей Ollama пуст")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Не удалось загрузить список моделей Ollama.\n\nПроверьте:\n1. Запущен ли Ollama сервер\n2. Правильно ли настроен OLLAMA_BASE_URL\n3. Есть ли модели в Ollama",
+                    reply_markup=settings_menu(),
+                )
+                return
+            
+            current_model = getattr(user, 'preferred_image_model', '') or (provider.model if hasattr(provider, 'model') else '')
+            logger.info(f"Текущая модель для изображений: {current_model}")
+            
+            await safe_edit_message_text(
+                query,
+                f"🖼️ Выберите модель Ollama для обработки изображений:\n\nТекущая: {current_model or 'не выбрана'}",
+                reply_markup=ollama_models_menu(models, current_model, target='image'),
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка моделей Ollama для изображений: {e}", exc_info=True)
+            await safe_edit_message_text(
+                query,
+                f"❌ Ошибка при загрузке списка моделей: {str(e)}",
+                reply_markup=settings_menu(),
+            )
+        return
+    
+    if data.startswith('ollama_model:'):
+        # Формат: ollama_model:<target>:<model_name> или ollama_model:<target>:hash:<hash>
+        parts = data.split(':', 3)
+        if len(parts) < 3:
+            await query.answer("Некорректный формат callback_data", show_alert=True)
+            return
+        
+        target = parts[1]
+        model_identifier = parts[2] if len(parts) > 2 else ''
+        
+        # Если используется хеш, получаем модель из сохраненного списка
+        if model_identifier == 'hash' and len(parts) > 3:
+            model_hash = parts[3]
+            # Получаем список моделей из context
+            models_key = 'ollama_models_text' if target == 'text' else 'ollama_models_image'
+            models = context.user_data.get(models_key, [])
+            
+            if not models:
+                await query.answer("Список моделей не найден. Пожалуйста, выберите модель заново.", show_alert=True)
+                return
+            
+            # Находим модель по хешу
+            import hashlib
+            model_name = None
+            for model in models:
+                if hashlib.md5(model.encode()).hexdigest()[:8] == model_hash:
+                    model_name = model
+                    break
+            
+            if not model_name:
+                await query.answer("Модель не найдена. Пожалуйста, выберите модель заново.", show_alert=True)
+                return
+        else:
+            # Прямое имя модели (для коротких имен)
+            model_name = model_identifier
+
+        if not model_name:
+            await query.answer("Некорректное имя модели", show_alert=True)
+            return
+
+        if target == 'image':
+            user.preferred_image_model = model_name
+            message = f"✅ Модель для изображений изменена на {model_name}"
+        else:
+            user.preferred_model = model_name
+            message = f"✅ Модель для текста изменена на {model_name}"
+
+        session.commit()
+        await safe_edit_message_text(query, message, reply_markup=settings_menu())
+        return
+    
+    # Настройки RAG
+    if data == 'rag_settings':
+        from config import RAG_MODEL_NAME, RAG_RERANK_MODEL
+        text = (
+            f"🔧 Настройки RAG\n\n"
+            f"Текущая модель эмбеддингов: {RAG_MODEL_NAME}\n"
+            f"Текущая модель ранкинга: {RAG_RERANK_MODEL}\n\n"
+            f"ℹ️ Изменения сохраняются в .env файл.\n"
+            f"🔄 После изменения модели используйте кнопку 'Перезагрузить модели' для применения без перезапуска бота."
+        )
+        await safe_edit_message_text(query, text, reply_markup=rag_settings_menu())
+        return
+    
+    if data == 'select_embedding_model':
+        try:
+            import hashlib
+            # Предустановленные модели эмбеддингов
+            models = [
+                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                "intfloat/multilingual-e5-base",
+                "intfloat/multilingual-e5-large",
+                "sentence-transformers/all-MiniLM-L6-v2",
+            ]
+            from config import RAG_MODEL_NAME
+            current = RAG_MODEL_NAME
+            
+            # Сохраняем список моделей в context для восстановления по хешу
+            context.user_data['rag_embedding_models'] = models
+            
+            # Telegram ограничивает callback_data до 64 байт
+            # Формат: "rag_embedding_model:" + имя модели = минимум 22 символа
+            # Значит на имя модели остается ~42 символа
+            max_callback_length = 64
+            prefix_length = len("rag_embedding_model:")
+            max_model_name_length = max_callback_length - prefix_length - 5  # Запас
+            
+            buttons = []
+            for model in models:
+                prefix = "✅ " if model == current else "⚪ "
+                # Обрезать длинные названия моделей для отображения
+                display_name = model[:45] + "..." if len(model) > 45 else model
+                
+                # Если имя модели слишком длинное, используем хеш
+                if len(model) > max_model_name_length:
+                    model_hash = hashlib.md5(model.encode()).hexdigest()[:8]
+                    callback_data = f"rag_embedding_model:hash:{model_hash}"
+                else:
+                    callback_data = f"rag_embedding_model:{model}"
+                
+                # Проверяем длину на всякий случай
+                if len(callback_data) > max_callback_length:
+                    model_hash = hashlib.md5(model.encode()).hexdigest()[:8]
+                    callback_data = f"rag_embedding_model:hash:{model_hash}"
+                
+                buttons.append([InlineKeyboardButton(
+                    f"{prefix}{display_name}",
+                    callback_data=callback_data
+                )])
+            buttons.append([InlineKeyboardButton("🔙 К настройкам RAG", callback_data='rag_settings')])
+            
+            await safe_edit_message_text(
+                query,
+                f"📊 Выберите модель эмбеддингов:\n\nТекущая: {current}\n\nℹ️ Изменение сохранится в .env файл.\n⚠️ Требуется перезапуск бота для применения.",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке списка моделей эмбеддингов: {e}", exc_info=True)
+            await safe_edit_message_text(
+                query,
+                f"❌ Ошибка: {str(e)}",
+                reply_markup=rag_settings_menu(),
+            )
+        return
+    
+    if data == 'select_rerank_model':
+        try:
+            import hashlib
+            # Предустановленные модели ранкинга
+            models = [
+                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                "cross-encoder/ms-marco-MiniLM-L-12-v2",
+                "BAAI/bge-reranker-base",
+                "BAAI/bge-reranker-large",
+            ]
+            from config import RAG_RERANK_MODEL
+            current = RAG_RERANK_MODEL
+            
+            # Сохраняем список моделей в context для восстановления по хешу
+            context.user_data['rag_rerank_models'] = models
+            
+            # Telegram ограничивает callback_data до 64 байт
+            # Формат: "rag_rerank_model:" + имя модели = минимум 19 символов
+            # Значит на имя модели остается ~45 символов
+            max_callback_length = 64
+            prefix_length = len("rag_rerank_model:")
+            max_model_name_length = max_callback_length - prefix_length - 5  # Запас
+            
+            buttons = []
+            for model in models:
+                prefix = "✅ " if model == current else "⚪ "
+                # Обрезать длинные названия моделей для отображения
+                display_name = model[:45] + "..." if len(model) > 45 else model
+                
+                # Если имя модели слишком длинное, используем хеш
+                if len(model) > max_model_name_length:
+                    model_hash = hashlib.md5(model.encode()).hexdigest()[:8]
+                    callback_data = f"rag_rerank_model:hash:{model_hash}"
+                else:
+                    callback_data = f"rag_rerank_model:{model}"
+                
+                # Проверяем длину на всякий случай
+                if len(callback_data) > max_callback_length:
+                    model_hash = hashlib.md5(model.encode()).hexdigest()[:8]
+                    callback_data = f"rag_rerank_model:hash:{model_hash}"
+                
+                buttons.append([InlineKeyboardButton(
+                    f"{prefix}{display_name}",
+                    callback_data=callback_data
+                )])
+            buttons.append([InlineKeyboardButton("🔙 К настройкам RAG", callback_data='rag_settings')])
+            
+            await safe_edit_message_text(
+                query,
+                f"🎯 Выберите модель ранкинга:\n\nТекущая: {current}\n\nℹ️ Изменение сохранится в .env файл.\n⚠️ Требуется перезапуск бота для применения.",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке списка моделей ранкинга: {e}", exc_info=True)
+            await safe_edit_message_text(
+                query,
+                f"❌ Ошибка: {str(e)}",
+                reply_markup=rag_settings_menu(),
+            )
+        return
+    
+    if data.startswith('rag_embedding_model:') or data.startswith('rag_rerank_model:'):
+        import hashlib
+        
+        # Формат: rag_embedding_model:model_name или rag_embedding_model:hash:XXXXXXXX
+        parts = data.split(':', 2)
+        model_type = parts[0]
+        
+        if len(parts) < 2:
+            await query.answer("Некорректный формат callback_data", show_alert=True)
+            return
+        
+        # Проверяем, используется ли хеш
+        if len(parts) == 3 and parts[1] == 'hash':
+            model_hash = parts[2]
+            # Получаем список моделей из context
+            models_key = 'rag_embedding_models' if model_type == 'rag_embedding_model' else 'rag_rerank_models'
+            models = context.user_data.get(models_key, [])
+            
+            if not models:
+                await query.answer("Список моделей не найден. Пожалуйста, выберите модель заново.", show_alert=True)
+                return
+            
+            # Находим модель по хешу
+            model_name = None
+            for model in models:
+                if hashlib.md5(model.encode()).hexdigest()[:8] == model_hash:
+                    model_name = model
+                    break
+            
+            if not model_name:
+                await query.answer("Модель не найдена. Пожалуйста, выберите модель заново.", show_alert=True)
+                return
+        else:
+            # Прямое имя модели (для коротких имен)
+            model_name = parts[1] if len(parts) > 1 else ''
+        
+        if not model_name:
+            await query.answer("Некорректное имя модели", show_alert=True)
+            return
+        
+        # Сохраняем в .env файл
+        try:
+            env_var_name = 'RAG_MODEL_NAME' if model_type == 'rag_embedding_model' else 'RAG_RERANK_MODEL'
+            success = update_env_file(env_var_name, model_name)
+            
+            if success:
+                if model_type == 'rag_embedding_model':
+                    message = (
+                        f"✅ Модель эмбеддингов изменена на {model_name}\n\n"
+                        f"💾 Изменение сохранено в .env файл.\n\n"
+                        f"🔄 Используйте кнопку 'Перезагрузить модели' в настройках RAG для применения без перезапуска бота."
+                    )
+                else:
+                    message = (
+                        f"✅ Модель ранкинга изменена на {model_name}\n\n"
+                        f"💾 Изменение сохранено в .env файл.\n\n"
+                        f"🔄 Используйте кнопку 'Перезагрузить модели' в настройках RAG для применения без перезапуска бота."
+                    )
+            else:
+                message = (
+                    f"✅ Модель изменена на {model_name}\n\n"
+                    f"⚠️ Не удалось сохранить в .env файл. Изменения будут потеряны при перезапуске.\n\n"
+                    f"🔄 Используйте кнопку 'Перезагрузить модели' для применения (или перезапустите бота)."
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении модели в .env: {e}", exc_info=True)
+            if model_type == 'rag_embedding_model':
+                message = (
+                    f"✅ Модель эмбеддингов изменена на {model_name}\n\n"
+                    f"⚠️ Ошибка сохранения в .env: {str(e)}\n\n"
+                    f"🔄 Используйте кнопку 'Перезагрузить модели' для применения (или перезапустите бота)."
+                )
+            else:
+                message = (
+                    f"✅ Модель ранкинга изменена на {model_name}\n\n"
+                    f"⚠️ Ошибка сохранения в .env: {str(e)}\n\n"
+                    f"🔄 Используйте кнопку 'Перезагрузить модели' для применения (или перезапустите бота)."
+                )
+        
+        await safe_edit_message_text(query, message, reply_markup=rag_settings_menu())
+        return
+    
+    if data == 'rag_reload_models':
+        # Перезагрузить модели RAG в рантайме
+        try:
+            await safe_edit_message_text(query, "🔄 Перезагрузка моделей RAG...\n\nЭто может занять некоторое время.")
+            
+            result = rag_system.reload_models()
+            
+            if result['embedding'] and result['reranker']:
+                message = (
+                    "✅ Модели RAG успешно перезагружены!\n\n"
+                    "• Модель эмбеддингов: перезагружена\n"
+                    "• Модель ранкинга: перезагружена\n\n"
+                    "Изменения применены без перезапуска бота."
+                )
+            elif result['embedding']:
+                message = (
+                    "⚠️ Частичная перезагрузка моделей RAG:\n\n"
+                    "• Модель эмбеддингов: ✅ перезагружена\n"
+                    "• Модель ранкинга: ❌ ошибка перезагрузки\n\n"
+                    "Проверьте логи для деталей."
+                )
+            elif result['reranker']:
+                message = (
+                    "⚠️ Частичная перезагрузка моделей RAG:\n\n"
+                    "• Модель эмбеддингов: ❌ ошибка перезагрузки\n"
+                    "• Модель ранкинга: ✅ перезагружена\n\n"
+                    "Проверьте логи для деталей."
+                )
+            else:
+                message = (
+                    "❌ Ошибка перезагрузки моделей RAG:\n\n"
+                    "• Модель эмбеддингов: ❌ ошибка\n"
+                    "• Модель ранкинга: ❌ ошибка\n\n"
+                    "Проверьте логи для деталей. Возможно, требуется перезапуск бота."
+                )
+            
+            await safe_edit_message_text(query, message, reply_markup=rag_settings_menu())
+        except Exception as e:
+            logger.error(f"Ошибка при перезагрузке моделей RAG: {e}", exc_info=True)
+            await safe_edit_message_text(
+                query,
+                f"❌ Ошибка перезагрузки моделей: {str(e)}\n\nПроверьте логи для деталей.",
+                reply_markup=rag_settings_menu(),
+            )
+        return
+    
+    # Поиск в базе знаний
+    if data == 'search_kb':
+        context.user_data['state'] = 'waiting_query'
+        await safe_edit_message_text(query, "🔍 Введите запрос для поиска в базе знаний:")
+        return
+    
+    # Поиск в интернете
+    if data == 'search_web':
+        context.user_data['state'] = 'waiting_web_query'
+        await safe_edit_message_text(query, "🌐 Введите запрос для поиска в интернете:")
+        return
+    
+    # Задать вопрос ИИ
+    if data == 'ask_ai':
+        context.user_data['state'] = 'waiting_ai_query'
+        await safe_edit_message_text(query, "🤖 Задайте вопрос ИИ:")
+        return
+    
+    # Обработка изображения
+    if data == 'process_image':
+        await safe_edit_message_text(query, "🖼️ Отправьте изображение для обработки")
+        return
+    
+    # Админ-меню
+    if user.role == 'admin':
+        await handle_admin_callbacks(query, context, data, user)
+    else:
+        await query.answer("У вас нет прав администратора", show_alert=True)
+
+
+async def handle_admin_callbacks(query, context, data: str, user: User):
+    """Обработка админских callback'ов"""
+    
+    # Админ-меню
+    if data == 'admin_menu':
+        await safe_edit_message_text(query, "👨‍💼 Админ-панель:", reply_markup=admin_menu())
+        return
+    
+    # Управление пользователями
+    if data == 'admin_users':
+        await safe_edit_message_text(query, "👥 Управление пользователями:", reply_markup=user_management_menu())
+        return
+    
+    if data == 'list_users':
+        users = session.query(User).all()
+        text = "👥 Список пользователей:\n\n"
+        for u in users:
+            status = "✅" if u.approved else "❌"
+            text += f"{status} @{u.username} ({u.role})\n"
+        await safe_edit_message_text(query, text, reply_markup=user_management_menu())
+        return
+    
+    if data == 'delete_user':
+        context.user_data['state'] = 'waiting_user_delete'
+        await safe_edit_message_text(query, "Введите Telegram ID пользователя для удаления:")
+        return
+    
+    # Управление базами знаний
+    if data == 'admin_kb':
+        kbs = rag_system.list_knowledge_bases()
+        await safe_edit_message_text(query, "📚 Базы знаний:", reply_markup=knowledge_base_menu(kbs))
+        return
+    
+    if data == 'kb_create':
+        context.user_data['state'] = 'waiting_kb_name'
+        await safe_edit_message_text(query, "Введите название новой базы знаний:")
+        return
+    
+    if data.startswith('kb_select:'):
+        kb_id = int(data.split(':')[1])
+        kb = rag_system.get_knowledge_base(kb_id)
+        if kb:
+            chunks_count = session.query(KnowledgeChunk).filter_by(knowledge_base_id=kb_id).count()
+            text = f"📚 База знаний: {kb.name}\n\nОписание: {kb.description or 'Нет описания'}\nФрагментов: {chunks_count}"
+            
+            # Проверить, есть ли ожидающий документ для загрузки
+            if 'pending_document' in context.user_data:
+                # Установить базу знаний и загрузить документ
+                context.user_data['kb_id'] = kb_id
+                pending = context.user_data.pop('pending_document')
+                
+                # Загрузить документ асинхронно
+                from bot_handlers import load_document_to_kb
+                await safe_edit_message_text(query, "📤 Загружаю документ...")
+                await load_document_to_kb(query, context, pending, kb_id)
+                return
+            
+            await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        return
+    
+    if data.startswith('kb_upload:'):
+        kb_id = int(data.split(':')[1])
+        context.user_data['kb_id'] = kb_id
+        context.user_data['upload_mode'] = 'document'
+        await safe_edit_message_text(query, "Выберите тип документа для загрузки:", reply_markup=document_type_menu())
+        return
+    
+    if data.startswith('kb_wiki_crawl:'):
+        kb_id = int(data.split(':')[1])
+        context.user_data['kb_id_for_wiki'] = kb_id
+        context.user_data['state'] = 'waiting_wiki_root'
+        await safe_edit_message_text(
+            query,
+            "Введите корневой URL вики (например, https://gitee.com/mazurdenis/open-harmony/wikis).\n"
+            "Бот рекурсивно обойдёт только страницы в этом разделе и загрузит их в выбранную базу знаний."
+        )
+        return
+    
+    if data.startswith('wiki_git_load:'):
+        # Формат: wiki_git_load:kb_id:wiki_url_hash
+        parts = data.split(':', 2)
+        if len(parts) < 3:
+            await query.answer("Некорректный формат callback_data", show_alert=True)
+            return
+        
+        kb_id = int(parts[1])
+        wiki_url_hash = parts[2]
+        # Получаем полный URL из context.user_data
+        wiki_url = context.user_data.get('wiki_urls', {}).get(wiki_url_hash)
+        if not wiki_url:
+            await query.answer("URL вики не найден. Попробуйте загрузить вики снова.", show_alert=True)
+            return
+        
+        await safe_edit_message_text(
+            query,
+            "🔄 Загрузка вики через git-репозиторий...\n\n"
+            "Это может занять несколько минут в зависимости от размера репозитория."
+        )
+        
+        try:
+            from wiki_git_loader import load_wiki_from_git_async
+            
+            stats = await load_wiki_from_git_async(wiki_url, kb_id)
+            deleted = stats.get("deleted_chunks", 0)
+            files = stats.get("files_processed", 0)
+            added = stats.get("chunks_added", 0)
+            wiki_root = stats.get("wiki_root", wiki_url)
+            
+            # Обновить индекс RAG системы для доступа к новым чанкам
+            try:
+                rag_system.index = None
+                rag_system.chunks = []
+                logger.info("[wiki-git] Индекс RAG системы сброшен, будет пересоздан при следующем поиске")
+            except Exception as idx_error:
+                logger.warning(f"[wiki-git] Не удалось обновить индекс: {idx_error}")
+            
+            # Записать в журнал загрузок
+            tg_id = str(query.from_user.id) if query.from_user else ""
+            db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
+            username = db_user.username if db_user else tg_id
+            user_info = {"telegram_id": tg_id, "username": username}
+            log = KnowledgeImportLog(
+                knowledge_base_id=kb_id,
+                user_telegram_id=tg_id,
+                username=username,
+                action_type="wiki_git",
+                source_path=wiki_root,
+                total_chunks=added,
+            )
+            session.add(log)
+            session.commit()
+            
+            try:
+                from bot_handlers import emit_n8n_import_event
+                emit_n8n_import_event(
+                kb_id=kb_id,
+                action_type="wiki_git",
+                source_path=wiki_root,
+                total_chunks=added,
+                user_info=user_info,
+                extra={
+                    "deleted_chunks": deleted,
+                    "files_processed": files,
+                    "wiki_root": wiki_root,
+                    "original_url": wiki_url,
+                },
+                )
+            except ImportError:
+                logger.warning("n8n integration not available")
+            
+            text = (
+                "✅ Загрузка вики через git завершена.\n\n"
+                f"Исходный URL: {wiki_url}\n"
+                f"Корневой wiki-URL: {wiki_root}\n"
+                f"Удалено старых фрагментов: {deleted}\n"
+                f"Обработано файлов: {files}\n"
+                f"Добавлено фрагментов: {added}"
+            )
+            await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке вики через git: {e}", exc_info=True)
+            await safe_edit_message_text(
+                query,
+                f"❌ Ошибка при загрузке вики через git: {str(e)}\n\n"
+                "Убедитесь, что:\n"
+                "• Git установлен в системе\n"
+                "• Репозиторий доступен для клонирования\n"
+                "• URL вики корректный",
+                reply_markup=kb_actions_menu(kb_id),
+            )
+        return
+    
+    if data.startswith('wiki_zip_load:'):
+        # Формат: wiki_zip_load:kb_id:wiki_url_hash
+        parts = data.split(':', 2)
+        if len(parts) < 3:
+            await query.answer("Некорректный формат callback_data", show_alert=True)
+            return
+        
+        kb_id = int(parts[1])
+        wiki_url_hash = parts[2]
+        # Получаем полный URL из context.user_data
+        wiki_url = context.user_data.get('wiki_urls', {}).get(wiki_url_hash)
+        if not wiki_url:
+            await query.answer("URL вики не найден. Попробуйте загрузить вики снова.", show_alert=True)
+            return
+        
+        # Сохранить информацию для последующей обработки ZIP файла
+        context.user_data['wiki_zip_kb_id'] = kb_id
+        context.user_data['wiki_zip_url'] = wiki_url
+        context.user_data['state'] = 'waiting_wiki_zip'
+        
+        await safe_edit_message_text(
+            query,
+            f"📦 Загрузка вики из ZIP архива\n\n"
+            f"URL вики: {wiki_url}\n"
+            f"База знаний: {kb_id}\n\n"
+            "Отправьте ZIP архив с файлами вики. Бот автоматически:\n"
+            "• Извлечет все markdown файлы из архива\n"
+            "• Восстановит ссылки на оригинальные страницы вики\n"
+            "• Добавит их в базу знаний"
+        )
+        return
+    
+    if data.startswith('kb_import_log:'):
+        kb_id = int(data.split(':')[1])
+        logs = (
+            session.query(KnowledgeImportLog)
+            .filter_by(knowledge_base_id=kb_id)
+            .order_by(KnowledgeImportLog.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        if not logs:
+            text = "Журнал загрузок пуст для этой базы знаний."
+        else:
+            lines = ["📜 Журнал последних загрузок:\n"]
+            for log in logs:
+                when = log.created_at.strftime("%Y-%m-%d %H:%M")
+                who = log.username or log.user_telegram_id or "?"
+                lines.append(
+                    f"- {when} — {who} — {log.action_type} — {log.source_path} "
+                    f"(фрагментов: {log.total_chunks})"
+                )
+            text = "\n".join(lines)
+        await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        return
+    
+    if data.startswith('kb_sources:'):
+        kb_id = int(data.split(':')[1])
+        # Получить уникальные источники из chunks с датой последнего обновления
+        from sqlalchemy import func, distinct
+        from urllib.parse import urlparse, parse_qs
+        
+        def _normalize_wiki_url_for_display(url: str) -> str:
+            """Нормализовать URL вики для отображения (конвертировать export URL в читаемый формат)"""
+            if not url or not url.startswith(('http://', 'https://')):
+                return url
+            
+            # Если это export URL Gitee вики, пытаемся найти оригинальный URL в метаданных
+            # или конвертируем в базовый формат вики
+            if '/wikis/pages/export' in url:
+                try:
+                    parsed = urlparse(url)
+                    query_params = parse_qs(parsed.query)
+                    
+                    # Пытаемся найти оригинальный URL из метаданных chunks
+                    # Для этого ищем chunk с таким source_path и проверяем metadata
+                    chunk = session.query(KnowledgeChunk).filter_by(
+                        knowledge_base_id=kb_id,
+                        source_path=url
+                    ).first()
+                    
+                    if chunk and chunk.chunk_metadata:
+                        import json
+                        try:
+                            meta = json.loads(chunk.chunk_metadata)
+                            # Если в метаданных есть оригинальный URL или title, используем его
+                            if 'original_url' in meta:
+                                return meta['original_url']
+                            if 'wiki_page_url' in meta:
+                                return meta['wiki_page_url']
+                        except:
+                            pass
+                    
+                    # Если не нашли, конвертируем в базовый формат
+                    # Для Gitee: /wikis/pages/export?doc_id=... -> /wikis/...
+                    # Но без doc_id мы не можем точно восстановить путь страницы
+                    # Поэтому просто возвращаем базовый путь вики
+                    path_parts = parsed.path.split('/wikis')
+                    if len(path_parts) >= 2:
+                        base_path = path_parts[0] + '/wikis'
+                        return f"{parsed.scheme}://{parsed.netloc}{base_path}"
+                except Exception:
+                    pass
+            
+            return url
+        
+        # Нормализовать URL перед группировкой для устранения дублирования
+        # (убираем trailing slash, нормализуем параметры и т.д.)
+        from urllib.parse import urlparse, urlunparse
+        
+        def normalize_source_path(path: str) -> str:
+            """Нормализовать путь источника для группировки"""
+            if not path:
+                return path
+            # Если это URL, нормализуем его
+            if path.startswith(('http://', 'https://')):
+                try:
+                    parsed = urlparse(path)
+                    # Убираем trailing slash из path
+                    normalized_path = parsed.path.rstrip('/') or '/'
+                    # Для вики Gitee: если это export URL, не группируем их вместе
+                    # (каждая страница должна быть отдельным источником)
+                    if '/wikis/pages/export' in path:
+                        # Для export URL оставляем как есть (не группируем)
+                        return path
+                    # Убираем query параметры для группировки (они могут различаться)
+                    normalized = urlunparse((
+                        parsed.scheme,
+                        parsed.netloc,
+                        normalized_path,
+                        parsed.params,
+                        '',  # query - убираем
+                        ''   # fragment - убираем
+                    ))
+                    return normalized
+                except Exception:
+                    return path.rstrip('/')
+            # Для не-URL (файлы) не группируем - каждый файл отдельный источник
+            # Просто возвращаем как есть
+            return path
+        
+        # Получаем источники с нормализованным путем
+        sources_query = (
+            session.query(
+                KnowledgeChunk.source_path,
+                KnowledgeChunk.source_type,
+                func.max(KnowledgeChunk.created_at).label('last_updated'),
+                func.count(KnowledgeChunk.id).label('chunks_count')
+            )
+            .filter_by(knowledge_base_id=kb_id)
+            .all()
+        )
+        
+        # Группируем по нормализованному пути
+        # НО: для файлов (не URL) не группируем - каждый файл отдельный источник
+        sources_dict = {}
+        for source_path, source_type, last_updated, chunks_count in sources_query:
+            if not source_path:
+                continue
+            
+            # Для файлов (не URL) используем полный путь как ключ (не группируем)
+            if not source_path.startswith(('http://', 'https://')):
+                key = (source_path, source_type)
+            else:
+                # Для URL нормализуем для группировки
+                normalized_path = normalize_source_path(source_path)
+                key = (normalized_path, source_type)
+            
+            if key not in sources_dict:
+                sources_dict[key] = {
+                    'source_path': source_path,  # Оригинальный путь для отображения
+                    'source_type': source_type,
+                    'last_updated': last_updated,
+                    'chunks_count': chunks_count
+                }
+            else:
+                # Объединяем данные: берем максимальную дату и суммируем chunks
+                existing = sources_dict[key]
+                if last_updated and (not existing['last_updated'] or last_updated > existing['last_updated']):
+                    existing['last_updated'] = last_updated
+                existing['chunks_count'] += chunks_count
+        
+        # Преобразуем обратно в список и сортируем
+        sources_list = list(sources_dict.values())
+        from datetime import datetime as dt_min
+        sources_list.sort(key=lambda x: x['last_updated'] or dt_min.min.replace(tzinfo=timezone.utc), reverse=True)
+        sources_list = sources_list[:50]  # Ограничиваем до 50
+        
+        if not sources_list:
+            text = "В этой базе знаний нет загруженных источников."
+        else:
+            lines = ["📋 Список источников в базе знаний:\n"]
+            for source_data in sources_list:
+                source_path = source_data['source_path']
+                source_type = source_data['source_type']
+                last_updated = source_data['last_updated']
+                chunks_count = source_data['chunks_count']
+                if '.keep' in (source_path or '').lower():
+                    continue
+                
+                # Нормализуем URL для вики
+                display_path = _normalize_wiki_url_for_display(source_path or '')
+                if display_path != source_path:
+                    path_display = display_path
+                elif '::' in (source_path or ''):
+                    # Для архивов показываем имя файла внутри архива
+                    path_display = source_path.split('::')[-1]
+                elif '/' in (source_path or ''):
+                    # Для URL показываем последний сегмент или весь URL если короткий
+                    path_display = source_path.split('/')[-1] if len(source_path) > 60 else source_path
+                else:
+                    path_display = source_path or 'не указан'
+                
+                date_str = last_updated.strftime("%Y-%m-%d %H:%M") if last_updated else "?"
+                lines.append(f"• {path_display}")
+                lines.append(f"  Тип: {source_type}, фрагментов: {chunks_count}, обновлено: {date_str}\n")
+            
+            text = "\n".join(lines)
+            if len(text) > 4000:
+                text = text[:3900] + "\n\n... (показаны первые источники, всего больше)"
+        
+        await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        return
+    
+    if data.startswith('kb_clear:'):
+        kb_id = int(data.split(':')[1])
+        context.user_data['confirm_action'] = f'kb_clear:{kb_id}'
+        await safe_edit_message_text(query, "Вы уверены, что хотите очистить базу знаний?", reply_markup=confirm_menu('kb_clear', str(kb_id)))
+        return
+    
+    if data.startswith('kb_delete:'):
+        kb_id = int(data.split(':')[1])
+        context.user_data['confirm_action'] = f'kb_delete:{kb_id}'
+        await safe_edit_message_text(query, "Вы уверены, что хотите удалить базу знаний?", reply_markup=confirm_menu('kb_delete', str(kb_id)))
+        return
+    
+    if data.startswith('upload_type:'):
+        doc_type = data.split(':')[1]
+        kb_id = context.user_data.get('kb_id')
+        
+        if doc_type == 'web':
+            context.user_data['state'] = 'waiting_url'
+            await safe_edit_message_text(query, "Введите URL веб-страницы:")
+        elif doc_type == 'image':
+            context.user_data['kb_id'] = kb_id
+            await safe_edit_message_text(query, "Отправьте изображение для обработки и добавления в базу знаний:")
+        elif doc_type == 'zip':
+            context.user_data['kb_id'] = kb_id
+            await safe_edit_message_text(
+                query,
+                "📦 Отправьте ZIP архив с документами.\n\n"
+                "Бот автоматически извлечет и обработает все поддерживаемые файлы из архива:\n"
+                "• Markdown (.md)\n"
+                "• Текстовые файлы (.txt)\n"
+                "• Word документы (.docx)\n"
+                "• Excel таблицы (.xlsx)\n"
+                "• PDF файлы (.pdf)\n"
+                "• Изображения (.jpg, .png и др.)\n\n"
+                "После обработки вы получите отчет о загруженных файлах."
+            )
+        else:
+            context.user_data['kb_id'] = kb_id
+            await safe_edit_message_text(query, f"Отправьте файл типа {doc_type}")
+        return
+    
+    # Подтверждение действий
+    if data.startswith('confirm:'):
+        parts = data.split(':')
+        action = parts[1]
+        item_id = parts[2] if len(parts) > 2 else None
+        
+        if action == 'kb_clear' and item_id:
+            kb_id = int(item_id)
+            if rag_system.clear_knowledge_base(kb_id):
+                await safe_edit_message_text(query, "✅ База знаний очищена!", reply_markup=admin_menu())
+            else:
+                await safe_edit_message_text(query, "❌ Ошибка очистки базы знаний")
+            return
+        
+        if action == 'kb_delete' and item_id:
+            kb_id = int(item_id)
+            if rag_system.delete_knowledge_base(kb_id):
+                await safe_edit_message_text(query, "✅ База знаний удалена!", reply_markup=admin_menu())
+            else:
+                await safe_edit_message_text(query, "❌ Ошибка удаления базы знаний")
+            return
+    
+    if data == 'cancel':
+        await safe_edit_message_text(query, "Действие отменено", reply_markup=admin_menu())
+        return
+    
+    # Настройки ИИ
+    if data == 'admin_ai':
+        providers = ai_manager.list_providers()
+        current = ai_manager.current_provider or 'ollama'
+        text = f"🔧 Настройки ИИ\n\nТекущий провайдер: {current}\nДоступные провайдеры: {', '.join(providers)}"
+        await safe_edit_message_text(query, text, reply_markup=ai_providers_menu(providers, current))
+        return
+
+    if data == 'admin_n8n':
+        await safe_edit_message_text(query, _n8n_status_text(), reply_markup=n8n_menu(N8N_PUBLIC_URL or None))
+        return
+
+    if data == 'n8n_ping':
+        ok, details = n8n_client.health_check()
+        prefix = "✅ n8n доступен" if ok else "❌ Не удалось связаться с n8n"
+        text = f"{prefix}\n{details}\n\n" \
+               "Убедитесь, что сервис n8n запущен и переменные окружения настроены правильно."
+        await safe_edit_message_text(query, text, reply_markup=n8n_menu(N8N_PUBLIC_URL or None))
+        return
+
+    if data == 'n8n_test_event':
+        payload = {
+            "telegram_id": user.telegram_id,
+            "username": user.username,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "context": "manual_test",
+        }
+        ok, details = n8n_client.send_event("bot_manual_test", payload)
+        prefix = "✅ Тестовое событие отправлено" if ok else "❌ Не удалось отправить событие"
+        text = f"{prefix}\n{details}"
+        await safe_edit_message_text(query, text, reply_markup=n8n_menu(N8N_PUBLIC_URL or None))
+        return
+    
+    # Загрузка документов (общее меню)
+    if data == 'admin_upload':
+        kbs = rag_system.list_knowledge_bases()
+        if not kbs:
+            await safe_edit_message_text(query, "Сначала создайте базу знаний!", reply_markup=admin_menu())
+        else:
+            await safe_edit_message_text(query, "Выберите базу знаний для загрузки:", reply_markup=knowledge_base_menu(kbs))
+        return
+
