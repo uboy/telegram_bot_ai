@@ -1196,13 +1196,17 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             from html import escape
 
             lines = ["📜 <b>Журнал последних загрузок:</b>\n"]
-            for log in logs:
+            max_logs = 50  # Ограничиваем количество записей
+            for log in logs[:max_logs]:
                 when = str(log.get("created_at") or "")[:16]
                 username = log.get("username") or ""
                 user_telegram_id = log.get("user_telegram_id") or ""
                 who = username or user_telegram_id or "?"
                 action_type = log.get("action_type") or ""
                 source_path = log.get("source_path") or ""
+                # Обрезаем длинные пути
+                if len(source_path) > 60:
+                    source_path = source_path[:57] + "..."
                 total_chunks = int(log.get("total_chunks") or 0)
 
                 lines.append(
@@ -1210,8 +1214,26 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                     f"{escape(action_type)} — {escape(source_path)} "
                     f"(фрагментов: {total_chunks})"
                 )
-            text = "\n".join(lines)
-        await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+            
+            if len(logs) > max_logs:
+                lines.append(f"\n<i>... и ещё {len(logs) - max_logs} записей</i>")
+            
+            full_text = "\n".join(lines)
+            # Обрезаем текст если он слишком длинный
+            max_len = 3900
+            if len(full_text) > max_len:
+                new_lines: list[str] = []
+                for line in lines:
+                    candidate = "\n".join(new_lines + [line]) if new_lines else line
+                    if len(candidate) > max_len:
+                        break
+                    new_lines.append(line)
+                if new_lines:
+                    new_lines.append("\n<i>... (текст обрезан из-за ограничения Telegram)</i>")
+                text = "\n".join(new_lines)
+            else:
+                text = full_text
+        await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id), parse_mode='HTML')
         return
     
     if data.startswith('kb_sources:'):
@@ -1345,6 +1367,8 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                     if len(candidate) > max_len:
                         break
                     new_lines.append(line)
+                if new_lines:
+                    new_lines.append(f"\n<i>... (показано {displayed_count} из {total_sources} источников, страница {page}/{total_pages})</i>")
                 text = "\n".join(new_lines)
 
         # Строим inline‑клавиатуру с навигацией по страницам + действия с БЗ
@@ -1359,11 +1383,12 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                     InlineKeyboardButton("Вперёд ➡️", callback_data=f"kb_sources:{kb_id}:{page+1}")
                 )
 
-        kb_buttons = kb_actions_menu(kb_id).inline_keyboard  # type: ignore[attr-defined]
+        kb_actions = kb_actions_menu(kb_id)
+        kb_buttons = list(kb_actions.inline_keyboard)  # Преобразуем tuple в list
         if nav_buttons:
             keyboard = InlineKeyboardMarkup([nav_buttons] + kb_buttons)
         else:
-            keyboard = kb_actions_menu(kb_id)
+            keyboard = kb_actions
 
         # Отправляем с HTML форматированием
         try:
