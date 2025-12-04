@@ -584,6 +584,55 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}", reply_markup=admin_menu())
         context.user_data['state'] = None
+    
+    elif state == 'waiting_user_role_change':
+        # Смена роли пользователя
+        if user.role != 'admin':
+            await update.message.reply_text("Только администраторы могут менять роли пользователей.")
+            context.user_data['state'] = None
+            return
+        
+        try:
+            parts = (update.message.text or "").strip().split()
+            if len(parts) != 2:
+                await update.message.reply_text(
+                    "❌ Неверный формат.\n\n"
+                    "Ожидается: <code>TELEGRAM_ID роль</code>\n"
+                    "Например: <code>123456789 admin</code>",
+                    reply_markup=admin_menu(),
+                    parse_mode='HTML',
+                )
+                context.user_data['state'] = None
+                return
+            
+            target_id, new_role = parts[0], parts[1].lower()
+            if new_role not in ("user", "admin"):
+                await update.message.reply_text(
+                    "❌ Недопустимая роль. Используйте: <b>user</b> или <b>admin</b>.",
+                    reply_markup=admin_menu(),
+                    parse_mode='HTML',
+                )
+                context.user_data['state'] = None
+                return
+            
+            target_user = session.query(User).filter_by(telegram_id=target_id).first()
+            if not target_user:
+                await update.message.reply_text("Пользователь не найден.", reply_markup=admin_menu())
+                context.user_data['state'] = None
+                return
+            
+            old_role = target_user.role
+            target_user.role = new_role
+            session.commit()
+            
+            await update.message.reply_text(
+                f"✅ Роль пользователя @{target_user.username} изменена: {old_role} → {new_role}.",
+                reply_markup=admin_menu(),
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}", reply_markup=admin_menu())
+        finally:
+            context.user_data['state'] = None
         
     else:
         # Любой обычный текст без активного состояния считаем запросом к базе знаний

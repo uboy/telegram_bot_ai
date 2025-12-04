@@ -85,15 +85,19 @@ def update_env_file(var_name: str, var_value: str) -> bool:
         return False
 
 
-async def safe_edit_message_text(query, text: str, reply_markup=None):
-    """Безопасное редактирование сообщения с обработкой ошибок"""
+async def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None):
+    """Безопасное редактирование сообщения с обработкой ошибок
+
+    parse_mode прокидывается во все вызовы edit_message_text/reply_text, чтобы
+    можно было безопасно использовать HTML/Markdown.
+    """
     from telegram import ReplyKeyboardMarkup
     
     # edit_message_text не поддерживает ReplyKeyboardMarkup, только InlineKeyboardMarkup
     # Если передан ReplyKeyboardMarkup, сразу отправляем новое сообщение
     if reply_markup and isinstance(reply_markup, ReplyKeyboardMarkup):
         try:
-            await query.message.reply_text(text, reply_markup=reply_markup)
+            await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
             await query.delete_message()
             return
         except Exception as e:
@@ -103,7 +107,7 @@ async def safe_edit_message_text(query, text: str, reply_markup=None):
     
     # Для InlineKeyboardMarkup пытаемся отредактировать сообщение
     try:
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except BadRequest as e:
         error_msg = str(e).lower()
         if 'button_data_invalid' in error_msg or 'inline keyboard expected' in error_msg or 'message is not modified' in error_msg:
@@ -111,13 +115,13 @@ async def safe_edit_message_text(query, text: str, reply_markup=None):
             logger.warning("Не удалось отредактировать сообщение (старые кнопки?), отправляю новое: %s", e)
             try:
                 # Для InlineKeyboardMarkup можно использовать
-                await query.message.reply_text(text, reply_markup=reply_markup)
+                await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
                 await query.delete_message()
             except Exception as e2:
                 logger.error("Не удалось отправить новое сообщение: %s", e2)
                 # Попробуем просто ответить без клавиатуры
                 try:
-                    await query.message.reply_text(text)
+                    await query.message.reply_text(text, parse_mode=parse_mode)
                     await query.delete_message()
                 except Exception as e3:
                     logger.error("Не удалось отправить сообщение даже без клавиатуры: %s", e3)
@@ -714,8 +718,20 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         text = "👥 Список пользователей:\n\n"
         for u in users:
             status = "✅" if u.approved else "❌"
-            text += f"{status} @{u.username} ({u.role})\n"
+            text += f"{status} @{u.username} ({u.role}) — id: {u.telegram_id}\n"
         await safe_edit_message_text(query, text, reply_markup=user_management_menu())
+        return
+    
+    if data == 'change_user_role':
+        context.user_data['state'] = 'waiting_user_role_change'
+        await safe_edit_message_text(
+            query,
+            "Введите Telegram ID пользователя и новую роль через пробел.\n\n"
+            "Например:\n"
+            "<code>123456789 admin</code>\n\n"
+            "Доступные роли: <b>user</b>, <b>admin</b>.",
+            parse_mode='HTML',
+        )
         return
     
     if data == 'delete_user':
@@ -1151,10 +1167,23 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 lines.append(f"• {path_display}")
                 lines.append(f"  Тип: {source_type}, фрагментов: {chunks_count}, обновлено: {date_str}\n")
             
-            text = "\n".join(lines)
+            # Собираем текст и при необходимости обрезаем ТОЛЬКО по целым строкам,
+            # чтобы не рвать HTML-теги и не получать «unclosed start tag».
+            full_text = "\n".join(lines)
             logger.info(f"[kb_sources] Отображается {displayed_count} источников из {len(sources_list)}")
-            if len(text) > 4000:
-                text = text[:3900] + f"\n\n... (показаны первые источники, всего {len(sources_list)})"
+            
+            max_len = 3900  # небольшой запас до лимита Telegram 4096
+            if len(full_text) <= max_len:
+                text = full_text
+            else:
+                new_lines = []
+                for line in lines:
+                    candidate = "\n".join(new_lines + [line]) if new_lines else line
+                    if len(candidate) > max_len:
+                        break
+                    new_lines.append(line)
+                new_lines.append(f"... (показаны первые источники, всего {len(sources_list)})")
+                text = "\n".join(new_lines)
         
         # Отправляем с HTML форматированием
         try:
