@@ -44,9 +44,12 @@ def format_text_safe(text: str, max_length: int = 4096) -> str:
 
 
 def format_markdown_to_html(text: str) -> str:
-    """Конвертировать markdown-подобные конструкции в HTML для Telegram"""
+    """Конвертировать markdown-подобные конструкции в HTML для Telegram (безопасно)"""
     from html import escape
     import re
+    
+    if not text:
+        return ""
     
     # Сначала обрабатываем блоки кода (чтобы не экранировать их содержимое)
     code_blocks = []
@@ -60,36 +63,57 @@ def format_markdown_to_html(text: str) -> str:
     # Заменяем блоки кода на плейсхолдеры
     text = re.sub(code_block_pattern, replace_code_block, text, flags=re.DOTALL)
     
+    # Обрабатываем inline код перед экранированием (чтобы не экранировать содержимое кода)
+    inline_code_blocks = []
+    inline_code_pattern = r'`([^`]+?)`'
+    
+    def replace_inline_code(match):
+        idx = len(inline_code_blocks)
+        inline_code_blocks.append(match.group(1))
+        return f'__INLINE_CODE_{idx}__'
+    
+    text = re.sub(inline_code_pattern, replace_inline_code, text)
+    
     # Экранируем HTML символы в остальном тексте
     text = escape(text)
     
-    # Восстанавливаем блоки кода (они уже экранированы через escape)
+    # Восстанавливаем inline код (содержимое уже экранировано)
+    for idx, code in enumerate(inline_code_blocks):
+        code_escaped = escape(code)
+        text = text.replace(f'__INLINE_CODE_{idx}__', f'<code>{code_escaped}</code>')
+    
+    # Восстанавливаем блоки кода (содержимое уже экранировано)
     for idx, code in enumerate(code_blocks):
-        # Экранируем код отдельно
         code_escaped = escape(code)
         text = text.replace(f'__CODE_BLOCK_{idx}__', f'<pre>{code_escaped}</pre>')
     
-    # Обрабатываем inline код (после escape)
-    text = re.sub(r'`([^`]+?)`', lambda m: f'<code>{m.group(1)}</code>', text)
-    
-    # Заголовки ### -> <b>
+    # Обрабатываем заголовки (после escape, чтобы не экранировать дважды)
+    # Заголовки ### -> <b> (с новой строки)
     text = re.sub(r'###\s+(.+?)(?=\n|$)', r'<b>\1</b>', text, flags=re.MULTILINE)
-    # Заголовки ## -> <b>
+    # Заголовки ## -> <b> (с новой строки)
     text = re.sub(r'##\s+(.+?)(?=\n|$)', r'<b>\1</b>', text, flags=re.MULTILINE)
-    # Заголовки # -> <b>
+    # Заголовки # -> <b> (с начала строки)
     text = re.sub(r'^#\s+(.+?)(?=\n|$)', r'<b>\1</b>', text, flags=re.MULTILINE)
-    # **текст** -> <b>текст</b>
-    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-    # *текст* -> <i>текст</i> (но не **текст**)
-    text = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<i>\1</i>', text)
+    
+    # **текст** -> <b>текст</b> (но не внутри тегов)
+    # Используем негативный lookahead/lookbehind чтобы не заменять внутри HTML тегов
+    text = re.sub(r'(?<!<)\*\*([^*]+?)\*\*(?!>)', r'<b>\1</b>', text)
+    
+    # *текст* -> <i>текст</i> (но не **текст** и не внутри тегов)
+    text = re.sub(r'(?<!<)(?<!\*)\*([^*]+?)\*(?!\*)(?!>)', r'<i>\1</i>', text)
     
     # Обрабатываем списки - заменяем на bullet points с правильным форматированием
-    # Нумерованные списки (1. 2. 3.) -> • 
+    # Нумерованные списки (1. 2. 3.) -> • (с начала строки)
     text = re.sub(r'^\d+\.\s+(.+?)(?=\n|$)', r'• \1', text, flags=re.MULTILINE)
-    # Маркированные списки (- или *) -> •
-    text = re.sub(r'^[-*]\s+(.+?)(?=\n|$)', r'• \1', text, flags=re.MULTILINE)
+    # Маркированные списки (- или *) -> • (с начала строки, но не * для курсива)
+    text = re.sub(r'^[-]\s+(.+?)(?=\n|$)', r'• \1', text, flags=re.MULTILINE)
+    # Маркированные списки (* в начале строки с пробелом) -> •
+    text = re.sub(r'^\*\s+(.+?)(?=\n|$)', r'• \1', text, flags=re.MULTILINE)
     
-    return text
+    # Убираем множественные переносы строк (более 2 подряд -> 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
 
 
 def create_prompt_with_language(query: str, context: Optional[str] = None, task: str = "answer", enable_citations: bool = True) -> str:

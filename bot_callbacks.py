@@ -1087,15 +1087,19 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 
                 displayed_count += 1
                 
-                # Нормализуем URL для вики
-                display_path = _normalize_wiki_url_for_display(source_path or '')
-                
                 # Формируем отображаемое имя и ссылку
                 from html import escape
-                if display_path and display_path.startswith(('http://', 'https://')):
+                from urllib.parse import unquote
+                
+                # Проверяем, является ли источник URL (web тип или начинается с http/https)
+                is_url = (source_type == 'web' or (source_path and source_path.startswith(('http://', 'https://'))))
+                
+                if is_url and source_path:
                     # Для URL создаем HTML ссылку
-                    # Используем оригинальный source_path для ссылки
-                    url_for_link = source_path if source_path else display_path
+                    url_for_link = source_path
+                    
+                    # Нормализуем URL для вики (для отображения)
+                    display_path = _normalize_wiki_url_for_display(source_path)
                     
                     # Извлекаем название из пути для отображения
                     if '/' in url_for_link:
@@ -1109,32 +1113,39 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                         title = url_for_link
                     
                     # Декодируем URL для читаемости (убираем %26 -> &, %20 -> пробел и т.д.)
-                    from urllib.parse import unquote
                     title = unquote(title)
                     
-                    # Если title все еще пустой или слишком короткий, используем весь путь
+                    # Если title все еще пустой или слишком короткий, используем предпоследнюю часть
                     if not title or len(title) < 2:
-                        # Пытаемся взять предпоследнюю часть
                         parts = [p for p in url_for_link.split('/') if p]
                         if len(parts) > 1:
                             title = unquote(parts[-2])
                         else:
                             title = url_for_link
                     
-                    # Экранируем для HTML (но не двойное экранирование)
+                    # Экранируем для HTML (только один раз!)
+                    # Важно: escape только текст, не URL (Telegram сам обработает URL в href)
                     title_escaped = escape(title)
+                    # URL экранируем только для атрибута href (но не двойное экранирование)
+                    # Telegram требует, чтобы URL был правильно экранирован для HTML
                     url_escaped = escape(url_for_link)
                     path_display = f'<a href="{url_escaped}">{title_escaped}</a>'
                 elif '::' in (source_path or ''):
                     # Для архивов показываем имя файла внутри архива
                     file_name = source_path.split('::')[-1]
+                    # Декодируем если нужно
+                    file_name = unquote(file_name) if '%' in file_name else file_name
                     path_display = f"<code>{escape(file_name)}</code>"
                 elif '/' in (source_path or ''):
                     # Для обычных файлов показываем имя файла
                     file_name = source_path.split('/')[-1]
+                    # Декодируем если нужно
+                    file_name = unquote(file_name) if '%' in file_name else file_name
                     path_display = f"<code>{escape(file_name)}</code>"
                 else:
-                    path_display = escape(source_path or 'не указан')
+                    # Для простых путей декодируем если нужно
+                    path_to_display = unquote(source_path) if source_path and '%' in source_path else (source_path or 'не указан')
+                    path_display = escape(path_to_display)
                 
                 date_str = last_updated.strftime("%Y-%m-%d %H:%M") if last_updated else "?"
                 lines.append(f"• {path_display}")

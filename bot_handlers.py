@@ -277,23 +277,54 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"{header}\n{content_preview}"
                     )
 
-                # Формируем краткую информацию об источнике для списка в конце
-                source_info = f"{idx}. **{title}**"
-                if source_path and '.keep' not in source_path.lower():
-                    # Нормализуем URL для вики (конвертируем export URL обратно в читаемый формат)
+                # Формируем краткую информацию об источнике для списка в конце (в HTML формате)
+                from html import escape
+                if source_path and '.keep' not in source_path.lower() and source_path.startswith(('http://', 'https://')):
+                    # Для URL создаем HTML ссылку
                     display_path = _normalize_wiki_url_for_display(source_path)
-                    if display_path != source_path:
-                        # Если URL был нормализован, показываем нормализованный
-                        source_info += f" (`{display_path}`)"
+                    url_for_link = source_path if source_path else display_path
+                    
+                    # Извлекаем название из пути для отображения
+                    if '/' in url_for_link:
+                        parts = [p for p in url_for_link.split('/') if p]
+                        if parts:
+                            title_from_url = parts[-1]
+                        else:
+                            title_from_url = url_for_link
                     else:
-                        # Для обычных файлов показываем только имя файла
+                        title_from_url = url_for_link
+                    
+                    # Декодируем URL для читаемости
+                    title_from_url = unquote(title_from_url)
+                    
+                    # Если title из URL пустой или слишком короткий, используем title из метаданных
+                    if not title_from_url or len(title_from_url) < 2:
+                        parts = [p for p in url_for_link.split('/') if p]
+                        if len(parts) > 1:
+                            title_from_url = unquote(parts[-2])
+                        else:
+                            title_from_url = title
+                    
+                    # Используем title из метаданных, если он лучше
+                    display_title = title if title and title != 'Без названия' else title_from_url
+                    
+                    title_escaped = escape(display_title)
+                    url_escaped = escape(url_for_link)
+                    source_info = f"{idx}. <a href=\"{url_escaped}\">{title_escaped}</a>"
+                else:
+                    # Для не-URL источников показываем просто текст
+                    title_escaped = escape(title)
+                    if source_path and '.keep' not in source_path.lower():
                         if '::' in source_path:
                             file_name = source_path.split('::')[-1]
                         elif '/' in source_path:
                             file_name = source_path.split('/')[-1]
                         else:
                             file_name = source_path
-                        source_info += f" (`{file_name}`)"
+                        file_name_escaped = escape(file_name)
+                        source_info = f"{idx}. <b>{title_escaped}</b> (<code>{file_name_escaped}</code>)"
+                    else:
+                        source_info = f"{idx}. <b>{title_escaped}</b>"
                 sources.append(source_info)
             
             context_text = "\n\n".join(context_parts)
@@ -313,6 +344,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Форматируем ответ с HTML для лучшего форматирования
             from utils import format_markdown_to_html
             ai_answer_html = format_markdown_to_html(ai_answer)
+            # Источники уже в HTML формате, просто добавляем маркеры списка
             sources_html = "\n".join([f"• {s}" for s in sources])
             answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n📎 <b>Использованные источники:</b>\n{sources_html}"
         else:
@@ -394,9 +426,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = create_prompt_with_language(query, None, task="answer")
         model = user.preferred_model if user.preferred_model else None
         ai_answer = ai_manager.query(prompt, provider_name=user.preferred_provider, model=model)
-        answer = format_text_safe(f"🤖 Ответ:\n\n{ai_answer}")
+        
+        # Форматируем ответ с HTML для лучшего форматирования
+        from utils import format_markdown_to_html
+        ai_answer_html = format_markdown_to_html(ai_answer)
+        answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
+        
         menu = main_menu(is_admin=(user.role == 'admin'))
-        await update.message.reply_text(answer, reply_markup=menu, parse_mode=None)
+        try:
+            await update.message.reply_text(answer_html, reply_markup=menu, parse_mode='HTML')
+        except Exception as e:
+            logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
+            answer_plain = format_text_safe(f"🤖 Ответ:\n\n{ai_answer}")
+            await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
         context.user_data['state'] = None
         
     elif state == 'waiting_url':

@@ -252,6 +252,7 @@ def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
                 # Фильтруем пустые чанки
                 chunks = [chunk for chunk in chunks if chunk.get('content', '').strip() and len(chunk.get('content', '').strip()) > 10]
                 
+                file_chunks = 0
                 # Добавить чанки в базу знаний
                 for chunk in chunks:
                     metadata = dict(chunk.get("metadata") or {})
@@ -268,8 +269,10 @@ def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
                         metadata=metadata,
                     )
                     chunks_added += 1
+                    file_chunks += 1
                 
                 files_processed += 1
+                logger.info(f"[wiki-git] Обработан файл: {rel_path} -> {wiki_page_url} ({file_chunks} чанков)")
         
         logger.info(
             f"[wiki-git] Загрузка завершена: kb_id={knowledge_base_id}, "
