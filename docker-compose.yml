@@ -52,6 +52,13 @@ services:
     environment:
       - BOT_DATA_DIR=/app/data
       - HF_HOME=/app/data/cache/huggingface
+    deploy:
+       resources:
+         reservations:
+           devices:
+             - driver: nvidia
+               count: all
+               capabilities: [gpu]
 
   db:
     image: mysql:8.0

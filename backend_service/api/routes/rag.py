@@ -28,18 +28,25 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
     # Настройки RAG
     try:
-        from config import RAG_TOP_K, RAG_CONTEXT_LENGTH, RAG_ENABLE_CITATIONS  # type: ignore
+        from config import (  # type: ignore
+            RAG_TOP_K,
+            RAG_CONTEXT_LENGTH,
+            RAG_ENABLE_CITATIONS,
+            RAG_MIN_RERANK_SCORE,
+        )
         top_k_search = payload.top_k or RAG_TOP_K
         top_k_for_context = RAG_TOP_K
         context_length = RAG_CONTEXT_LENGTH
         enable_citations = RAG_ENABLE_CITATIONS
+        min_rerank_score = RAG_MIN_RERANK_SCORE
     except Exception:  # noqa: BLE001
         top_k_search = payload.top_k or 10
         top_k_for_context = 8
         context_length = 1200
         enable_citations = True
+        min_rerank_score = 0.0
 
-    # Поиск кандидатов в RAG
+    # Поиск кандидатов в RAG (dense + keyword + optional rerank)
     results = rag_system.search(
         query=payload.query,
         knowledge_base_id=kb_id,
@@ -47,7 +54,12 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
     ) or []
 
     if not results:
-        # Нет релевантных фрагментов в БЗ – пусть бот сам решит, как реагировать
+        # Нет релевантных фрагментов в БЗ – честно говорим, что ответа нет
+        return RAGAnswer(answer="", sources=[])
+
+    # Анти-галлюцинации: если есть reranker и все score ниже порога – считаем, что ответа нет
+    best_score = max(float(r.get("rerank_score", 0.0)) for r in results)
+    if min_rerank_score > 0.0 and best_score < min_rerank_score:
         return RAGAnswer(answer="", sources=[])
 
     # Формируем контекст для LLM на основе найденных фрагментов

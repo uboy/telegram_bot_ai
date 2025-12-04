@@ -83,13 +83,42 @@ class MarkdownLoader(DocumentLoader):
         try:
             with open(source, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
+            # Очистить markdown-разметку до более "плоского" текста,
+            # чтобы эмбеддинги не шумели на символах форматирования.
+            def _markdown_to_plain(text: str) -> str:
+                # Убрать блоки кода ```...``` полностью
+                text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+                # Убрать inline-код `...`
+                text = re.sub(r"`([^`]+)`", r"\1", text)
+                # Картинки ![alt](url) -> alt (url) или просто alt
+                text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"\1 (\2)", text)
+                # Ссылки [text](url) -> text (url)
+                text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+                # Жирный/курсив **text**, *text*, __text__, _text_ -> text
+                text = re.sub(r"(\*\*|__)(.*?)\1", r"\2", text)
+                text = re.sub(r"(\*|_)(.*?)\1", r"\2", text)
+                # Убрать заголовочные маркеры #, ##, ### в начале строки
+                text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+                # Убрать лишние markdown-символы списков, сохранив текст
+                text = re.sub(r"^[>\-\*+]\s+", "", text, flags=re.MULTILINE)
+                # Упростить таблицы: убрать вертикальные разделители
+                text = re.sub(r"\|", " ", text)
+                # Удалить горизонтальные линии
+                text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+                # Свести множественные пробелы/переносы
+                text = re.sub(r"\s+\n", "\n", text)
+                text = re.sub(r"\n{3,}", "\n\n", text)
+                return text.strip()
+
+            plain_content = _markdown_to_plain(content)
+
             # Сначала грубое разбиение по заголовкам
             sections: List[Dict[str, str]] = []
             current_section = ""
             current_title = ""
             
-            for line in content.split("\n"):
+            for line in plain_content.split("\n"):
                 if line.startswith("#"):
                     if current_section:
                         sections.append(
@@ -113,7 +142,7 @@ class MarkdownLoader(DocumentLoader):
 
             # Затем более тонкий чанкинг внутри каждой секции (300–800 токенов, overlap)
             chunks: List[Dict[str, str]] = []
-            for sec in sections or [{"content": content, "title": ""}]:
+            for sec in sections or [{"content": plain_content, "title": ""}]:
                 sec_text = sec.get("content") or ""
                 sec_title = sec.get("title") or ""
                 for idx, part in enumerate(_split_text_into_chunks(sec_text), start=1):

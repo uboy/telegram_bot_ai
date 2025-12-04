@@ -57,19 +57,21 @@ else:
     REDIS_ENABLED = False
 
 # RAG Configuration (optional)
-RAG_MODEL_NAME = os.getenv("RAG_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+# Оптимальные дефолты для RU+EN под GPU (V100 32GB): мультиязычные эмбеддинги + reranker.
+RAG_MODEL_NAME = os.getenv("RAG_MODEL_NAME", "intfloat/multilingual-e5-base")
 RAG_ENABLE = os.getenv("RAG_ENABLE", "true").lower() == "true"
-RAG_MAX_CANDIDATES = int(os.getenv("RAG_MAX_CANDIDATES", "100"))  # Количество кандидатов для векторного поиска перед rerank
-RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # Модель reranker'а
+RAG_MAX_CANDIDATES = int(os.getenv("RAG_MAX_CANDIDATES", "80"))  # Количество кандидатов для векторного поиска перед rerank
+RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "BAAI/bge-reranker-base")  # Мультиязычный reranker
 # Устройство для моделей RAG: 'cpu', 'cuda' (автоматически выберет GPU), 'cuda:0', 'cuda:1' и т.д.
-RAG_DEVICE = os.getenv("RAG_DEVICE", "cpu")
+RAG_DEVICE = os.getenv("RAG_DEVICE", "cuda")
 
-# RAG Chunking Configuration (по умолчанию из Open WebUI)
-RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "2000"))  # Размер чанка в символах (по умолчанию ~300-800 токенов)
-RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "400"))  # Перекрытие между чанками в символах
-RAG_TOP_K = int(os.getenv("RAG_TOP_K", "10"))  # Количество лучших результатов для контекста
-RAG_CONTEXT_LENGTH = int(os.getenv("RAG_CONTEXT_LENGTH", "1200"))  # Максимальная длина контекста на источник в символах
+# RAG Chunking Configuration (по умолчанию из Open WebUI, адаптировано)
+RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1800"))  # Размер чанка в символах (~400–800 токенов)
+RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "300"))  # Перекрытие между чанками в символах
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "12"))  # Количество лучших результатов для контекста
+RAG_CONTEXT_LENGTH = int(os.getenv("RAG_CONTEXT_LENGTH", "1500"))  # Максимальная длина контекста на источник в символах
 RAG_ENABLE_CITATIONS = os.getenv("RAG_ENABLE_CITATIONS", "true").lower() == "true"  # Включить inline citations
+RAG_MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.15"))  # Порог уверенности для ответа (если есть reranker)
 
 # n8n Integration
 # Если N8N_BASE_URL не установлен или пустой, считаем что n8n отключен

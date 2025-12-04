@@ -39,7 +39,7 @@ def list_knowledge_bases(db: Session = Depends(get_db_dep)) -> List[KnowledgeBas
 
 @router.post(
     "/",
-    response_model[KnowledgeBaseInfo],  # type: ignore[type-arg]
+    response_model=KnowledgeBaseInfo,
     summary="Создать новую базу знаний",
     dependencies=[Depends(require_api_key)],
 )

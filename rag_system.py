@@ -407,9 +407,9 @@ class RAGSystem:
     
     def search(self, query: str, knowledge_base_id: Optional[int] = None, 
                top_k: int = 5) -> List[Dict]:
-        """Поиск в базе знаний"""
+        """Поиск в базе знаний (dense + keyword с возможным rerank)."""
+        # Если эмбеддинги недоступны – используем только упрощённый поиск
         if not HAS_EMBEDDINGS or not self.encoder:
-            # Упрощенный поиск по ключевым словам
             return self._simple_search(query, knowledge_base_id, top_k)
         
         # Векторный поиск
@@ -424,54 +424,83 @@ class RAGSystem:
         if self.index is None or len(self.chunks) == 0:
             return []
         
-        # Поиск: сначала набираем более широкий пул кандидатов, затем при наличии reranker
-        # пересортировываем и оставляем top_k (минимальный апгрейд: top-50 -> rerank -> top-k).
+        # Dense‑поиск: широкий пул кандидатов
         query_embedding = query_embedding.reshape(1, -1).astype('float32')
         candidate_k = min(self.max_candidates, len(self.chunks))
         distances, indices = self.index.search(query_embedding, candidate_k)
         
-        candidates = []
+        dense_candidates: List[Dict] = []
         for i, idx in enumerate(indices[0]):
             if idx < len(self.chunks):
                 chunk = self.chunks[idx]
                 if knowledge_base_id is not None and chunk.knowledge_base_id != knowledge_base_id:
                     continue
-                candidates.append(
-                    (
-                        chunk,
-                        float(distances[0][i]),
-                    )
+                dense_candidates.append(
+                    {
+                        "content": chunk.content,
+                        "metadata": json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {},
+                        "source_type": chunk.source_type,
+                        "source_path": chunk.source_path,
+                        "distance": float(distances[0][i]),
+                        "origin": "dense",
+                    }
                 )
 
-        if not candidates:
+        # Keyword‑поиск (BM25‑подобный) как дополнительный источник кандидатов
+        keyword_candidates = self._simple_search(
+            query,
+            knowledge_base_id=knowledge_base_id,
+            top_k=self.max_candidates,
+        )
+        for kc in keyword_candidates:
+            kc.setdefault("origin", "bm25")
+
+        # Объединяем кандидатов и убираем дубли по (source_path, content)
+        merged: List[Dict] = []
+        seen = set()
+        for cand in dense_candidates + keyword_candidates:
+            key = (cand.get("source_path") or "", (cand.get("content") or "")[:200])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(cand)
+
+        if not merged:
             return []
 
-        # Если есть reranker, пересчитываем релевантность и берем top_k по score
+        # Если есть reranker – пересчитываем релевантность и берём top_k по score
         if HAS_RERANKER and self.reranker is not None:
             try:
-                pairs = [[query, c.content] for (c, _) in candidates]
+                pairs = [[query, c.get("content", "")] for c in merged]
                 scores = self.reranker.predict(pairs)
-                # Соединяем кандидатов с их rerank-score
-                scored = list(zip(candidates, scores))
-                # Сортировка по score по убыванию
+
+                scored = list(zip(merged, scores))
                 scored.sort(key=lambda x: x[1], reverse=True)
                 top = scored[: top_k]
 
-                logger.debug("Reranker применен: обработано %d кандидатов, выбрано top-%d", len(candidates), len(top))
+                logger.debug(
+                    "Reranker применен: обработано %d кандидатов, выбрано top-%d",
+                    len(merged),
+                    len(top),
+                )
                 if top:
-                    logger.debug("Лучший rerank_score: %.4f, худший: %.4f", top[0][1], top[-1][1])
+                    logger.debug(
+                        "Лучший rerank_score: %.4f, худший: %.4f",
+                        float(top[0][1]),
+                        float(top[-1][1]),
+                    )
 
                 results = []
-                for ((chunk, distance), score) in top:
+                for cand, score in top:
                     results.append(
                         {
-                            "content": chunk.content,
-                            "metadata": json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {},
-                            "source_type": chunk.source_type,
-                            "source_path": chunk.source_path,
-                            # Оставляем оба показателя для возможной отладки
-                            "distance": float(distance),
+                            "content": cand.get("content", ""),
+                            "metadata": cand.get("metadata") or {},
+                            "source_type": cand.get("source_type"),
+                            "source_path": cand.get("source_path"),
+                            "distance": float(cand.get("distance", 0.0)),
                             "rerank_score": float(score),
+                            "origin": cand.get("origin"),
                         }
                     )
                 return results
@@ -480,17 +509,19 @@ class RAGSystem:
                 import traceback
                 logger.debug("Traceback reranker: %s", traceback.format_exc())
                 # fallthrough к сортировке только по расстоянию
-
-        # Если reranker недоступен — оставляем поведение по умолчанию (top_k по distance)
+        
+        # Если reranker недоступен — fallback: берём top_k только из dense‑кандидатов по distance
+        dense_sorted = sorted(dense_candidates, key=lambda c: float(c.get("distance", 0.0)))[: top_k]
         results = []
-        for i, (chunk, distance) in enumerate(candidates[: top_k]):
+        for cand in dense_sorted:
             results.append(
                 {
-                    "content": chunk.content,
-                    "metadata": json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {},
-                    "source_type": chunk.source_type,
-                    "source_path": chunk.source_path,
-                    "distance": float(distance),
+                    "content": cand.get("content", ""),
+                    "metadata": cand.get("metadata") or {},
+                    "source_type": cand.get("source_type"),
+                    "source_path": cand.get("source_path"),
+                    "distance": float(cand.get("distance", 0.0)),
+                    "origin": cand.get("origin", "dense"),
                 }
             )
         return results
