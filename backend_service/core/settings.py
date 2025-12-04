@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Интеграция с Telegram-ботом (для аудита / безопасности)
     TELEGRAM_BOT_TOKEN: Optional[str] = None
 
+    # Простой API-ключ для авторизации запросов от бота
+    BACKEND_API_KEY: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = False

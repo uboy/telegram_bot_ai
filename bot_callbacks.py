@@ -9,14 +9,23 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from database import Session, User, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog
 from ai_providers import ai_manager
-from rag_system import rag_system
 from document_loaders import document_loader_manager
 from image_processor import image_processor
 from templates.buttons import (
-    main_menu, admin_menu, settings_menu, ai_providers_menu, ollama_models_menu,
-    user_management_menu, knowledge_base_menu, kb_actions_menu,
-    document_type_menu, confirm_menu, n8n_menu, rag_settings_menu
+    main_menu,
+    admin_menu,
+    settings_menu,
+    ai_providers_menu,
+    ollama_models_menu,
+    user_management_menu,
+    knowledge_base_menu,
+    kb_actions_menu,
+    document_type_menu,
+    confirm_menu,
+    n8n_menu,
+    rag_settings_menu,
 )
+from backend_client import backend_client
 try:
     from config import ADMIN_IDS, N8N_PUBLIC_URL
 except ImportError:
@@ -185,27 +194,41 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("approve:") or data.startswith("decline:"):
         if user_id not in [str(aid) for aid in ADMIN_IDS]:
             return
-        
+
         _, tg_id = data.split(":")
-        target_user = session.query(User).filter_by(telegram_id=tg_id).first()
-        if target_user:
-            if data.startswith("approve:"):
-                target_user.approved = True
-                target_user.role = 'user'
-                session.commit()
+
+        # Получаем список пользователей из backend и ищем по telegram_id
+        users = backend_client.list_users()
+        target = next((u for u in users if str(u.get("telegram_id")) == str(tg_id)), None)
+        if not target:
+            await safe_edit_message_text(query, "Пользователь не найден в backend.")
+            return
+
+        target_internal_id = target.get("id")
+        if not target_internal_id:
+            await safe_edit_message_text(query, "Некорректные данные пользователя.")
+            return
+
+        if data.startswith("approve:"):
+            ok = backend_client.toggle_user_role(int(target_internal_id))
+            if ok:
                 await safe_edit_message_text(query, "✅ Пользователь одобрен")
                 try:
                     await context.bot.send_message(
                         chat_id=int(tg_id),
                         text="✅ Ваша заявка одобрена! Теперь вы можете использовать бота.",
-                        reply_markup=main_menu()
+                        reply_markup=main_menu(),
                     )
-                except:
+                except Exception:
                     pass
             else:
-                session.delete(target_user)
-                session.commit()
+                await safe_edit_message_text(query, "❌ Не удалось одобрить пользователя через backend.")
+        else:
+            ok = backend_client.delete_user(int(target_internal_id))
+            if ok:
                 await safe_edit_message_text(query, "❌ Пользователь отклонен")
+            else:
+                await safe_edit_message_text(query, "❌ Не удалось отклонить пользователя через backend.")
         return
     
     # Главное меню
@@ -625,27 +648,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if data == 'rag_reload_models':
-        # Перезагрузить модели RAG в рантайме
+        # Перезагрузить модели RAG в рантайме через backend
         try:
             await safe_edit_message_text(query, "🔄 Перезагрузка моделей RAG...\n\nЭто может занять некоторое время.")
-            
-            result = rag_system.reload_models()
-            
-            if result['embedding'] and result['reranker']:
+
+            result = backend_client.rag_reload_models()
+            embedding_ok = bool(result.get("embedding"))
+            reranker_ok = bool(result.get("reranker"))
+
+            if embedding_ok and reranker_ok:
                 message = (
                     "✅ Модели RAG успешно перезагружены!\n\n"
                     "• Модель эмбеддингов: перезагружена\n"
                     "• Модель ранкинга: перезагружена\n\n"
                     "Изменения применены без перезапуска бота."
                 )
-            elif result['embedding']:
+            elif embedding_ok:
                 message = (
                     "⚠️ Частичная перезагрузка моделей RAG:\n\n"
                     "• Модель эмбеддингов: ✅ перезагружена\n"
                     "• Модель ранкинга: ❌ ошибка перезагрузки\n\n"
                     "Проверьте логи для деталей."
                 )
-            elif result['reranker']:
+            elif reranker_ok:
                 message = (
                     "⚠️ Частичная перезагрузка моделей RAG:\n\n"
                     "• Модель эмбеддингов: ❌ ошибка перезагрузки\n"
@@ -659,10 +684,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "• Модель ранкинга: ❌ ошибка\n\n"
                     "Проверьте логи для деталей. Возможно, требуется перезапуск бота."
                 )
-            
+
             await safe_edit_message_text(query, message, reply_markup=rag_settings_menu())
         except Exception as e:
-            logger.error(f"Ошибка при перезагрузке моделей RAG: {e}", exc_info=True)
+            logger.error(f"Ошибка при перезагрузке моделей RAG через backend: {e}", exc_info=True)
             await safe_edit_message_text(
                 query,
                 f"❌ Ошибка перезагрузки моделей: {str(e)}\n\nПроверьте логи для деталей.",
@@ -703,9 +728,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKeyboardMarkup:
     """Сформировать inline-клавиатуру для списка пользователей с пагинацией.
 
+    users может быть списком ORM-объектов User или dict'ов из backend API.
+
     Для каждого пользователя:
-      1) Кнопка \"одобрить/сменить роль\"
-      2) Кнопка \"удалить\"
+      1) Кнопка «одобрить/сменить роль»
+      2) Кнопка «удалить»
     """
     total = len(users)
     total_pages = max(1, (total + page_size - 1) // page_size)
@@ -718,11 +745,18 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
     buttons: list[list[InlineKeyboardButton]] = []
 
     for u in page_users:
+        # Унифицированный доступ к полям пользователя
+        user_id = getattr(u, "id", None) or u.get("id")
+        approved = getattr(u, "approved", None)
+        if approved is None:
+            approved = bool(u.get("approved"))
+        role = getattr(u, "role", None) or u.get("role") or "user"
+
         # Определяем подпись для кнопки смены роли / акцепта
-        if not u.approved:
+        if not approved:
             toggle_label = "✅ Одобрить / user"
         else:
-            if (u.role or "user") == "admin":
+            if (role or "user") == "admin":
                 toggle_label = "🔁 admin → user"
             else:
                 toggle_label = "🔁 user → admin"
@@ -731,11 +765,11 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
             [
                 InlineKeyboardButton(
                     toggle_label,
-                    callback_data=f"user_toggle:{u.id}:{page}",
+                    callback_data=f"user_toggle:{user_id}:{page}",
                 ),
                 InlineKeyboardButton(
                     "🗑️ Удалить",
-                    callback_data=f"user_delete:{u.id}:{page}",
+                    callback_data=f"user_delete:{user_id}:{page}",
                 ),
             ]
         )
@@ -769,8 +803,8 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     # Управление пользователями
     if data == 'admin_users':
-        # Показать первую страницу списка пользователей
-        users = session.query(User).order_by(User.id.asc()).all()
+        # Показать первую страницу списка пользователей (через backend)
+        users = backend_client.list_users()
         from html import escape
 
         if not users:
@@ -786,16 +820,19 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
 
         lines = [f"👥 <b>Управление пользователями</b> (стр. {page})", ""]
         for idx, u in enumerate(users[:5], start=1):
-            full_name = getattr(u, "full_name", None) or "-"
-            username = f"@{u.username}" if u.username else "-"
-            phone = getattr(u, "phone", None) or "не указан"
-            status = "✅ одобрен" if u.approved else "⏳ заявка"
-            role = u.role or "user"
+            full_name = (u.get("full_name") if isinstance(u, dict) else getattr(u, "full_name", None)) or "-"
+            username_raw = u.get("username") if isinstance(u, dict) else getattr(u, "username", None)
+            username = f"@{username_raw}" if username_raw else "-"
+            phone = (u.get("phone") if isinstance(u, dict) else getattr(u, "phone", None)) or "не указан"
+            approved = u.get("approved") if isinstance(u, dict) else getattr(u, "approved", False)
+            role = (u.get("role") if isinstance(u, dict) else getattr(u, "role", None)) or "user"
+            status = "✅ одобрен" if approved else "⏳ заявка"
+            telegram_id = u.get("telegram_id") if isinstance(u, dict) else getattr(u, "telegram_id", "")
 
             lines.append(
                 f"{idx}. <b>{escape(full_name)}</b>\n"
                 f"   Логин: {escape(username)}\n"
-                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   ID: <code>{escape(str(telegram_id))}</code>\n"
                 f"   Телефон: {escape(phone)}\n"
                 f"   Роль: {escape(role)}, Статус: {status}\n"
             )
@@ -809,7 +846,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             page = int(data.split(":")[1])
         except (ValueError, IndexError):
             page = 1
-        users = session.query(User).order_by(User.id.asc()).all()
+        users = backend_client.list_users()
         from html import escape
 
         if not users:
@@ -831,16 +868,19 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
 
         lines = [f"👥 <b>Управление пользователями</b> (стр. {page}/{total_pages})", ""]
         for idx, u in enumerate(page_users, start=1 + start):
-            full_name = getattr(u, "full_name", None) or "-"
-            username = f"@{u.username}" if u.username else "-"
-            phone = getattr(u, "phone", None) or "не указан"
-            status = "✅ одобрен" if u.approved else "⏳ заявка"
-            role = u.role or "user"
+            full_name = (u.get("full_name") if isinstance(u, dict) else getattr(u, "full_name", None)) or "-"
+            username_raw = u.get("username") if isinstance(u, dict) else getattr(u, "username", None)
+            username = f"@{username_raw}" if username_raw else "-"
+            phone = (u.get("phone") if isinstance(u, dict) else getattr(u, "phone", None)) or "не указан"
+            approved = u.get("approved") if isinstance(u, dict) else getattr(u, "approved", False)
+            role = (u.get("role") if isinstance(u, dict) else getattr(u, "role", None)) or "user"
+            status = "✅ одобрен" if approved else "⏳ заявка"
+            telegram_id = u.get("telegram_id") if isinstance(u, dict) else getattr(u, "telegram_id", "")
 
             lines.append(
                 f"{idx}. <b>{escape(full_name)}</b>\n"
                 f"   Логин: {escape(username)}\n"
-                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   ID: <code>{escape(str(telegram_id))}</code>\n"
                 f"   Телефон: {escape(phone)}\n"
                 f"   Роль: {escape(role)}, Статус: {status}\n"
             )
@@ -862,23 +902,13 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             await query.answer("Некорректный идентификатор пользователя", show_alert=True)
             return
 
-        target_user = session.query(User).get(target_id)
-        if not target_user:
-            await query.answer("Пользователь не найден", show_alert=True)
+        ok = backend_client.toggle_user_role(target_id)
+        if not ok:
+            await query.answer("Не удалось изменить роль пользователя (backend)", show_alert=True)
             return
 
-        # Если пользователь ещё не одобрен — одобряем и ставим роль user
-        if not target_user.approved:
-            target_user.approved = True
-            target_user.role = "user"
-        else:
-            # Меняем роль на противоположную между user/admin
-            target_user.role = "admin" if (target_user.role or "user") == "user" else "user"
-
-        session.commit()
-
         # Перерисуем текущую страницу
-        users = session.query(User).order_by(User.id.asc()).all()
+        users = backend_client.list_users()
         from html import escape
 
         keyboard = _build_users_page_keyboard(users, page)
@@ -892,16 +922,19 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
 
         lines = [f"👥 <b>Управление пользователями</b> (стр. {page}/{total_pages})", ""]
         for idx, u in enumerate(page_users, start=1 + start):
-            full_name = getattr(u, "full_name", None) or "-"
-            username = f"@{u.username}" if u.username else "-"
-            phone = getattr(u, "phone", None) or "не указан"
-            status = "✅ одобрен" if u.approved else "⏳ заявка"
-            role = u.role or "user"
+            full_name = (u.get("full_name") if isinstance(u, dict) else getattr(u, "full_name", None)) or "-"
+            username_raw = u.get("username") if isinstance(u, dict) else getattr(u, "username", None)
+            username = f"@{username_raw}" if username_raw else "-"
+            phone = (u.get("phone") if isinstance(u, dict) else getattr(u, "phone", None)) or "не указан"
+            approved = u.get("approved") if isinstance(u, dict) else getattr(u, "approved", False)
+            role = (u.get("role") if isinstance(u, dict) else getattr(u, "role", None)) or "user"
+            status = "✅ одобрен" if approved else "⏳ заявка"
+            telegram_id = u.get("telegram_id") if isinstance(u, dict) else getattr(u, "telegram_id", "")
 
             lines.append(
                 f"{idx}. <b>{escape(full_name)}</b>\n"
                 f"   Логин: {escape(username)}\n"
-                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   ID: <code>{escape(str(telegram_id))}</code>\n"
                 f"   Телефон: {escape(phone)}\n"
                 f"   Роль: {escape(role)}, Статус: {status}\n"
             )
@@ -923,15 +956,12 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             await query.answer("Некорректный идентификатор пользователя", show_alert=True)
             return
 
-        target_user = session.query(User).get(target_id)
-        if not target_user:
-            await query.answer("Пользователь не найден", show_alert=True)
+        ok = backend_client.delete_user(target_id)
+        if not ok:
+            await query.answer("Не удалось удалить пользователя (backend)", show_alert=True)
             return
 
-        session.delete(target_user)
-        session.commit()
-
-        users = session.query(User).order_by(User.id.asc()).all()
+        users = backend_client.list_users()
         from html import escape
 
         if not users:
@@ -953,16 +983,19 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
 
         lines = [f"👥 <b>Управление пользователями</b> (стр. {page}/{total_pages})", ""]
         for idx, u in enumerate(page_users, start=1 + start):
-            full_name = getattr(u, "full_name", None) or "-"
-            username = f"@{u.username}" if u.username else "-"
-            phone = getattr(u, "phone", None) or "не указан"
-            status = "✅ одобрен" if u.approved else "⏳ заявка"
-            role = u.role or "user"
+            full_name = (u.get("full_name") if isinstance(u, dict) else getattr(u, "full_name", None)) or "-"
+            username_raw = u.get("username") if isinstance(u, dict) else getattr(u, "username", None)
+            username = f"@{username_raw}" if username_raw else "-"
+            phone = (u.get("phone") if isinstance(u, dict) else getattr(u, "phone", None)) or "не указан"
+            approved = u.get("approved") if isinstance(u, dict) else getattr(u, "approved", False)
+            role = (u.get("role") if isinstance(u, dict) else getattr(u, "role", None)) or "user"
+            status = "✅ одобрен" if approved else "⏳ заявка"
+            telegram_id = u.get("telegram_id") if isinstance(u, dict) else getattr(u, "telegram_id", "")
 
             lines.append(
                 f"{idx}. <b>{escape(full_name)}</b>\n"
                 f"   Логин: {escape(username)}\n"
-                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   ID: <code>{escape(str(telegram_id))}</code>\n"
                 f"   Телефон: {escape(phone)}\n"
                 f"   Роль: {escape(role)}, Статус: {status}\n"
             )
@@ -973,7 +1006,8 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     # Управление базами знаний
     if data == 'admin_kb':
-        kbs = rag_system.list_knowledge_bases()
+        # Теперь список баз знаний получаем из backend-сервиса
+        kbs = backend_client.list_knowledge_bases()
         await safe_edit_message_text(query, "📚 Базы знаний:", reply_markup=knowledge_base_menu(kbs))
         return
     
@@ -984,10 +1018,20 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     if data.startswith('kb_select:'):
         kb_id = int(data.split(':')[1])
-        kb = rag_system.get_knowledge_base(kb_id)
+        # Получаем список баз знаний и ищем нужную
+        kbs = backend_client.list_knowledge_bases()
+        kb = next((item for item in kbs if int(item.get("id")) == kb_id), None) if kbs else None
         if kb:
-            chunks_count = session.query(KnowledgeChunk).filter_by(knowledge_base_id=kb_id).count()
-            text = f"📚 База знаний: {kb.name}\n\nОписание: {kb.description or 'Нет описания'}\nФрагментов: {chunks_count}"
+            # Получить количество фрагментов через список источников
+            try:
+                sources = backend_client.list_knowledge_sources(kb_id) or []
+                chunks_count = sum(int(src.get("chunks_count", 0)) for src in sources)
+            except Exception:
+                chunks_count = 0
+
+            name = kb.get("name") or "Без названия"
+            description = kb.get("description") or "Нет описания"
+            text = f"📚 База знаний: {name}\n\nОписание: {description}\nФрагментов: {chunks_count}"
             
             # Проверить, есть ли ожидающий документ для загрузки
             if 'pending_document' in context.user_data:
@@ -995,7 +1039,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 context.user_data['kb_id'] = kb_id
                 pending = context.user_data.pop('pending_document')
                 
-                # Загрузить документ асинхронно
+                # Загрузить документ асинхронно через backend
                 from bot_handlers import load_document_to_kb
                 await safe_edit_message_text(query, "📤 Загружаю документ...")
                 await load_document_to_kb(query, context, pending, kb_id)
@@ -1028,7 +1072,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         if len(parts) < 3:
             await query.answer("Некорректный формат callback_data", show_alert=True)
             return
-        
+
         kb_id = int(parts[1])
         wiki_url_hash = parts[2]
         # Получаем полный URL из context.user_data
@@ -1036,64 +1080,28 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         if not wiki_url:
             await query.answer("URL вики не найден. Попробуйте загрузить вики снова.", show_alert=True)
             return
-        
+
         await safe_edit_message_text(
             query,
             "🔄 Загрузка вики через git-репозиторий...\n\n"
             "Это может занять несколько минут в зависимости от размера репозитория."
         )
-        
+
         try:
-            from wiki_git_loader import load_wiki_from_git_async
-            
-            stats = await load_wiki_from_git_async(wiki_url, kb_id)
+            tg_id = str(query.from_user.id) if query.from_user else ""
+            username = query.from_user.username if query.from_user else ""
+
+            stats = backend_client.ingest_wiki_git(
+                kb_id=kb_id,
+                url=wiki_url,
+                telegram_id=tg_id or None,
+                username=username or None,
+            )
             deleted = stats.get("deleted_chunks", 0)
             files = stats.get("files_processed", 0)
             added = stats.get("chunks_added", 0)
             wiki_root = stats.get("wiki_root", wiki_url)
-            
-            # Обновить индекс RAG системы для доступа к новым чанкам
-            try:
-                rag_system.index = None
-                rag_system.chunks = []
-                logger.info("[wiki-git] Индекс RAG системы сброшен, будет пересоздан при следующем поиске")
-            except Exception as idx_error:
-                logger.warning(f"[wiki-git] Не удалось обновить индекс: {idx_error}")
-            
-            # Записать в журнал загрузок
-            tg_id = str(query.from_user.id) if query.from_user else ""
-            db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
-            username = db_user.username if db_user else tg_id
-            user_info = {"telegram_id": tg_id, "username": username}
-            log = KnowledgeImportLog(
-                knowledge_base_id=kb_id,
-                user_telegram_id=tg_id,
-                username=username,
-                action_type="wiki_git",
-                source_path=wiki_root,
-                total_chunks=added,
-            )
-            session.add(log)
-            session.commit()
-            
-            try:
-                from bot_handlers import emit_n8n_import_event
-                emit_n8n_import_event(
-                kb_id=kb_id,
-                action_type="wiki_git",
-                source_path=wiki_root,
-                total_chunks=added,
-                user_info=user_info,
-                extra={
-                    "deleted_chunks": deleted,
-                    "files_processed": files,
-                    "wiki_root": wiki_root,
-                    "original_url": wiki_url,
-                },
-                )
-            except ImportError:
-                logger.warning("n8n integration not available")
-            
+
             text = (
                 "✅ Загрузка вики через git завершена.\n\n"
                 f"Исходный URL: {wiki_url}\n"
@@ -1104,7 +1112,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             )
             await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
         except Exception as e:
-            logger.error(f"Ошибка при загрузке вики через git: {e}", exc_info=True)
+            logger.error(f"Ошибка при загрузке вики через git (backend): {e}", exc_info=True)
             await safe_edit_message_text(
                 query,
                 f"❌ Ошибка при загрузке вики через git: {str(e)}\n\n"
@@ -1150,23 +1158,26 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     if data.startswith('kb_import_log:'):
         kb_id = int(data.split(':')[1])
-        logs = (
-            session.query(KnowledgeImportLog)
-            .filter_by(knowledge_base_id=kb_id)
-            .order_by(KnowledgeImportLog.created_at.desc())
-            .limit(20)
-            .all()
-        )
+        logs = backend_client.get_import_log(kb_id)
         if not logs:
             text = "Журнал загрузок пуст для этой базы знаний."
         else:
-            lines = ["📜 Журнал последних загрузок:\n"]
+            from html import escape
+
+            lines = ["📜 <b>Журнал последних загрузок:</b>\n"]
             for log in logs:
-                when = log.created_at.strftime("%Y-%m-%d %H:%M")
-                who = log.username or log.user_telegram_id or "?"
+                when = str(log.get("created_at") or "")[:16]
+                username = log.get("username") or ""
+                user_telegram_id = log.get("user_telegram_id") or ""
+                who = username or user_telegram_id or "?"
+                action_type = log.get("action_type") or ""
+                source_path = log.get("source_path") or ""
+                total_chunks = int(log.get("total_chunks") or 0)
+
                 lines.append(
-                    f"- {when} — {who} — {log.action_type} — {log.source_path} "
-                    f"(фрагментов: {log.total_chunks})"
+                    f"- {escape(when)} — {escape(str(who))} — "
+                    f"{escape(action_type)} — {escape(source_path)} "
+                    f"(фрагментов: {total_chunks})"
                 )
             text = "\n".join(lines)
         await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
@@ -1183,155 +1194,35 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
 
         page_size = 15  # Кол-во источников на страницу
 
-        # Получить уникальные источники из chunks с датой последнего обновления
-        from sqlalchemy import func, distinct
-        from urllib.parse import urlparse, parse_qs
-        
+        # Теперь источники берём из backend-сервиса
+        from urllib.parse import urlparse, unquote
+        from html import escape
+
         def _normalize_wiki_url_for_display(url: str) -> str:
-            """Нормализовать URL вики для отображения (конвертировать export URL в читаемый формат)"""
-            if not url or not url.startswith(('http://', 'https://')):
+            """Нормализовать URL вики для отображения (конвертировать export URL в читаемый формат)."""
+            if not url or not url.startswith(("http://", "https://")):
                 return url
-            
-            # Если это export URL Gitee вики, пытаемся найти оригинальный URL в метаданных
-            # или конвертируем в базовый формат вики
-            if '/wikis/pages/export' in url:
+
+            if "/wikis/pages/export" in url:
                 try:
                     parsed = urlparse(url)
-                    query_params = parse_qs(parsed.query)
-                    
-                    # Пытаемся найти оригинальный URL из метаданных chunks
-                    # Для этого ищем chunk с таким source_path и проверяем metadata
-                    chunk = session.query(KnowledgeChunk).filter_by(
-                        knowledge_base_id=kb_id,
-                        source_path=url
-                    ).first()
-                    
-                    if chunk and chunk.chunk_metadata:
-                        import json
-                        try:
-                            meta = json.loads(chunk.chunk_metadata)
-                            # Если в метаданных есть оригинальный URL или title, используем его
-                            if 'original_url' in meta:
-                                return meta['original_url']
-                            if 'wiki_page_url' in meta:
-                                return meta['wiki_page_url']
-                        except:
-                            pass
-                    
-                    # Если не нашли, конвертируем в базовый формат
-                    # Для Gitee: /wikis/pages/export?doc_id=... -> /wikis/...
-                    # Но без doc_id мы не можем точно восстановить путь страницы
-                    # Поэтому просто возвращаем базовый путь вики
-                    path_parts = parsed.path.split('/wikis')
+                    path_parts = parsed.path.split("/wikis")
                     if len(path_parts) >= 2:
-                        base_path = path_parts[0] + '/wikis'
+                        base_path = path_parts[0] + "/wikis"
                         return f"{parsed.scheme}://{parsed.netloc}{base_path}"
                 except Exception:
                     pass
-            
-            return url
-        
-        # Нормализовать URL перед группировкой для устранения дублирования
-        # (убираем trailing slash, нормализуем параметры и т.д.)
-        from urllib.parse import urlparse, urlunparse
-        
-        def normalize_source_path(path: str) -> str:
-            """Нормализовать путь источника для группировки"""
-            if not path:
-                return path
-            # Если это URL, нормализуем его
-            if path.startswith(('http://', 'https://')):
-                try:
-                    parsed = urlparse(path)
-                    # Для вики Gitee: каждая страница должна быть отдельным источником
-                    # Не группируем страницы вики вместе
-                    if '/wikis' in path:
-                        # Для вики используем полный URL как ключ (не группируем)
-                        return path
-                    # Убираем trailing slash из path
-                    normalized_path = parsed.path.rstrip('/') or '/'
-                    # Для export URL оставляем как есть (не группируем)
-                    if '/wikis/pages/export' in path:
-                        return path
-                    # Убираем query параметры для группировки (они могут различаться)
-                    normalized = urlunparse((
-                        parsed.scheme,
-                        parsed.netloc,
-                        normalized_path,
-                        parsed.params,
-                        '',  # query - убираем
-                        ''   # fragment - убираем
-                    ))
-                    return normalized
-                except Exception:
-                    return path.rstrip('/')
-            # Для не-URL (файлы) не группируем - каждый файл отдельный источник
-            # Просто возвращаем как есть
-            return path
-        
-        # Получаем источники с нормализованным путем
-        # ВАЖНО: группируем по source_path, чтобы каждая страница вики была отдельным источником
-        sources_query = (
-            session.query(
-                KnowledgeChunk.source_path,
-                KnowledgeChunk.source_type,
-                func.max(KnowledgeChunk.created_at).label('last_updated'),
-                func.count(KnowledgeChunk.id).label('chunks_count')
-            )
-            .filter_by(knowledge_base_id=kb_id)
-            .group_by(KnowledgeChunk.source_path, KnowledgeChunk.source_type)
-            .all()
-        )
-        
-        logger.debug(f"[kb_sources] Найдено уникальных источников в запросе: {len(sources_query)}")
-        
-        # Группируем по нормализованному пути
-        # НО: для файлов (не URL) и вики не группируем - каждый файл/страница отдельный источник
-        sources_dict = {}
-        for source_path, source_type, last_updated, chunks_count in sources_query:
-            if not source_path:
-                continue
-            
-            # Для файлов (не URL) используем полный путь как ключ (не группируем)
-            if not source_path.startswith(('http://', 'https://')):
-                key = (source_path, source_type)
-            elif '/wikis' in source_path:
-                # Для вики используем полный URL как ключ (не группируем страницы)
-                # ВАЖНО: используем исходный source_path как есть, без нормализации
-                key = (source_path, source_type)
-            else:
-                # Для других URL нормализуем для группировки
-                normalized_path = normalize_source_path(source_path)
-                key = (normalized_path, source_type)
-            
-            if key not in sources_dict:
-                sources_dict[key] = {
-                    'source_path': source_path,  # Оригинальный путь для отображения
-                    'source_type': source_type,
-                    'last_updated': last_updated,
-                    'chunks_count': chunks_count
-                }
-                logger.debug(f"[kb_sources] Добавлен источник: {source_path} ({chunks_count} чанков)")
-            else:
-                # Объединяем данные: берем максимальную дату и суммируем chunks
-                # Это не должно происходить для вики, так как мы используем полный URL как ключ
-                existing = sources_dict[key]
-                if last_updated and (not existing['last_updated'] or last_updated > existing['last_updated']):
-                    existing['last_updated'] = last_updated
-                existing['chunks_count'] += chunks_count
-                logger.warning(f"[kb_sources] Объединены источники с одинаковым ключом: {key} (это не должно происходить для вики)")
-        
-        # Преобразуем обратно в список и сортируем
-        sources_list = list(sources_dict.values())
-        total_sources = len(sources_list)
-        logger.info(f"[kb_sources] Всего уникальных источников после группировки: {total_sources}")
-        from datetime import datetime as dt_min
-        sources_list.sort(key=lambda x: x['last_updated'] or dt_min.min.replace(tzinfo=timezone.utc), reverse=True)
 
-        # Пагинация по источникам
+            return url
+
+        sources_list = backend_client.list_knowledge_sources(kb_id)
+        total_sources = len(sources_list)
+        logger.info("[kb_sources] Получено %s источников из backend для kb_id=%s", total_sources, kb_id)
+
         if total_sources == 0:
             text = "В этой базе знаний нет загруженных источников."
         else:
+            # Пагинация по источникам
             total_pages = max(1, (total_sources + page_size - 1) // page_size)
             page = max(1, min(page, total_pages))
             start_idx = (page - 1) * page_size
@@ -1341,90 +1232,83 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             lines = [f"📋 <b>Список источников в базе знаний</b> (стр. {page}/{total_pages}):\n"]
             displayed_count = 0
             for source_data in page_sources:
-                source_path = source_data['source_path']
-                source_type = source_data['source_type']
-                last_updated = source_data['last_updated']
-                chunks_count = source_data['chunks_count']
-                if '.keep' in (source_path or '').lower():
-                    logger.debug(f"[kb_sources] Пропущен источник с .keep: {source_path}")
+                source_path = source_data.get("source_path") or ""
+                source_type = source_data.get("source_type") or "unknown"
+                last_updated = source_data.get("last_updated")
+                chunks_count = int(source_data.get("chunks_count") or 0)
+
+                if ".keep" in (source_path or "").lower():
+                    logger.debug("[kb_sources] Пропущен источник с .keep: %s", source_path)
                     continue
-                
+
                 displayed_count += 1
-                
+
                 # Формируем отображаемое имя и ссылку
-                from html import escape
-                from urllib.parse import unquote
-                
-                # Проверяем, является ли источник URL (web тип или начинается с http/https)
-                is_url = (source_type == 'web' or (source_path and source_path.startswith(('http://', 'https://'))))
-                
+                is_url = source_type == "web" or (
+                    source_path and source_path.startswith(("http://", "https://"))
+                )
+
                 if is_url and source_path:
-                    # Для URL создаем HTML ссылку
                     url_for_link = source_path
-                    
                     # Нормализуем URL для вики (для отображения)
                     display_path = _normalize_wiki_url_for_display(source_path)
-                    
+
                     # Извлекаем название из пути для отображения
-                    if '/' in url_for_link:
-                        # Берем последнюю непустую часть пути
-                        parts = [p for p in url_for_link.split('/') if p]
+                    if "/" in url_for_link:
+                        parts = [p for p in url_for_link.split("/") if p]
                         if parts:
                             title = parts[-1]
                         else:
                             title = url_for_link
                     else:
                         title = url_for_link
-                    
-                    # Декодируем URL для читаемости (убираем %26 -> &, %20 -> пробел и т.д.)
+
+                    # Декодируем URL для читаемости
                     title = unquote(title)
-                    
-                    # Если title все еще пустой или слишком короткий, используем предпоследнюю часть
+
+                    # Если title слишком короткий, берем предпоследнюю часть
                     if not title or len(title) < 2:
-                        parts = [p for p in url_for_link.split('/') if p]
+                        parts = [p for p in url_for_link.split("/") if p]
                         if len(parts) > 1:
                             title = unquote(parts[-2])
                         else:
                             title = url_for_link
-                    
-                    # Экранируем для HTML (только один раз!)
-                    # Важно: escape только текст, не URL (Telegram сам обработает URL в href)
+
                     title_escaped = escape(title)
-                    # URL экранируем только для атрибута href (но не двойное экранирование)
-                    # Telegram требует, чтобы URL был правильно экранирован для HTML
                     url_escaped = escape(url_for_link)
                     path_display = f'<a href="{url_escaped}">{title_escaped}</a>'
-                elif '::' in (source_path or ''):
-                    # Для архивов показываем имя файла внутри архива
-                    file_name = source_path.split('::')[-1]
-                    # Декодируем если нужно
-                    file_name = unquote(file_name) if '%' in file_name else file_name
+                elif "::" in (source_path or ""):
+                    file_name = source_path.split("::")[-1]
+                    file_name = unquote(file_name) if "%" in file_name else file_name
                     path_display = f"<code>{escape(file_name)}</code>"
-                elif '/' in (source_path or ''):
-                    # Для обычных файлов показываем имя файла
-                    file_name = source_path.split('/')[-1]
-                    # Декодируем если нужно
-                    file_name = unquote(file_name) if '%' in file_name else file_name
+                elif "/" in (source_path or ""):
+                    file_name = source_path.split("/")[-1]
+                    file_name = unquote(file_name) if "%" in file_name else file_name
                     path_display = f"<code>{escape(file_name)}</code>"
                 else:
-                    # Для простых путей декодируем если нужно
-                    path_to_display = unquote(source_path) if source_path and '%' in source_path else (source_path or 'не указан')
+                    path_to_display = (
+                        unquote(source_path) if source_path and "%" in source_path else (source_path or "не указан")
+                    )
                     path_display = escape(path_to_display)
-                
-                date_str = last_updated.strftime("%Y-%m-%d %H:%M") if last_updated else "?"
+
+                date_str = str(last_updated)[:16] if last_updated else "?"
                 lines.append(f"• {path_display}")
                 lines.append(f"  Тип: {source_type}, фрагментов: {chunks_count}, обновлено: {date_str}\n")
-            
-            # Собираем текст и при необходимости обрезаем ТОЛЬКО по целым строкам,
-            # чтобы не рвать HTML-теги и не получать «unclosed start tag».
+
+            # Собираем текст и при необходимости обрезаем по целым строкам
             full_text = "\n".join(lines)
-            logger.info(f"[kb_sources] Отображается {displayed_count} источников из {total_sources} (страница {page})")
-            
-            max_len = 3900  # небольшой запас до лимита Telegram 4096
+            logger.info(
+                "[kb_sources] Отображается %s источников из %s (страница %s)",
+                displayed_count,
+                total_sources,
+                page,
+            )
+
+            max_len = 3900
             if len(full_text) <= max_len:
                 text = full_text
             else:
-                new_lines = []
+                new_lines: list[str] = []
                 for line in lines:
                     candidate = "\n".join(new_lines + [line]) if new_lines else line
                     if len(candidate) > max_len:
@@ -1433,7 +1317,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 text = "\n".join(new_lines)
 
         # Строим inline‑клавиатуру с навигацией по страницам + действия с БЗ
-        nav_buttons = []
+        nav_buttons: list[InlineKeyboardButton] = []
         if total_sources > 0:
             if page > 1:
                 nav_buttons.append(
@@ -1454,11 +1338,10 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         try:
             await query.edit_message_text(text, reply_markup=keyboard, parse_mode='HTML')
         except BadRequest as e:
-            # Если HTML не работает, отправляем без форматирования
-            logger.warning(f"Ошибка форматирования HTML в списке источников: {e}")
-            # Убираем HTML теги для простого текста
+            logger.warning("Ошибка форматирования HTML в списке источников: %s", e)
             import re
-            text_plain = re.sub(r'<[^>]+>', '', text)
+
+            text_plain = re.sub(r"<[^>]+>", "", text)
             await safe_edit_message_text(query, text_plain, reply_markup=keyboard)
         return
     
@@ -1511,18 +1394,20 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         
         if action == 'kb_clear' and item_id:
             kb_id = int(item_id)
-            if rag_system.clear_knowledge_base(kb_id):
+            ok = backend_client.clear_knowledge_base(kb_id)
+            if ok:
                 await safe_edit_message_text(query, "✅ База знаний очищена!", reply_markup=admin_menu())
             else:
-                await safe_edit_message_text(query, "❌ Ошибка очистки базы знаний")
+                await safe_edit_message_text(query, "❌ Ошибка очистки базы знаний (backend)")
             return
         
         if action == 'kb_delete' and item_id:
             kb_id = int(item_id)
-            if rag_system.delete_knowledge_base(kb_id):
+            ok = backend_client.delete_knowledge_base(kb_id)
+            if ok:
                 await safe_edit_message_text(query, "✅ База знаний удалена!", reply_markup=admin_menu())
             else:
-                await safe_edit_message_text(query, "❌ Ошибка удаления базы знаний")
+                await safe_edit_message_text(query, "❌ Ошибка удаления базы знаний (backend)")
             return
     
     if data == 'cancel':
@@ -1564,7 +1449,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     # Загрузка документов (общее меню)
     if data == 'admin_upload':
-        kbs = rag_system.list_knowledge_bases()
+        kbs = backend_client.list_knowledge_bases()
         if not kbs:
             await safe_edit_message_text(query, "Сначала создайте базу знаний!", reply_markup=admin_menu())
         else:

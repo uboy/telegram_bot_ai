@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 from database import Session, User, Message, KnowledgeBase, KnowledgeImportLog
 from logging_config import logger
 from ai_providers import ai_manager
-from rag_system import rag_system
+from backend_client import backend_client
 from document_loaders import document_loader_manager
 from image_processor import image_processor
 from web_search import search_web, format_search_results
@@ -73,11 +73,18 @@ def emit_n8n_import_event(
     if not n8n_client.has_webhook():
         return
 
-    kb = rag_system.get_knowledge_base(kb_id)
+    # Информация о базе знаний теперь берётся через backend
+    kb = None
+    try:
+        kbs = backend_client.list_knowledge_bases()
+        kb = next((item for item in kbs if int(item.get("id")) == kb_id), None) if kbs else None
+    except Exception:
+        kb = None
+
     payload = {
         "knowledge_base": {
             "id": kb_id,
-            "name": getattr(kb, "name", None) if kb else None,
+            "name": (kb.get("name") if isinstance(kb, dict) else getattr(kb, "name", None)) if kb else None,
         },
         "action_type": action_type,
         "source_path": source_path,
@@ -95,67 +102,61 @@ def emit_n8n_import_event(
 
 
 async def check_user(update: Update) -> Optional[User]:
-    """Проверить и зарегистрировать пользователя"""
-    user_id = str(update.effective_user.id)
-    user_id_int = int(update.effective_user.id)
-    
-    # Проверить, является ли пользователь администратором
-    is_admin = user_id_int in ADMIN_IDS
-    
+    """Проверить и зарегистрировать пользователя через backend.
+
+    Локальная БД всё ещё используется как кэш до полного выноса моделей в backend_service.
+    """
+    tg = update.effective_user
+    if not tg:
+        return None
+
+    user_id = str(tg.id)
+    username = tg.username or None
+    full_name = getattr(tg, "full_name", None)
+
+    # 1. Синхронизируем пользователя с backend (создание/обновление, роли, approved)
+    backend_user = backend_client.auth_telegram(
+        telegram_id=user_id,
+        username=username,
+        full_name=full_name,
+    )
+    if not backend_user:
+        if update.message:
+            await update.message.reply_text(
+                "❌ Ошибка при проверке пользователя на backend. Попробуйте позже."
+            )
+        return None
+
+    # 2. Обновляем/создаём локальную запись (будет убрана после полного переноса моделей)
     user = session.query(User).filter_by(telegram_id=user_id).first()
-    
     if not user:
-        # Новый пользователь
-        tg_user = update.effective_user
-        full_name = tg_user.full_name if hasattr(tg_user, "full_name") else None
-        # Телефон Telegram-боту не передается по умолчанию, оставляем None
         user = User(
             telegram_id=user_id,
-            username=tg_user.username or user_id,
-            full_name=full_name,
-            phone=None,
-            approved=is_admin,  # Автоматически одобрить администраторов
-            role='admin' if is_admin else 'user'
+            username=backend_user.get("username") or user_id,
+            full_name=backend_user.get("full_name"),
+            phone=backend_user.get("phone"),
+            role=backend_user.get("role") or "user",
+            approved=bool(backend_user.get("approved", False)),
         )
         session.add(user)
-        session.commit()
-        
-        if is_admin:
-            # Администратор - сразу одобрен
-            if update.message:
-                await update.message.reply_text("✅ Вы администратор. Доступ предоставлен.")
-            return user
-        else:
-            # Обычный пользователь - отправить уведомление админам
-            for admin in ADMIN_IDS:
-                try:
-                    await update.get_bot().send_message(
-                        chat_id=admin,
-                        text=f"Новая заявка: @{user.username} (ID: {user_id})",
-                        reply_markup=approve_menu(user_id)
-                    )
-                except:
-                    pass
-            
-            if update.message:
-                await update.message.reply_text("Отправлен запрос на регистрацию. Ожидайте одобрения.")
-            return None
-    
-    # Пользователь существует - проверить и обновить статус администратора
-    if is_admin:
-        # Если пользователь в списке администраторов, автоматически одобрить и сделать админом
-        if not user.approved or user.role != 'admin':
-            user.approved = True
-            user.role = 'admin'
-            session.commit()
-        return user
-    
-    if not user.approved:
+    else:
+        user.username = backend_user.get("username") or user.username
+        if hasattr(user, "full_name"):
+            user.full_name = backend_user.get("full_name")
+        if hasattr(user, "phone"):
+            user.phone = backend_user.get("phone")
+        user.role = backend_user.get("role") or user.role
+        user.approved = bool(backend_user.get("approved", user.approved))
+    session.commit()
+
+    if not user.approved and user.role != "admin":
         # Пользователь не одобрен - отправить сообщение
         if update.message:
-            await update.message.reply_text("⏳ Ваша заявка еще не одобрена администратором. Пожалуйста, подождите.")
+            await update.message.reply_text(
+                "⏳ Ваша заявка еще не одобрена администратором. Пожалуйста, подождите."
+            )
         return None
-    
+
     return user
 
 
@@ -213,7 +214,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if state == 'waiting_query':
-        # Поиск в базе знаний
+        # Поиск в базе знаний через backend (RAG API)
         query = update.message.text
         # Получить настройки RAG из конфига
         try:
@@ -221,148 +222,94 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             top_k_search = RAG_TOP_K
         except ImportError:
             top_k_search = 10
-        
-        # Увеличиваем top_k для лучшей релевантности
-        results = rag_system.search(query, top_k=top_k_search)
-        logger.info("Поиск в БЗ: user=%s, query=%r, найдено фрагментов=%s", user.telegram_id, query, len(results))
-        
-        # Использовать ИИ для формирования ответа
-        if results:
-            # Получить настройки RAG из конфига
-            try:
-                from config import RAG_TOP_K, RAG_CONTEXT_LENGTH, RAG_ENABLE_CITATIONS
-                top_k_for_context = RAG_TOP_K
-                context_length = RAG_CONTEXT_LENGTH
-                enable_citations = RAG_ENABLE_CITATIONS
-            except ImportError:
-                top_k_for_context = 8
-                context_length = 1200
-                enable_citations = True
-            
-            # Сформировать контекст с указанием источников и source_id тегами для citations
-            context_parts = []
-            sources = []
-            for idx, r in enumerate(results[:top_k_for_context], start=1):
-                source_type = r.get('source_type') or 'unknown'
-                source_path = r.get('source_path') or ''
-                meta = r.get('metadata') or {}
-                title = meta.get('title') or source_path or 'Без названия'
-                doc_version = meta.get('doc_version')
-                language = meta.get('language')
-                updated_at = meta.get('source_updated_at')
 
-                # Формируем source_id для citation (имя файла без расширения или путь)
-                if source_path and '.keep' not in source_path.lower():
-                    # Извлекаем имя файла для source_id
-                    if '::' in source_path:
-                        # Для архивов: берем имя файла внутри архива
-                        source_id = source_path.split('::')[-1]
-                    elif '/' in source_path:
-                        # Для URL или путей: берем последний сегмент
-                        source_id = source_path.split('/')[-1]
-                    else:
-                        source_id = source_path
-                    # Убираем расширение для более читаемого citation
-                    source_id = source_id.rsplit('.', 1)[0] if '.' in source_id else source_id
-                else:
-                    source_id = title.replace(' ', '_').lower()[:50]  # Fallback на title
+        backend_result = backend_client.rag_query(query=query, top_k=top_k_search)
+        backend_answer = (backend_result.get("answer") or "").strip()
+        backend_sources = backend_result.get("sources") or []
 
-                content_preview = r['content'][:context_length]
-                if len(r['content']) > context_length:
-                    content_preview += "..."
-                
-                # Формируем контекст с тегом <source_id> для inline citations
-                if enable_citations:
-                    context_parts.append(
-                        f"<source_id>{source_id}</source_id>\n{content_preview}"
-                    )
-                else:
-                    header = f"=== Источник {idx}: {title} ==="
-                    context_parts.append(
-                        f"{header}\n{content_preview}"
-                    )
+        logger.info(
+            "Поиск в БЗ (backend): user=%s, query=%r, has_answer=%s, sources=%s",
+            user.telegram_id,
+            query,
+            bool(backend_answer),
+            len(backend_sources),
+        )
 
-                # Формируем краткую информацию об источнике для списка в конце (в HTML формате)
-                from html import escape
-                if source_path and '.keep' not in source_path.lower() and source_path.startswith(('http://', 'https://')):
-                    # Для URL создаем HTML ссылку
-                    display_path = _normalize_wiki_url_for_display(source_path)
-                    url_for_link = source_path if source_path else display_path
-                    
-                    # Извлекаем название из пути для отображения
-                    if '/' in url_for_link:
-                        parts = [p for p in url_for_link.split('/') if p]
+        from utils import format_markdown_to_html
+        from html import escape
+        from urllib.parse import unquote
+
+        if backend_answer:
+            # Формируем HTML-ответ на основе текста от backend
+            ai_answer_html = format_markdown_to_html(backend_answer)
+
+            # Формируем список источников из backend_sources
+            sources_html_list: list[str] = []
+            for idx, s in enumerate(backend_sources, start=1):
+                source_path = s.get("source_path") or ""
+                source_type = s.get("source_type") or "unknown"
+
+                if not source_path or ".keep" in source_path.lower():
+                    continue
+
+                is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
+
+                if is_url:
+                    url_for_link = source_path
+
+                    # Извлекаем читаемый заголовок из URL
+                    if "/" in url_for_link:
+                        parts = [p for p in url_for_link.split("/") if p]
                         if parts:
-                            title_from_url = parts[-1]
+                            title = parts[-1]
                         else:
-                            title_from_url = url_for_link
+                            title = url_for_link
                     else:
-                        title_from_url = url_for_link
-                    
-                    # Декодируем URL для читаемости
-                    title_from_url = unquote(title_from_url)
-                    
-                    # Если title из URL пустой или слишком короткий, используем title из метаданных
-                    if not title_from_url or len(title_from_url) < 2:
-                        parts = [p for p in url_for_link.split('/') if p]
+                        title = url_for_link
+
+                    title = unquote(title)
+                    if not title or len(title) < 2:
+                        parts = [p for p in url_for_link.split("/") if p]
                         if len(parts) > 1:
-                            title_from_url = unquote(parts[-2])
+                            title = unquote(parts[-2])
                         else:
-                            title_from_url = title
-                    
-                    # Используем title из метаданных, если он лучше
-                    display_title = title if title and title != 'Без названия' else title_from_url
-                    
-                    title_escaped = escape(display_title)
-                    url_escaped = escape(url_for_link)
-                    source_info = f"{idx}. <a href=\"{url_escaped}\">{title_escaped}</a>"
-                else:
-                    # Для не-URL источников показываем просто текст
+                            title = url_for_link
+
                     title_escaped = escape(title)
-                    if source_path and '.keep' not in source_path.lower():
-                        if '::' in source_path:
-                            file_name = source_path.split('::')[-1]
-                        elif '/' in source_path:
-                            file_name = source_path.split('/')[-1]
-                        else:
-                            file_name = source_path
-                        file_name_escaped = escape(file_name)
-                        source_info = f"{idx}. <b>{title_escaped}</b> (<code>{file_name_escaped}</code>)"
+                    url_escaped = escape(url_for_link)
+                    sources_html_list.append(f'{idx}. <a href="{url_escaped}">{title_escaped}</a>')
+                else:
+                    # Не-URL источники показываем как текст/имя файла
+                    if "::" in source_path:
+                        file_name = source_path.split("::")[-1]
+                    elif "/" in source_path:
+                        file_name = source_path.split("/")[-1]
                     else:
-                        source_info = f"{idx}. <b>{title_escaped}</b>"
-                sources.append(source_info)
-            
-            context_text = "\n\n".join(context_parts)
-            prompt = create_prompt_with_language(
-                query,
-                context_text,
-                task="answer",
-                enable_citations=enable_citations,
-            )
-            model = user.preferred_model if user.preferred_model else None
-            ai_answer = ai_manager.query(
-                prompt,
-                provider_name=user.preferred_provider,
-                model=model,
-            )
-            
-            # Форматируем ответ с HTML для лучшего форматирования
-            from utils import format_markdown_to_html
-            ai_answer_html = format_markdown_to_html(ai_answer)
-            # Источники уже в HTML формате, просто добавляем маркеры списка
-            sources_html = "\n".join([f"• {s}" for s in sources])
-            answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n📎 <b>Использованные источники:</b>\n{sources_html}"
+                        file_name = source_path
+                    file_name = unquote(file_name) if "%" in file_name else file_name
+                    file_name_escaped = escape(file_name or "неизвестный источник")
+                    sources_html_list.append(f"{idx}. <code>{file_name_escaped}</code>")
+
+            if sources_html_list:
+                sources_html = "\n".join(f"• {s}" for s in sources_html_list)
+                answer_html = (
+                    f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+                    f"📎 <b>Использованные источники:</b>\n{sources_html}"
+                )
+            else:
+                answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
         else:
-            # Если ничего не найдено, попробовать ответить через ИИ
+            # Если backend не нашёл релевантных фрагментов, fallback на общий ИИ-ответ
             prompt = create_prompt_with_language(query, None, task="answer")
             model = user.preferred_model if user.preferred_model else None
             ai_answer = ai_manager.query(
                 prompt, provider_name=user.preferred_provider, model=model
             )
-            from utils import format_markdown_to_html
-            from html import escape
             ai_answer_html = format_markdown_to_html(ai_answer)
-            answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
+            answer_html = (
+                f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+                f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
+            )
         
         menu = main_menu(is_admin=(user.role == 'admin'))
         # Используем HTML для форматирования, но с безопасной обработкой ошибок
@@ -456,9 +403,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
     
     elif state == 'waiting_wiki_root':
-        # Рекурсивный сбор wiki-раздела сайта
-        from wiki_scraper import crawl_wiki_to_kb_async
-
+        # Рекурсивный сбор wiki-раздела сайта через backend ingestion API
         wiki_url = (update.message.text or "").strip()
         kb_id = context.user_data.get('kb_id_for_wiki')
 
@@ -477,41 +422,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Старт сканирования вики из Telegram: kb_id=%s, url=%s, user=%s", kb_id, wiki_url, user.telegram_id)
 
         try:
-            stats = await crawl_wiki_to_kb_async(wiki_url, kb_id, max_pages=500)
+            tg_id = str(update.effective_user.id) if update.effective_user else ""
+            username = update.effective_user.username if update.effective_user else ""
+
+            stats = backend_client.ingest_wiki_crawl(
+                kb_id=kb_id,
+                url=wiki_url,
+                telegram_id=tg_id or None,
+                username=username or None,
+            )
             deleted = stats.get("deleted_chunks", 0)
-            pages = stats.get("pages_processed", 0)
+            pages = stats.get("pages_processed", 0) or 0
             added = stats.get("chunks_added", 0)
             wiki_root = stats.get("wiki_root", wiki_url)
-
-            # Записать в журнал загрузок
-            tg_id = str(update.effective_user.id) if update.effective_user else ""
-            db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
-            username = db_user.username if db_user else tg_id
-            user_info = {"telegram_id": tg_id, "username": username}
-            log = KnowledgeImportLog(
-                knowledge_base_id=kb_id,
-                user_telegram_id=tg_id,
-                username=username,
-                action_type="wiki",
-                source_path=wiki_root,
-                total_chunks=added,
-            )
-            session.add(log)
-            session.commit()
-
-            emit_n8n_import_event(
-                kb_id=kb_id,
-                action_type="wiki",
-                source_path=wiki_root,
-                total_chunks=added,
-                user_info=user_info,
-                extra={
-                    "deleted_chunks": deleted,
-                    "pages_processed": pages,
-                    "wiki_root": wiki_root,
-                    "original_url": wiki_url,
-                },
-            )
 
             text = (
                 "✅ Сканирование вики завершено.\n\n"
@@ -521,7 +444,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Обработано страниц: {pages}\n"
                 f"Добавлено фрагментов: {added}"
             )
-            
+
             # Если загружено мало страниц (<= 1), предложить догрузить через git или zip
             if pages <= 1:
                 from templates.buttons import InlineKeyboardButton, InlineKeyboardMarkup
@@ -553,7 +476,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text(text, reply_markup=admin_menu())
         except Exception as e:
-            logger.error("Ошибка при сканировании вики: %s", e)
+            logger.error("Ошибка при сканировании вики (backend): %s", e)
             await update.message.reply_text(
                 f"❌ Ошибка при сканировании вики: {str(e)}",
                 reply_markup=admin_menu(),
@@ -565,8 +488,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif state == 'waiting_kb_name':
         # Создание базы знаний
         kb_name = update.message.text
-        kb = rag_system.add_knowledge_base(kb_name)
-        await update.message.reply_text(f"✅ База знаний '{kb_name}' создана!", reply_markup=admin_menu())
+        created = backend_client.create_knowledge_base(kb_name)
+        if created and created.get("id"):
+            await update.message.reply_text(
+                f"✅ База знаний '{kb_name}' создана!",
+                reply_markup=admin_menu(),
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Не удалось создать базу знаний '{kb_name}' через backend.",
+                reply_markup=admin_menu(),
+            )
         context.user_data['state'] = None
         
     elif state == 'waiting_user_delete':
@@ -663,10 +595,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Увеличиваем количество результатов для лучшего поиска
         # Reranker обработает больше кандидатов для лучшей релевантности
         search_top_k = min(top_k_search * 2, max_candidates)
-        results = rag_system.search(query, top_k=search_top_k)
-        
-        # Берем только top_k лучших для контекста (reranker уже отсортировал)
-        results = results[:top_k_search]
+
+        # Поиск теперь выполняется через backend RAG API
+        rag_result = backend_client.rag_query(query, knowledge_base_id=None, top_k=search_top_k)
+        results = rag_result.get("chunks", []) if isinstance(rag_result, dict) else []
         
         # Фильтруем пустые файлы и файлы .keep
         filtered_results = []
@@ -864,259 +796,72 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def load_document_to_kb(query_or_update, context, document_info, kb_id):
-    """Загрузить документ в базу знаний"""
+    """Загрузить документ или архив в базу знаний через backend ingestion API."""
     from telegram import Update
+
     is_update = isinstance(query_or_update, Update)
-    temp_path = None
-    
+
     try:
         if is_update:
             bot = query_or_update.get_bot()
-            file = await bot.get_file(document_info['file_id'])
+            file = await bot.get_file(document_info["file_id"])
             message = query_or_update.message
         else:
-            bot = query_or_update.message.bot if hasattr(query_or_update, 'message') else context.bot
-            file = await bot.get_file(document_info['file_id'])
+            bot = query_or_update.message.bot if hasattr(query_or_update, "message") else context.bot
+            file = await bot.get_file(document_info["file_id"])
             message = None
-        
-        temp_path = os.path.join(tempfile.gettempdir(), f"{document_info['file_id']}.{document_info['file_type']}")
-        await file.download_to_drive(temp_path)
-        
+
+        # Считать файл в память
+        file_bytes = await file.download_as_bytearray()
+
         # Определить пользователя для журнала загрузок
         try:
             if is_update and query_or_update.effective_user:
                 tg_id = str(query_or_update.effective_user.id)
+                username = query_or_update.effective_user.username or tg_id
             else:
-                tg_id = str(query_or_update.from_user.id) if hasattr(query_or_update, "from_user") else ""
-        except Exception:
+                user_obj = getattr(query_or_update, "from_user", None)
+                tg_id = str(user_obj.id) if user_obj else ""
+                username = (user_obj.username if user_obj else "") or tg_id
+        except Exception:  # noqa: BLE001
             tg_id = ""
-        db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
-        username = db_user.username if db_user else tg_id
-        user_info = {"telegram_id": tg_id, "username": username}
+            username = ""
 
-        file_type = (document_info['file_type'] or '').lower()
+        file_type = (document_info.get("file_type") or "").lower()
+        file_name = document_info.get("file_name") or ""
 
-        # Поддержка архивов (zip)
-        per_file_stats = []
-        total_chunks = 0
+        result = backend_client.ingest_document(
+            kb_id=kb_id,
+            file_name=file_name,
+            file_bytes=bytes(file_bytes),
+            file_type=file_type,
+            telegram_id=tg_id or None,
+            username=username or None,
+        )
 
-        if file_type in ("zip",):
-            import zipfile
+        total_chunks = int(result.get("total_chunks", 0)) if result else 0
+        mode = result.get("mode", "document") if result else "document"
 
-            with zipfile.ZipFile(temp_path, 'r') as zf:
-                for name in zf.namelist():
-                    # Пропустить каталоги
-                    if name.endswith('/'):
-                        continue
-                    # Пропустить файлы .keep и другие служебные файлы
-                    if '.keep' in name.lower() or name.endswith('.keep'):
-                        continue
-                    inner_ext = os.path.splitext(name)[1].lstrip('.').lower()
-                    # Извлечь во временный файл
-                    with zf.open(name) as src, tempfile.NamedTemporaryFile(delete=False, suffix=f".{inner_ext}") as dst:
-                        data = src.read()
-                        dst.write(data)
-                        inner_path = dst.name
-                    # Хеш содержимого файла для идентификации версии
-                    doc_hash = hashlib.sha256(data).hexdigest()
-                    # В качестве source_path используем имя файла внутри архива,
-                    # чтобы источники отображались как реальный документ, а не архив.
-                    source_path = name
-
-                    # Удалить старые фрагменты этой версии документа (обновление)
-                    rag_system.delete_chunks_by_source_exact(
-                        knowledge_base_id=kb_id,
-                        source_type=inner_ext or 'unknown',
-                        source_path=source_path,
-                    )
-                    try:
-                        chunks = document_loader_manager.load_document(inner_path, inner_ext or None)
-                        # Фильтруем пустые чанки (менее 10 символов)
-                        chunks = [chunk for chunk in chunks if chunk.get('content', '').strip() and len(chunk.get('content', '').strip()) > 10]
-                    except Exception:
-                        chunks = []
-                    added = 0
-                    # Версия документа — порядковый номер загрузки этого источника
-                    existing_logs = session.query(KnowledgeImportLog).filter_by(
-                        knowledge_base_id=kb_id,
-                        source_path=source_path,
-                    ).count()
-                    doc_version = existing_logs + 1
-                    source_updated_at = datetime.now(timezone.utc).isoformat()
-
-                    for chunk in chunks:
-                        content = chunk.get('content', '')
-                        base_meta = dict(chunk.get('metadata') or {})
-                        base_meta.setdefault('title', chunk.get('title') or name)
-                        base_meta['language'] = detect_language(content) if content else 'ru'
-                        base_meta['doc_hash'] = doc_hash
-                        base_meta['doc_version'] = doc_version
-                        base_meta['source_updated_at'] = source_updated_at
-
-                        rag_system.add_chunk(
-                            knowledge_base_id=kb_id,
-                            content=content,
-                            source_type=inner_ext or 'unknown',
-                            source_path=source_path,
-                            metadata=base_meta,
-                        )
-                        added += 1
-                    total_chunks += added
-                    per_file_stats.append((name, added))
-                    # Записать в журнал загрузок для каждого файла
-                    log = KnowledgeImportLog(
-                        knowledge_base_id=kb_id,
-                        user_telegram_id=tg_id,
-                        username=username,
-                        action_type="archive",
-                        source_path=source_path,
-                        total_chunks=added,
-                    )
-                    session.add(log)
-                    session.commit()
-                    emit_n8n_import_event(
-                        kb_id=kb_id,
-                        action_type="archive",
-                        source_path=source_path,
-                        total_chunks=added,
-                        user_info=user_info,
-                        extra={
-                            "archive_name": document_info.get('file_name'),
-                            "inner_file": name,
-                            "doc_hash": doc_hash,
-                            "doc_version": doc_version,
-                            "source_updated_at": source_updated_at,
-                        },
-                    )
-                    try:
-                        os.remove(inner_path)
-                    except Exception:
-                        pass
-
-            if per_file_stats:
-                # Ограничить вывод, чтобы не превысить лимит Telegram (4096 символов)
-                MAX_MESSAGE_LENGTH = 3500  # Оставляем запас
-                MAX_FILES_TO_SHOW = 50  # Показывать максимум 50 файлов
-                
-                lines = ["✅ Архив обработан. Загрузка файлов в базу знаний:"]
-                total_files = len(per_file_stats)
-                total_chunks_all = sum(added for _, added in per_file_stats)
-                
-                # Показать статистику по первым файлам
-                shown_count = 0
-                for name, added in per_file_stats[:MAX_FILES_TO_SHOW]:
-                    line = f"- {name}: фрагментов {added}"
-                    if len("\n".join(lines) + "\n" + line) > MAX_MESSAGE_LENGTH:
-                        break
-                    lines.append(line)
-                    shown_count += 1
-                
-                # Добавить итоговую статистику
-                if total_files > shown_count:
-                    lines.append(f"\n... и еще {total_files - shown_count} файлов")
-                
-                lines.append(f"\n📊 Итого: {total_files} файлов, {total_chunks_all} фрагментов")
-                
-                response_text = "\n".join(lines)
-                
-                # Если сообщение все еще слишком длинное, сократить еще больше
-                if len(response_text) > MAX_MESSAGE_LENGTH:
-                    response_text = (
-                        f"✅ Архив обработан!\n\n"
-                        f"📊 Обработано файлов: {total_files}\n"
-                        f"📝 Всего фрагментов: {total_chunks_all}\n\n"
-                        f"(Показаны первые {shown_count} файлов из {total_files})"
-                    )
+        if total_chunks > 0:
+            if mode == "archive":
+                response_text = f"✅ Архив обработан, загружено {total_chunks} фрагментов в базу знаний!"
             else:
-                response_text = "⚠️ Архив не содержит поддерживаемых файлов для загрузки."
+                response_text = f"✅ Документ загружен, фрагментов: {total_chunks}!"
         else:
-            # Обычный одиночный документ
-            with open(temp_path, 'rb') as f:
-                data = f.read()
-            doc_hash = hashlib.sha256(data).hexdigest()
-            source_path = document_info['file_name'] or ''
+            response_text = "⚠️ Backend не вернул добавленные фрагменты для этого файла."
 
-            # Удалить старые фрагменты этого документа (если загружается новая версия)
-            rag_system.delete_chunks_by_source_exact(
-                knowledge_base_id=kb_id,
-                source_type=file_type or 'unknown',
-                source_path=source_path,
-            )
-
-            chunks = document_loader_manager.load_document(temp_path, document_info['file_type'])
-            
-            # Версия документа
-            existing_logs = session.query(KnowledgeImportLog).filter_by(
-                knowledge_base_id=kb_id,
-                source_path=source_path,
-            ).count()
-            doc_version = existing_logs + 1
-            source_updated_at = datetime.now(timezone.utc).isoformat()
-
-            added = 0
-            for chunk in chunks:
-                content = chunk['content']
-                base_meta = dict(chunk.get('metadata') or {})
-                base_meta.setdefault('title', chunk.get('title') or source_path)
-                base_meta['language'] = detect_language(content) if content else 'ru'
-                base_meta['doc_hash'] = doc_hash
-                base_meta['doc_version'] = doc_version
-                base_meta['source_updated_at'] = source_updated_at
-
-                rag_system.add_chunk(
-                    knowledge_base_id=kb_id,
-                    content=content,
-                    source_type=file_type or 'unknown',
-                    source_path=source_path,
-                    metadata=base_meta,
-                )
-                added += 1
-            
-            total_chunks = added
-            # Записать в журнал загрузок
-            log = KnowledgeImportLog(
-                knowledge_base_id=kb_id,
-                user_telegram_id=tg_id,
-                username=username,
-                action_type="document",
-                source_path=document_info['file_name'] or '',
-                total_chunks=added,
-            )
-            session.add(log)
-            session.commit()
-            emit_n8n_import_event(
-                kb_id=kb_id,
-                action_type="document",
-                source_path=document_info['file_name'] or '',
-                total_chunks=added,
-                user_info=user_info,
-                extra={
-                    "doc_hash": doc_hash,
-                    "doc_version": doc_version,
-                    "source_updated_at": source_updated_at,
-                },
-            )
-
-        response_text = f"✅ Загружено {added} фрагментов в базу знаний!"
-        
-        if is_update:
+        if is_update and message is not None:
             await message.reply_text(response_text, reply_markup=admin_menu())
         else:
             await query_or_update.edit_message_text(response_text, reply_markup=admin_menu())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         error_text = f"❌ Ошибка загрузки: {str(e)}"
-        if is_update:
+        if is_update and message is not None:
             await message.reply_text(error_text)
         else:
             try:
                 await query_or_update.edit_message_text(error_text)
-            except:
-                pass
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
+            except Exception:
                 pass
 
 
@@ -1147,78 +892,27 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop('wiki_zip_url', None)
             return
         
-        await update.message.reply_text("🔄 Обработка ZIP архива и загрузка вики...\n\nЭто может занять некоторое время.")
+        await update.message.reply_text("🔄 Обработка ZIP архива и загрузка вики через backend...\n\nЭто может занять некоторое время.")
         
         try:
             # Скачать ZIP файл
             bot = update.get_bot()
             file = await bot.get_file(document.file_id)
-            import tempfile
-            temp_zip_path = os.path.join(tempfile.gettempdir(), f"wiki_zip_{document.file_id}.zip")
-            await file.download_to_drive(temp_zip_path)
-            
-            # Загрузить вики из ZIP
-            from wiki_git_loader import load_wiki_from_zip_async
-            stats = await load_wiki_from_zip_async(temp_zip_path, wiki_url, kb_id)
-            
-            # Удалить временный файл
-            try:
-                os.unlink(temp_zip_path)
-            except Exception:
-                pass
-            
-            deleted = stats.get("deleted_chunks", 0)
-            files = stats.get("files_processed", 0)
-            added = stats.get("chunks_added", 0)
-            wiki_root = stats.get("wiki_root", wiki_url)
-            processed_files = stats.get("processed_files", [])
-            
-            # Обновить индекс RAG системы для доступа к новым чанкам
-            try:
-                rag_system.index = None
-                rag_system.chunks = []
-                logger.info("[wiki-zip] Индекс RAG системы сброшен, будет пересоздан при следующем поиске")
-            except Exception as idx_error:
-                logger.warning(f"[wiki-zip] Не удалось обновить индекс: {idx_error}")
-            
-            # Записать в журнал загрузок для каждого файла отдельно
-            from database import KnowledgeImportLog, User
-            tg_id = str(update.effective_user.id) if update.effective_user else ""
-            db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
-            username = db_user.username if db_user else tg_id
-            user_info = {"telegram_id": tg_id, "username": username}
-            
-            # Записываем каждый файл отдельно в журнал
-            for file_info in processed_files:
-                log = KnowledgeImportLog(
-                    knowledge_base_id=kb_id,
-                    user_telegram_id=tg_id,
-                    username=username,
-                    action_type="archive",  # Используем "archive" как в примере пользователя
-                    source_path=file_info['wiki_url'],  # URL страницы вики
-                    total_chunks=file_info['chunks'],
-                )
-                session.add(log)
-            session.commit()
-            
-            try:
-                from bot_handlers import emit_n8n_import_event
-                emit_n8n_import_event(
-                    kb_id=kb_id,
-                    action_type="wiki_zip",
-                    source_path=wiki_root,
-                    total_chunks=added,
-                    user_info=user_info,
-                    extra={
-                        "deleted_chunks": deleted,
-                        "files_processed": files,
-                        "wiki_root": wiki_root,
-                        "original_url": wiki_url,
-                    },
-                )
-            except ImportError:
-                logger.warning("n8n integration not available")
-            
+            temp_bytes = await file.download_as_bytearray()
+
+            result = backend_client.ingest_wiki_zip(
+                kb_id=kb_id,
+                url=wiki_url,
+                zip_bytes=bytes(temp_bytes),
+                filename=document.file_name or f"wiki_{document.file_id}.zip",
+                telegram_id=str(update.effective_user.id) if update.effective_user else None,
+                username=update.effective_user.username if update.effective_user else None,
+            )
+
+            deleted = result.get("deleted_chunks", 0)
+            files = result.get("files_processed", 0)
+            added = result.get("chunks_added", 0)
+            wiki_root = result.get("wiki_root", wiki_url)
             text = (
                 "✅ Загрузка вики из ZIP архива завершена.\n\n"
                 f"Исходный URL: {wiki_url}\n"
@@ -1230,7 +924,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from templates.buttons import kb_actions_menu
             await update.message.reply_text(text, reply_markup=kb_actions_menu(kb_id))
         except Exception as e:
-            logger.error(f"Ошибка при загрузке вики из ZIP: {e}", exc_info=True)
+            logger.error(f"Ошибка при загрузке вики из ZIP (backend): {e}", exc_info=True)
             await update.message.reply_text(
                 f"❌ Ошибка при загрузке вики из ZIP: {str(e)}\n\n"
                 "Убедитесь, что:\n"
@@ -1252,7 +946,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Если база знаний не выбрана, показать меню выбора
     if not kb_id:
-        kbs = rag_system.list_knowledge_bases()
+        kbs = backend_client.list_knowledge_bases()
         if not kbs:
             await update.message.reply_text("Сначала создайте базу знаний в админ-панели.")
             return
@@ -1265,7 +959,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Выберите базу знаний для загрузки документа:", reply_markup=knowledge_base_menu(kbs))
         return
     
-    # Загрузить документ напрямую
+    # Загрузить документ напрямую через backend
     await load_document_to_kb(update, context, {
         'file_id': document.file_id,
         'file_name': document.file_name,
@@ -1295,56 +989,35 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         image_model = getattr(user, 'preferred_image_model', None) or (user.preferred_model if user.preferred_model else None)
         
         if kb_id:
-            # Обновление: удалить старый фрагмент для этого изображения (если был)
-            source_path = f"photo_{photo.file_id}.jpg"
-            rag_system.delete_chunks_by_source_exact(
-                knowledge_base_id=kb_id,
-                source_type='image',
-                source_path=source_path,
-            )
+            # Загрузить изображение в RAG через backend
+            with open(temp_path, "rb") as f:
+                img_bytes = f.read()
 
-            # Обработать и загрузить в RAG
-            processed_text = image_processor.process_image_for_rag(
-                temp_path,
-                model=image_model,
-            )
-            source_updated_at = datetime.now(timezone.utc).isoformat()
-
-            rag_system.add_chunk(
-                knowledge_base_id=kb_id,
-                content=processed_text,
-                source_type='image',
-                source_path=source_path,
-                metadata={
-                    'type': 'image',
-                    'file_id': photo.file_id,
-                    'source_updated_at': source_updated_at,
-                },
-            )
-            # Записать в журнал загрузок
             tg_id = str(update.effective_user.id) if update.effective_user else ""
-            db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
-            username = db_user.username if db_user else tg_id
-            log = KnowledgeImportLog(
-                knowledge_base_id=kb_id,
-                user_telegram_id=tg_id,
-                username=username,
-                action_type="image",
-                source_path=f"photo_{photo.file_id}.jpg",
-                total_chunks=1,
-            )
-            session.add(log)
-            session.commit()
-            user_info = {"telegram_id": tg_id, "username": username}
-            emit_n8n_import_event(
-                kb_id=kb_id,
-                action_type="image",
-                source_path=f"photo_{photo.file_id}.jpg",
-                total_chunks=1,
-                user_info=user_info,
-                extra={"file_id": photo.file_id},
-            )
-            await update.message.reply_text("✅ Изображение обработано и добавлено в базу знаний!", reply_markup=admin_menu())
+            username = update.effective_user.username if update.effective_user else ""
+
+            try:
+                result = backend_client.ingest_image(
+                    kb_id=kb_id,
+                    file_id=photo.file_id,
+                    image_bytes=img_bytes,
+                    telegram_id=tg_id or None,
+                    username=username or None,
+                    model=image_model,
+                )
+                chunks_added = int(result.get("chunks_added", 0)) if result else 0
+                if chunks_added > 0:
+                    await update.message.reply_text(
+                        "✅ Изображение обработано и добавлено в базу знаний!",
+                        reply_markup=admin_menu(),
+                    )
+                else:
+                    await update.message.reply_text(
+                        "⚠️ Backend не вернул добавленные фрагменты для этого изображения.",
+                        reply_markup=admin_menu(),
+                    )
+            except Exception as e:  # noqa: BLE001
+                await update.message.reply_text(f"❌ Ошибка загрузки изображения в базу знаний: {str(e)}")
         else:
             # Просто описать изображение, используя выбранную модель
             description = image_processor.describe_image(
@@ -1363,70 +1036,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, kb_id: int):
-    """Загрузить веб-страницу в базу знаний"""
+    """Загрузить веб-страницу в базу знаний через backend ingestion API."""
     try:
-        chunks = document_loader_manager.load_document(url, 'web')
-        
-        added = 0
-        # Удалить старые фрагменты этой страницы (обновление версии)
-        rag_system.delete_chunks_by_source_exact(
-            knowledge_base_id=kb_id,
-            source_type='web',
-            source_path=url,
-        )
-
-        # Версия документа (по журналу загрузок)
-        existing_logs = session.query(KnowledgeImportLog).filter_by(
-            knowledge_base_id=kb_id,
-            source_path=url,
-        ).count()
-        doc_version = existing_logs + 1
-        source_updated_at = datetime.now(timezone.utc).isoformat()
-
-        for chunk in chunks:
-            content = chunk['content']
-            base_meta = dict(chunk.get('metadata') or {})
-            base_meta.setdefault('title', chunk.get('title') or url)
-            base_meta['language'] = detect_language(content) if content else 'ru'
-            base_meta['doc_version'] = doc_version
-            base_meta['source_updated_at'] = source_updated_at
-
-            rag_system.add_chunk(
-                knowledge_base_id=kb_id,
-                content=content,
-                source_type='web',
-                source_path=url,
-                metadata=base_meta,
-            )
-            added += 1
-        
-        # Записать в журнал загрузок
         tg_id = str(update.effective_user.id) if update.effective_user else ""
-        db_user = session.query(User).filter_by(telegram_id=tg_id).first() if tg_id else None
-        username = db_user.username if db_user else tg_id
-        user_info = {"telegram_id": tg_id, "username": username}
-        log = KnowledgeImportLog(
-            knowledge_base_id=kb_id,
-            user_telegram_id=tg_id,
-            username=username,
-            action_type="web",
-            source_path=url,
-            total_chunks=added,
-        )
-        session.add(log)
-        session.commit()
-        emit_n8n_import_event(
-            kb_id=kb_id,
-            action_type="web",
-            source_path=url,
-            total_chunks=added,
-            user_info=user_info,
-            extra={
-                "doc_version": doc_version,
-                "source_updated_at": source_updated_at,
-            },
-        )
+        username = update.effective_user.username if update.effective_user else ""
 
-        await update.message.reply_text(f"✅ Загружено {added} фрагментов с веб-страницы!", reply_markup=admin_menu())
+        result = backend_client.ingest_web_page(
+            kb_id=kb_id,
+            url=url,
+            telegram_id=tg_id or None,
+            username=username or None,
+        )
+        chunks_added = int(result.get("chunks_added", 0)) if result else 0
+        if chunks_added > 0:
+            await update.message.reply_text(
+                f"✅ Загружено {chunks_added} фрагментов с веб-страницы!",
+                reply_markup=admin_menu(),
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ Backend не вернул добавленные фрагменты для этой страницы.",
+                reply_markup=admin_menu(),
+            )
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка загрузки веб-страницы: {str(e)}")

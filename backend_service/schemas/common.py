@@ -13,8 +13,22 @@ class KnowledgeBaseInfo(BaseModel):
     description: Optional[str] = None
 
 
+class KnowledgeBaseCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
 class KnowledgeSourceInfo(BaseModel):
     source_path: str
     source_type: str
     chunks_count: int
     last_updated: Optional[datetime] = None
+
+
+class KnowledgeImportLogEntry(BaseModel):
+    created_at: datetime
+    username: Optional[str] = None
+    user_telegram_id: Optional[str] = None
+    action_type: str
+    source_path: str
+    total_chunks: int

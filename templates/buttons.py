@@ -133,9 +133,12 @@ def knowledge_base_menu(knowledge_bases: list):
     """Меню управления базами знаний"""
     buttons = []
     for kb in knowledge_bases:
+        # kb может быть как ORM-объектом, так и dict из backend API
+        kb_id = getattr(kb, "id", None) or kb.get("id")
+        kb_name = getattr(kb, "name", None) or kb.get("name")
         buttons.append([InlineKeyboardButton(
-            f"📚 {kb.name}",
-            callback_data=f"kb_select:{kb.id}"
+            f"📚 {kb_name}",
+            callback_data=f"kb_select:{kb_id}"
         )])
     buttons.append([InlineKeyboardButton("➕ Создать базу знаний", callback_data='kb_create')])
     buttons.append([InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')])
