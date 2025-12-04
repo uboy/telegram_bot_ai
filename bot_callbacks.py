@@ -730,7 +730,10 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
 
     users может быть списком ORM-объектов User или dict'ов из backend API.
 
-    Для каждого пользователя:
+    Для каждого пользователя рисуем ОТДЕЛЬНУЮ строку кнопок,
+    причём в тексте кнопок явно указываем номер и имя/логин пользователя,
+    чтобы было видно, какая пара кнопок относится к какому пользователю.
+
       1) Кнопка «одобрить/сменить роль»
       2) Кнопка «удалить»
     """
@@ -744,7 +747,10 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
 
     buttons: list[list[InlineKeyboardButton]] = []
 
-    for u in page_users:
+    for local_idx, u in enumerate(page_users, start=1):
+        # Глобальный номер пользователя на странице (совпадает с нумерацией в тексте)
+        number = start + local_idx
+
         # Унифицированный доступ к полям пользователя
         user_id = getattr(u, "id", None) or u.get("id")
         approved = getattr(u, "approved", None)
@@ -752,14 +758,39 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
             approved = bool(u.get("approved"))
         role = getattr(u, "role", None) or u.get("role") or "user"
 
+        # Человекочитаемое имя для подписи на кнопках
+        full_name = (
+            u.get("full_name") if isinstance(u, dict) else getattr(u, "full_name", None)
+        ) or ""
+        username_raw = (
+            u.get("username") if isinstance(u, dict) else getattr(u, "username", None)
+        )
+        username = f"@{username_raw}" if username_raw else ""
+        telegram_id = (
+            u.get("telegram_id") if isinstance(u, dict) else getattr(u, "telegram_id", "")
+        )
+
+        if full_name:
+            user_label = full_name
+        elif username:
+            user_label = username
+        elif telegram_id:
+            user_label = f"id:{telegram_id}"
+        else:
+            user_label = f"id:{user_id}"
+
+        prefix = f"{number}. "
+
         # Определяем подпись для кнопки смены роли / акцепта
         if not approved:
-            toggle_label = "✅ Одобрить / user"
+            toggle_label = f"{prefix}✅ Одобрить ({user_label})"
         else:
             if (role or "user") == "admin":
-                toggle_label = "🔁 admin → user"
+                toggle_label = f"{prefix}🔁 admin → user ({user_label})"
             else:
-                toggle_label = "🔁 user → admin"
+                toggle_label = f"{prefix}🔁 user → admin ({user_label})"
+
+        delete_label = f"{prefix}🗑️ Удалить ({user_label})"
 
         buttons.append(
             [
@@ -768,7 +799,7 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
                     callback_data=f"user_toggle:{user_id}:{page}",
                 ),
                 InlineKeyboardButton(
-                    "🗑️ Удалить",
+                    delete_label,
                     callback_data=f"user_delete:{user_id}:{page}",
                 ),
             ]
