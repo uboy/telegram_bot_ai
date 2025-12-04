@@ -36,6 +36,23 @@ services:
                count: all
                capabilities: [gpu]
 
+  backend:
+    build: .
+    container_name: telegram_rag_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["uvicorn", "backend_service.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./data:/app/data
+      - ./data/db:/app/data/db
+    environment:
+      - BOT_DATA_DIR=/app/data
+      - HF_HOME=/app/data/cache/huggingface
+
   db:
     image: mysql:8.0
     container_name: telegram_rag_db
