@@ -122,11 +122,9 @@ def approve_menu(user_id: str):
 
 
 def user_management_menu():
-    """Меню управления пользователями"""
+    """Меню управления пользователями (короткое: только список + назад)"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Список пользователей", callback_data='list_users')],
-        [InlineKeyboardButton("🔁 Сменить роль пользователя", callback_data='change_user_role')],
-        [InlineKeyboardButton("🗑️ Удалить пользователя", callback_data='delete_user')],
+        [InlineKeyboardButton("📋 Список пользователей", callback_data='admin_users_page:1')],
         [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
     ])
 

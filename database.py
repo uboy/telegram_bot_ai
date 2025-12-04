@@ -27,6 +27,10 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(String(20), unique=True)
     username = Column(String(20))
+    # Полное имя пользователя из Telegram (first_name + last_name)
+    full_name = Column(String(100))
+    # Номер телефона (если пользователь когда-либо предоставил его отдельно)
+    phone = Column(String(32))
     approved = Column(Boolean, default=False)
     role = Column(String(10), default='user')
     preferred_provider = Column(String(50), default='ollama')  # Предпочитаемый провайдер ИИ
@@ -196,6 +200,40 @@ def migrate_database():
                     logger.info("✅ Миграция: добавлена колонка 'preferred_image_model'")
         except Exception as e:
             # Колонка уже существует или другая ошибка
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Проверить и добавить колонку full_name
+        try:
+            if 'users' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('users')]
+                if 'full_name' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE users
+                        ADD COLUMN full_name VARCHAR(100)
+                    """))
+                    session.commit()
+                    logger.info("✅ Миграция: добавлена колонка 'full_name'")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Проверить и добавить колонку phone
+        try:
+            if 'users' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('users')]
+                if 'phone' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE users
+                        ADD COLUMN phone VARCHAR(32)
+                    """))
+                    session.commit()
+                    logger.info("✅ Миграция: добавлена колонка 'phone'")
+        except Exception:
             try:
                 session.rollback()
             except:

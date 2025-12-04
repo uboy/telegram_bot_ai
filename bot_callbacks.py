@@ -700,6 +700,65 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("У вас нет прав администратора", show_alert=True)
 
 
+def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKeyboardMarkup:
+    """Сформировать inline-клавиатуру для списка пользователей с пагинацией.
+
+    Для каждого пользователя:
+      1) Кнопка \"одобрить/сменить роль\"
+      2) Кнопка \"удалить\"
+    """
+    total = len(users)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_users = users[start:end]
+
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    for u in page_users:
+        # Определяем подпись для кнопки смены роли / акцепта
+        if not u.approved:
+            toggle_label = "✅ Одобрить / user"
+        else:
+            if (u.role or "user") == "admin":
+                toggle_label = "🔁 admin → user"
+            else:
+                toggle_label = "🔁 user → admin"
+
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    toggle_label,
+                    callback_data=f"user_toggle:{u.id}:{page}",
+                ),
+                InlineKeyboardButton(
+                    "🗑️ Удалить",
+                    callback_data=f"user_delete:{u.id}:{page}",
+                ),
+            ]
+        )
+
+    # Пагинация
+    nav_row: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav_row.append(
+            InlineKeyboardButton("⬅️ Назад", callback_data=f"admin_users_page:{page-1}")
+        )
+    if page < total_pages:
+        nav_row.append(
+            InlineKeyboardButton("Вперёд ➡️", callback_data=f"admin_users_page:{page+1}")
+        )
+    if nav_row:
+        buttons.append(nav_row)
+
+    # Кнопка назад в админ-меню
+    buttons.append([InlineKeyboardButton("🔙 Админ-меню", callback_data="admin_menu")])
+
+    return InlineKeyboardMarkup(buttons)
+
+
 async def handle_admin_callbacks(query, context, data: str, user: User):
     """Обработка админских callback'ов"""
     
@@ -710,33 +769,206 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     # Управление пользователями
     if data == 'admin_users':
-        await safe_edit_message_text(query, "👥 Управление пользователями:", reply_markup=user_management_menu())
+        # Показать первую страницу списка пользователей
+        users = session.query(User).order_by(User.id.asc()).all()
+        from html import escape
+
+        if not users:
+            await safe_edit_message_text(
+                query,
+                "👥 Пользователей пока нет.",
+                reply_markup=user_management_menu(),
+            )
+            return
+
+        page = 1
+        keyboard = _build_users_page_keyboard(users, page)
+
+        lines = [f"👥 <b>Управление пользователями</b> (стр. {page})", ""]
+        for idx, u in enumerate(users[:5], start=1):
+            full_name = getattr(u, "full_name", None) or "-"
+            username = f"@{u.username}" if u.username else "-"
+            phone = getattr(u, "phone", None) or "не указан"
+            status = "✅ одобрен" if u.approved else "⏳ заявка"
+            role = u.role or "user"
+
+            lines.append(
+                f"{idx}. <b>{escape(full_name)}</b>\n"
+                f"   Логин: {escape(username)}\n"
+                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   Телефон: {escape(phone)}\n"
+                f"   Роль: {escape(role)}, Статус: {status}\n"
+            )
+
+        text = "\n".join(lines)
+        await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode="HTML")
         return
-    
-    if data == 'list_users':
-        users = session.query(User).all()
-        text = "👥 Список пользователей:\n\n"
-        for u in users:
-            status = "✅" if u.approved else "❌"
-            text += f"{status} @{u.username} ({u.role}) — id: {u.telegram_id}\n"
-        await safe_edit_message_text(query, text, reply_markup=user_management_menu())
+
+    if data.startswith("admin_users_page:"):
+        try:
+            page = int(data.split(":")[1])
+        except (ValueError, IndexError):
+            page = 1
+        users = session.query(User).order_by(User.id.asc()).all()
+        from html import escape
+
+        if not users:
+            await safe_edit_message_text(
+                query,
+                "👥 Пользователей пока нет.",
+                reply_markup=user_management_menu(),
+            )
+            return
+
+        keyboard = _build_users_page_keyboard(users, page)
+        page_size = 5
+        total_pages = max(1, (len(users) + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_users = users[start:end]
+
+        lines = [f"👥 <b>Управление пользователями</b> (стр. {page}/{total_pages})", ""]
+        for idx, u in enumerate(page_users, start=1 + start):
+            full_name = getattr(u, "full_name", None) or "-"
+            username = f"@{u.username}" if u.username else "-"
+            phone = getattr(u, "phone", None) or "не указан"
+            status = "✅ одобрен" if u.approved else "⏳ заявка"
+            role = u.role or "user"
+
+            lines.append(
+                f"{idx}. <b>{escape(full_name)}</b>\n"
+                f"   Логин: {escape(username)}\n"
+                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   Телефон: {escape(phone)}\n"
+                f"   Роль: {escape(role)}, Статус: {status}\n"
+            )
+
+        text = "\n".join(lines)
+        await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode="HTML")
         return
-    
-    if data == 'change_user_role':
-        context.user_data['state'] = 'waiting_user_role_change'
-        await safe_edit_message_text(
-            query,
-            "Введите Telegram ID пользователя и новую роль через пробел.\n\n"
-            "Например:\n"
-            "<code>123456789 admin</code>\n\n"
-            "Доступные роли: <b>user</b>, <b>admin</b>.",
-            parse_mode='HTML',
-        )
+
+    if data.startswith("user_toggle:"):
+        # Формат: user_toggle:<user_db_id>:<page>
+        parts = data.split(":")
+        if len(parts) < 3:
+            await query.answer("Некорректные данные пользователя", show_alert=True)
+            return
+        try:
+            target_id = int(parts[1])
+            page = int(parts[2])
+        except ValueError:
+            await query.answer("Некорректный идентификатор пользователя", show_alert=True)
+            return
+
+        target_user = session.query(User).get(target_id)
+        if not target_user:
+            await query.answer("Пользователь не найден", show_alert=True)
+            return
+
+        # Если пользователь ещё не одобрен — одобряем и ставим роль user
+        if not target_user.approved:
+            target_user.approved = True
+            target_user.role = "user"
+        else:
+            # Меняем роль на противоположную между user/admin
+            target_user.role = "admin" if (target_user.role or "user") == "user" else "user"
+
+        session.commit()
+
+        # Перерисуем текущую страницу
+        users = session.query(User).order_by(User.id.asc()).all()
+        from html import escape
+
+        keyboard = _build_users_page_keyboard(users, page)
+        page_size = 5
+        total_pages = max(1, (len(users) + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_users = users[start:end]
+
+        lines = [f"👥 <b>Управление пользователями</b> (стр. {page}/{total_pages})", ""]
+        for idx, u in enumerate(page_users, start=1 + start):
+            full_name = getattr(u, "full_name", None) or "-"
+            username = f"@{u.username}" if u.username else "-"
+            phone = getattr(u, "phone", None) or "не указан"
+            status = "✅ одобрен" if u.approved else "⏳ заявка"
+            role = u.role or "user"
+
+            lines.append(
+                f"{idx}. <b>{escape(full_name)}</b>\n"
+                f"   Логин: {escape(username)}\n"
+                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   Телефон: {escape(phone)}\n"
+                f"   Роль: {escape(role)}, Статус: {status}\n"
+            )
+
+        text = "\n".join(lines)
+        await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode="HTML")
         return
-    
-    if data == 'delete_user':
-        context.user_data['state'] = 'waiting_user_delete'
-        await safe_edit_message_text(query, "Введите Telegram ID пользователя для удаления:")
+
+    if data.startswith("user_delete:"):
+        # Формат: user_delete:<user_db_id>:<page>
+        parts = data.split(":")
+        if len(parts) < 3:
+            await query.answer("Некорректные данные пользователя", show_alert=True)
+            return
+        try:
+            target_id = int(parts[1])
+            page = int(parts[2])
+        except ValueError:
+            await query.answer("Некорректный идентификатор пользователя", show_alert=True)
+            return
+
+        target_user = session.query(User).get(target_id)
+        if not target_user:
+            await query.answer("Пользователь не найден", show_alert=True)
+            return
+
+        session.delete(target_user)
+        session.commit()
+
+        users = session.query(User).order_by(User.id.asc()).all()
+        from html import escape
+
+        if not users:
+            await safe_edit_message_text(
+                query,
+                "👥 Пользователей больше нет.",
+                reply_markup=user_management_menu(),
+            )
+            return
+
+        keyboard = _build_users_page_keyboard(users, page)
+        page_size = 5
+        total_pages = max(1, (len(users) + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_users = users[start:end]
+
+        lines = [f"👥 <b>Управление пользователями</b> (стр. {page}/{total_pages})", ""]
+        for idx, u in enumerate(page_users, start=1 + start):
+            full_name = getattr(u, "full_name", None) or "-"
+            username = f"@{u.username}" if u.username else "-"
+            phone = getattr(u, "phone", None) or "не указан"
+            status = "✅ одобрен" if u.approved else "⏳ заявка"
+            role = u.role or "user"
+
+            lines.append(
+                f"{idx}. <b>{escape(full_name)}</b>\n"
+                f"   Логин: {escape(username)}\n"
+                f"   ID: <code>{escape(u.telegram_id)}</code>\n"
+                f"   Телефон: {escape(phone)}\n"
+                f"   Роль: {escape(role)}, Статус: {status}\n"
+            )
+
+        text = "\n".join(lines)
+        await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode="HTML")
         return
     
     # Управление базами знаний
@@ -941,7 +1173,16 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         return
     
     if data.startswith('kb_sources:'):
-        kb_id = int(data.split(':')[1])
+        parts = data.split(':')
+        kb_id = int(parts[1])
+        # Поддержка пагинации: kb_sources:<kb_id>:<page>
+        try:
+            page = int(parts[2]) if len(parts) > 2 else 1
+        except ValueError:
+            page = 1
+
+        page_size = 15  # Кол-во источников на страницу
+
         # Получить уникальные источники из chunks с датой последнего обновления
         from sqlalchemy import func, distinct
         from urllib.parse import urlparse, parse_qs
@@ -1082,17 +1323,24 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         
         # Преобразуем обратно в список и сортируем
         sources_list = list(sources_dict.values())
-        logger.info(f"[kb_sources] Всего уникальных источников после группировки: {len(sources_list)}")
+        total_sources = len(sources_list)
+        logger.info(f"[kb_sources] Всего уникальных источников после группировки: {total_sources}")
         from datetime import datetime as dt_min
         sources_list.sort(key=lambda x: x['last_updated'] or dt_min.min.replace(tzinfo=timezone.utc), reverse=True)
-        sources_list = sources_list[:50]  # Ограничиваем до 50
-        
-        if not sources_list:
+
+        # Пагинация по источникам
+        if total_sources == 0:
             text = "В этой базе знаний нет загруженных источников."
         else:
-            lines = ["📋 <b>Список источников в базе знаний:</b>\n"]
+            total_pages = max(1, (total_sources + page_size - 1) // page_size)
+            page = max(1, min(page, total_pages))
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            page_sources = sources_list[start_idx:end_idx]
+
+            lines = [f"📋 <b>Список источников в базе знаний</b> (стр. {page}/{total_pages}):\n"]
             displayed_count = 0
-            for source_data in sources_list:
+            for source_data in page_sources:
                 source_path = source_data['source_path']
                 source_type = source_data['source_type']
                 last_updated = source_data['last_updated']
@@ -1170,7 +1418,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             # Собираем текст и при необходимости обрезаем ТОЛЬКО по целым строкам,
             # чтобы не рвать HTML-теги и не получать «unclosed start tag».
             full_text = "\n".join(lines)
-            logger.info(f"[kb_sources] Отображается {displayed_count} источников из {len(sources_list)}")
+            logger.info(f"[kb_sources] Отображается {displayed_count} источников из {total_sources} (страница {page})")
             
             max_len = 3900  # небольшой запас до лимита Telegram 4096
             if len(full_text) <= max_len:
@@ -1182,19 +1430,36 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                     if len(candidate) > max_len:
                         break
                     new_lines.append(line)
-                new_lines.append(f"... (показаны первые источники, всего {len(sources_list)})")
                 text = "\n".join(new_lines)
-        
+
+        # Строим inline‑клавиатуру с навигацией по страницам + действия с БЗ
+        nav_buttons = []
+        if total_sources > 0:
+            if page > 1:
+                nav_buttons.append(
+                    InlineKeyboardButton("⬅️ Назад", callback_data=f"kb_sources:{kb_id}:{page-1}")
+                )
+            if page * page_size < total_sources:
+                nav_buttons.append(
+                    InlineKeyboardButton("Вперёд ➡️", callback_data=f"kb_sources:{kb_id}:{page+1}")
+                )
+
+        kb_buttons = kb_actions_menu(kb_id).inline_keyboard  # type: ignore[attr-defined]
+        if nav_buttons:
+            keyboard = InlineKeyboardMarkup([nav_buttons] + kb_buttons)
+        else:
+            keyboard = kb_actions_menu(kb_id)
+
         # Отправляем с HTML форматированием
         try:
-            await query.edit_message_text(text, reply_markup=kb_actions_menu(kb_id), parse_mode='HTML')
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode='HTML')
         except BadRequest as e:
             # Если HTML не работает, отправляем без форматирования
             logger.warning(f"Ошибка форматирования HTML в списке источников: {e}")
             # Убираем HTML теги для простого текста
             import re
             text_plain = re.sub(r'<[^>]+>', '', text)
-            await safe_edit_message_text(query, text_plain, reply_markup=kb_actions_menu(kb_id))
+            await safe_edit_message_text(query, text_plain, reply_markup=keyboard)
         return
     
     if data.startswith('kb_clear:'):

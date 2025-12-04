@@ -106,9 +106,14 @@ async def check_user(update: Update) -> Optional[User]:
     
     if not user:
         # Новый пользователь
+        tg_user = update.effective_user
+        full_name = tg_user.full_name if hasattr(tg_user, "full_name") else None
+        # Телефон Telegram-боту не передается по умолчанию, оставляем None
         user = User(
             telegram_id=user_id,
-            username=update.effective_user.username or user_id,
+            username=tg_user.username or user_id,
+            full_name=full_name,
+            phone=None,
             approved=is_admin,  # Автоматически одобрить администраторов
             role='admin' if is_admin else 'user'
         )
