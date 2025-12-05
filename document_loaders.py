@@ -111,43 +111,61 @@ class MarkdownLoader(DocumentLoader):
                 text = re.sub(r"\n{3,}", "\n\n", text)
                 return text.strip()
 
-            plain_content = _markdown_to_plain(content)
-
-            # Сначала грубое разбиение по заголовкам
+            # Сначала разбиение по заголовкам в оригинальном markdown (до очистки)
             sections: List[Dict[str, str]] = []
-            current_section = ""
+            current_section_lines = []
             current_title = ""
             
-            for line in plain_content.split("\n"):
-                if line.startswith("#"):
-                    if current_section:
-                        sections.append(
-                            {
-                                "content": current_section.strip(),
-                                "title": current_title,
-                            }
-                        )
-                    current_title = line.strip("#").strip()
-                    current_section = line + "\n"
+            for line in content.split("\n"):
+                # Проверяем, является ли строка заголовком (начинается с #)
+                header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+                if header_match:
+                    # Сохраняем предыдущую секцию
+                    if current_section_lines:
+                        section_content = "\n".join(current_section_lines).strip()
+                        if section_content:  # Только если есть содержимое
+                            sections.append(
+                                {
+                                    "content": section_content,
+                                    "title": current_title,
+                                }
+                            )
+                    # Начинаем новую секцию
+                    current_title = header_match.group(2).strip()
+                    current_section_lines = [line]  # Сохраняем заголовок в секции
                 else:
-                    current_section += line + "\n"
+                    current_section_lines.append(line)
             
-            if current_section:
-                sections.append(
-                    {
-                        "content": current_section.strip(),
-                        "title": current_title,
-                    }
-                )
+            # Добавить последнюю секцию
+            if current_section_lines:
+                section_content = "\n".join(current_section_lines).strip()
+                if section_content:  # Только если есть содержимое
+                    sections.append(
+                        {
+                            "content": section_content,
+                            "title": current_title,
+                        }
+                    )
+            
+            # Если не было заголовков, весь документ - одна секция
+            if not sections:
+                sections = [{"content": content, "title": ""}]
 
             # Затем более тонкий чанкинг внутри каждой секции (300–800 токенов, overlap)
+            # Очищаем markdown-разметку для каждой секции перед чанкингом
             chunks: List[Dict[str, str]] = []
-            for sec in sections or [{"content": plain_content, "title": ""}]:
-                sec_text = sec.get("content") or ""
+            for sec in sections:
+                sec_text_raw = sec.get("content") or ""
                 sec_title = sec.get("title") or ""
-                for idx, part in enumerate(_split_text_into_chunks(sec_text), start=1):
+                
+                # Очистить markdown-разметку для этой секции
+                sec_text = _markdown_to_plain(sec_text_raw)
+                
+                # Разбить секцию на чанки
+                sec_chunks = _split_text_into_chunks(sec_text)
+                for idx, part in enumerate(sec_chunks, start=1):
                     title = sec_title or ""
-                    if len(_split_text_into_chunks(sec_text)) > 1:
+                    if len(sec_chunks) > 1:
                         # Нумеруем под-чанки внутри секции, если их несколько
                         title = f"{title} (фрагмент {idx})" if title else f"Фрагмент {idx}"
                     chunks.append(
