@@ -1,0 +1,88 @@
+# Тест-набор для оценки качества RAG системы
+# Формат: query -> expected_source -> expected_snippets
+
+test_cases:
+  - id: sync_build_001
+    query: "how to build and sync ohos master"
+    description: "Основной тест-кейс для Sync&Build wiki"
+    expected_source: "Sync&Build.md"
+    expected_source_url: "https://gitee.com/mazurdenis/open-harmony/wikis/Sync&Build/Sync%26Build"
+    expected_snippets:
+      - "repo init.*-b master"
+      - "repo sync -c -j"
+      - "--reference=/data/shared/ohos_mirror"
+      - "mkdir.*proj"
+      - "ln -s.*openharmony_prebuilts"
+    expected_commands:
+      - "repo init -u git@gitcode.com:openharmony/manifest.git -b master"
+      - "repo init -u https://gitcode.com/openharmony/manifest.git -b master"
+      - "repo sync -c -j 8"
+      - "repo forall -j 8 -c 'git lfs pull'"
+      - "build/prebuilts_download.sh"
+    min_retrieval_score: 0.8  # Минимальный score для reranker
+    required_chunks: 1  # Минимальное количество релевантных чанков
+    
+  - id: sync_build_002
+    query: "how to sync code with local mirror"
+    description: "Тест на поиск информации о локальном зеркале"
+    expected_source: "Sync&Build.md"
+    expected_snippets:
+      - "--reference=/data/shared/ohos_mirror"
+      - "local repo mirror"
+      - "synced every 15 minutes"
+    expected_commands:
+      - "repo init.*--reference=/data/shared/ohos_mirror"
+    
+  - id: sync_build_003
+    query: "build ohos sdk for windows"
+    description: "Тест на поиск команд сборки SDK для Windows"
+    expected_source: "Sync&Build.md"
+    expected_snippets:
+      - "./build.sh --product-name ohos-sdk"
+      - "--gn-args sdk_platform=win"
+      - "--ccache"
+    expected_commands:
+      - "./build.sh --product-name ohos-sdk --gn-args sdk_platform=win --ccache"
+    
+  - id: sync_build_004
+    query: "how to get weekly branch commit"
+    description: "Тест на поиск информации о получении конкретного weekly release"
+    expected_source: "Sync&Build.md"
+    expected_snippets:
+      - "weekly branch"
+      - "commit SHA"
+      - "gitee.com/openharmony/manifest/commits/weekly"
+      - "-b.*weekly"
+    expected_commands:
+      - "repo init -u https://gitee.com/openharmony/manifest.git -b weekly"
+    
+  - id: sync_build_005
+    query: "fast rebuild rk3568"
+    description: "Тест на поиск команды быстрой пересборки"
+    expected_source: "Sync&Build.md"
+    expected_snippets:
+      - "--fast-rebuild"
+      - "rk3568"
+      - "./build.sh --product-name rk3568"
+    expected_commands:
+      - "./build.sh --product-name rk3568 --ccache --fast-rebuild"
+
+# Метрики для оценки
+metrics:
+  retrieval_at_k: 5  # Проверять top-5 результатов
+  answer_contains_commands: true  # Ответ должен содержать команды
+  answer_contains_source: true  # Ответ должен содержать ссылку на источник
+  min_rerank_score: 0.15  # Минимальный score reranker для принятия результата
+
+# Gold chunks для автоматической проверки (опционально)
+gold_chunks:
+  sync_build_init:
+    content_snippet: "repo init -u git@gitcode.com:openharmony/manifest.git -b master"
+    source: "Sync&Build.md"
+    section: "Initialize repository and sync code"
+  
+  sync_build_sync:
+    content_snippet: "repo sync -c -j 8"
+    source: "Sync&Build.md"
+    section: "Initialize repository and sync code"
+

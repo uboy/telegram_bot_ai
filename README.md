@@ -128,6 +128,8 @@ Telegram‑бот‑помощник с поддержкой **RAG (Retrieval Au
 
 ## Настройка (локальный запуск без Docker)
 
+Подробные инструкции по настройке см. в [документации](docs/).
+
 - **1. Клонировать проект**
 
 ```bash
@@ -142,6 +144,8 @@ pip install -r requirements.txt
 ```
 
 - **3. Создать и заполнить `.env`** (используйте готовый шаблон `env.template`)
+
+Подробнее о конфигурации см. [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 
 ```bash
 # Linux / macOS
