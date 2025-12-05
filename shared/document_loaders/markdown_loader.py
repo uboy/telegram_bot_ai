@@ -12,9 +12,15 @@ class MarkdownLoader(DocumentLoader):
     
     def load(self, source: str) -> List[Dict[str, str]]:
         """Загрузить markdown файл"""
+        import os
         try:
             with open(source, 'r', encoding='utf-8') as f:
                 content = f.read()
+            
+            # Извлечь имя файла для doc_title
+            doc_title = os.path.basename(source)
+            if doc_title.endswith('.md'):
+                doc_title = doc_title[:-3]
 
             # Очистить markdown-разметку до более "плоского" текста,
             # но СОХРАНИТЬ code blocks для индексации команд
@@ -25,7 +31,7 @@ class MarkdownLoader(DocumentLoader):
                 
                 def replace_code_block(match):
                     nonlocal code_counter
-                    language = match.group(1) or ""
+                    language = (match.group(1) or "").strip()  # Разрешаем язык с пробелами, убираем пробелы
                     code_content = match.group(2)
                     code_counter += 1
                     placeholder = f"__CODE_BLOCK_{code_counter}__"
@@ -36,7 +42,8 @@ class MarkdownLoader(DocumentLoader):
                     })
                     return placeholder
                 
-                pattern = r"```(\w+)?\n(.*?)```"
+                # Улучшенный pattern: разрешает \r?\n (Windows), язык как "всё до конца строки", закрытие на отдельной строке
+                pattern = r"```([^\n\r`]*)\r?\n(.*?)\r?\n```"
                 text_with_placeholders = re.sub(pattern, replace_code_block, text, flags=re.DOTALL)
                 return text_with_placeholders, code_blocks
             
@@ -48,74 +55,130 @@ class MarkdownLoader(DocumentLoader):
                 text = re.sub(r"(\*\*|__)(.*?)\1", r"\2", text)
                 text = re.sub(r"(\*|_)(.*?)\1", r"\2", text)
                 text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
-                text = re.sub(r"^[>\-\*+]\s+", "", text, flags=re.MULTILINE)
+                # Удаляем только blockquote (>), сохраняем маркеры списков (-, *, +) для корректного определения chunk_kind
+                text = re.sub(r"^>\s+", "", text, flags=re.MULTILINE)
                 text = re.sub(r"\|", " ", text)
                 text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
                 text = re.sub(r"\s+\n", "\n", text)
                 text = re.sub(r"\n{3,}", "\n\n", text)
                 return text.strip()
 
-            # Разбиение по заголовкам в оригинальном markdown (до очистки)
+            # Разбиение по заголовкам с построением section_path (стек заголовков)
             sections: List[Dict[str, str]] = []
             current_section_lines = []
-            current_title = ""
+            header_stack = []  # Стек заголовков: (level: int, header_text: str) для построения section_path
             
             for line in content.split("\n"):
                 header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
                 if header_match:
+                    header_level = len(header_match.group(1))
+                    header_text = header_match.group(2).strip()
+                    
+                    # Сохранить предыдущую секцию ПЕРЕД обновлением стека (исправление бага)
                     if current_section_lines:
                         section_content = "\n".join(current_section_lines).strip()
                         if section_content:
+                            # Использовать текущий header_stack (до обновления) для правильного title/path
+                            prev_section_title = header_stack[-1][1] if header_stack else ""
+                            prev_section_path = " > ".join([h[1] for h in header_stack]) if header_stack else ""
+                            # Для секций без заголовков (до первого заголовка) подставляем doc_title
+                            if not prev_section_path:
+                                prev_section_path = doc_title if doc_title else "ROOT"
                             sections.append({
                                 "content": section_content,
-                                "title": current_title,
+                                "section_title": prev_section_title,  # Заголовок секции
+                                "section_path": prev_section_path,
                             })
-                    current_title = header_match.group(2).strip()
-                    current_section_lines = [line]
+                    
+                    # Обновить стек заголовков: убрать заголовки того же или более глубокого уровня
+                    # Используем level:int вместо len(header_stack[-1][0]) для ясности
+                    while header_stack and header_stack[-1][0] >= header_level:
+                        header_stack.pop()
+                    header_stack.append((header_level, header_text))
+                    
+                    # Начать новую секцию (не включаем заголовок в content)
+                    current_section_lines = []
                 else:
                     current_section_lines.append(line)
             
+            # Сохранить последнюю секцию
             if current_section_lines:
                 section_content = "\n".join(current_section_lines).strip()
                 if section_content:
+                    section_path = " > ".join([h[1] for h in header_stack]) if header_stack else ""
+                    # Для секций без заголовков (до первого заголовка) подставляем doc_title
+                    if not section_path:
+                        section_path = doc_title if doc_title else "ROOT"
                     sections.append({
                         "content": section_content,
-                        "title": current_title,
+                        "section_title": header_stack[-1][1] if header_stack else "",
+                        "section_path": section_path,
                     })
             
             if not sections:
-                sections = [{"content": content, "title": ""}]
+                sections = [{"content": content, "title": "", "section_path": ""}]
 
             # Чанкинг внутри каждой секции
             chunks: List[Dict[str, str]] = []
             for sec in sections:
                 sec_text_raw = sec.get("content") or ""
-                sec_title = sec.get("title") or ""
+                sec_title = sec.get("section_title") or ""  # Заголовок секции из metadata
+                sec_path = sec.get("section_path") or ""
                 
                 sec_text_with_placeholders, code_blocks = _extract_code_blocks(sec_text_raw)
                 sec_text_plain = _markdown_to_plain(sec_text_with_placeholders)
                 
+                # Создать словарь для сопоставления code_block с чанками
+                # Ключ: placeholder, значение: code_block с language
+                code_block_map = {cb['placeholder']: cb for cb in code_blocks}
+                
                 for code_block in code_blocks:
                     code_content = code_block['content'].strip()
-                    restored_code = f"\nCODE:\n{code_content}\n"
+                    # Используем парные маркеры для надежного определения границ кода
+                    restored_code = f"\n__CODE_BLOCK_START__\n{code_content}\n__CODE_BLOCK_END__\n"
                     sec_text_plain = sec_text_plain.replace(code_block['placeholder'], restored_code)
                 
                 sec_chunks = split_markdown_section_into_chunks(sec_text_plain)
                 for idx, part in enumerate(sec_chunks, start=1):
-                    title = sec_title or ""
-                    if len(sec_chunks) > 1:
-                        title = f"{title} (фрагмент {idx})" if title else f"Фрагмент {idx}"
+                    # title = doc_title (для поиска по документу, а не по секции)
+                    # section_title = заголовок секции (для навигации)
+                    title = doc_title
+                    section_title = sec_title or ""
                     
-                    chunk_kind = "code" if "CODE:\n" in part else "text"
+                    # Определить chunk_kind по маркерам и найти language для code чанков
+                    chunk_kind = "text"
+                    code_lang = None
+                    if "__CODE_BLOCK_START__" in part:
+                        chunk_kind = "code"
+                        # Найти соответствующий code_block: извлечь код из чанка и найти в code_blocks
+                        code_in_chunk = part.split("__CODE_BLOCK_START__")[1].split("__CODE_BLOCK_END__")[0].strip() if "__CODE_BLOCK_START__" in part else ""
+                        for cb in code_blocks:
+                            if cb['content'].strip() == code_in_chunk:
+                                code_lang = cb.get('language') or None
+                                break
+                    # Проверяем наличие списка внутри чанка (не только в начале), чтобы не пропустить списки с описанием
+                    # Включаем нумерованные списки, bullet списки и "Step 1:" / "Steps:" паттерны
+                    elif (re.search(r'(?m)^\s*\d+\.\s+', part) or 
+                          re.search(r'(?m)^\s*[-*•]\s+', part) or
+                          re.search(r'(?i)(?:^|\n)\s*(?:step\s+\d+|steps?)\s*:', part)):
+                        chunk_kind = "list"
+                    
+                    metadata = {
+                        "type": "markdown",
+                        "chunk_kind": chunk_kind,
+                        "section_title": section_title,  # Заголовок секции
+                        "section_path": sec_path,  # Полный путь через заголовки
+                        "chunk_no": idx,
+                        "doc_title": doc_title,  # Дублируем для совместимости
+                    }
+                    # Добавить code_lang для code чанков
+                    if code_lang:
+                        metadata["code_lang"] = code_lang
                     
                     chunks.append({
                         "content": part,
-                        "title": title,
-                        "metadata": {
-                            "type": "markdown",
-                            "chunk_kind": chunk_kind,
-                            "section_title": sec_title,
-                        },
+                        "title": title,  # Название документа для поиска
+                        "metadata": metadata,
                     })
 
             return chunks if chunks else [

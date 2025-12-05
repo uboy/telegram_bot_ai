@@ -2,7 +2,10 @@
 Модуль для разбиения текста на чанки с учетом структуры документа
 """
 import re
+import logging
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 
 def split_text_into_chunks(
@@ -110,22 +113,32 @@ def split_markdown_section_into_chunks(
         line_len = len(line)
         current_len = len(current_chunk)
         
-        # Проверка: является ли строка блоком кода?
-        is_code_line = line.strip().startswith("CODE:")
+        # Проверка: является ли строка началом блока кода?
+        is_code_start = "__CODE_BLOCK_START__" in line
         
         # Проверка: является ли строка началом нумерованного списка?
         is_numbered_list_item = bool(re.match(r'^\s*\d+\.\s+', line))
         
-        # Если это блок кода, собираем весь блок целиком
-        if is_code_line:
+        # Проверка: является ли строка элементом маркированного списка?
+        is_bullet_list_item = bool(re.match(r'^\s*[-*•]\s+', line))
+        
+        # Если это блок кода, собираем весь блок между маркерами
+        if is_code_start:
             code_block = line + '\n'
             i += 1
+            code_end_found = False
             while i < len(lines):
                 next_line = lines[i]
-                if not next_line.strip() or next_line.strip().startswith("CODE:"):
-                    break
                 code_block += next_line + '\n'
+                if "__CODE_BLOCK_END__" in next_line:
+                    code_end_found = True
+                    i += 1
+                    break
                 i += 1
+            
+            # Если маркер конца не найден, все равно сохраняем как код
+            if not code_end_found:
+                logger.warning("Code block end marker not found, treating until end as code")
             
             code_block_len = len(code_block)
             if current_chunk and current_len + code_block_len > max_chars:
@@ -140,6 +153,7 @@ def split_markdown_section_into_chunks(
                 else:
                     if current_chunk:
                         chunks.append(current_chunk.strip())
+                    # Для очень больших блоков кода разбиваем по строкам
                     code_lines = code_block.split('\n')
                     temp_code = ""
                     for code_line in code_lines:
@@ -153,8 +167,8 @@ def split_markdown_section_into_chunks(
             else:
                 current_chunk += code_block
         
-        # Если это нумерованный список, собираем весь список целиком
-        elif is_numbered_list_item:
+        # Если это элемент списка (нумерованный или маркированный), собираем весь список целиком
+        elif is_numbered_list_item or is_bullet_list_item:
             list_block = line + '\n'
             i += 1
             while i < len(lines):
@@ -175,7 +189,16 @@ def split_markdown_section_into_chunks(
                 if list_block_len <= max_chars * 1.2:
                     current_chunk = list_block
                 else:
-                    list_items = re.split(r'(\n\s*\d+\.\s+)', list_block)
+                    # Определить тип списка по первой строке
+                    first_line = list_block.split('\n')[0] if list_block else ""
+                    is_numbered = bool(re.match(r'^\s*\d+\.\s+', first_line))
+                    
+                    # Использовать правильный паттерн в зависимости от типа списка
+                    if is_numbered:
+                        list_items = re.split(r'(\n\s*\d+\.\s+)', list_block)
+                    else:
+                        list_items = re.split(r'(\n\s*[-*•]\s+)', list_block)
+                    
                     temp_list = ""
                     for j in range(0, len(list_items), 2):
                         item = (list_items[j] if j < len(list_items) else "") + \
@@ -192,7 +215,16 @@ def split_markdown_section_into_chunks(
                 if list_block_len <= max_chars * 1.2:
                     current_chunk = list_block
                 else:
-                    list_items = re.split(r'(\n\s*\d+\.\s+)', list_block)
+                    # Определить тип списка по первой строке
+                    first_line = list_block.split('\n')[0] if list_block else ""
+                    is_numbered = bool(re.match(r'^\s*\d+\.\s+', first_line))
+                    
+                    # Использовать правильный паттерн в зависимости от типа списка
+                    if is_numbered:
+                        list_items = re.split(r'(\n\s*\d+\.\s+)', list_block)
+                    else:
+                        list_items = re.split(r'(\n\s*[-*•]\s+)', list_block)
+                    
                     temp_list = ""
                     for j in range(0, len(list_items), 2):
                         item = (list_items[j] if j < len(list_items) else "") + \
@@ -301,23 +333,32 @@ def split_text_structurally(
         line_len = len(line)
         current_len = len(current_chunk)
         
-        # Проверка: является ли строка блоком кода?
-        is_code_line = line.strip().startswith("CODE:")
+        # Проверка: является ли строка началом блока кода?
+        is_code_start = "__CODE_BLOCK_START__" in line
         
         # Проверка: является ли строка элементом списка?
-        is_list_item = bool(re.match(r'^\s*[\d+\.\-\*\•]\s+', line))
+        is_numbered_list_item = bool(re.match(r'^\s*\d+\.\s+', line))
+        is_bullet_list_item = bool(re.match(r'^\s*[-*•]\s+', line))
+        is_list_item = is_numbered_list_item or is_bullet_list_item
         is_list_continuation = bool(re.match(r'^\s{2,}', line)) and line.strip() and not is_list_item
         
-        # Если это блок кода, собираем весь блок целиком
-        if is_code_line:
+        # Если это блок кода, собираем весь блок между маркерами
+        if is_code_start:
             code_block = line + '\n'
             i += 1
+            code_end_found = False
             while i < len(lines):
                 next_line = lines[i]
-                if not next_line.strip() or next_line.strip().startswith("CODE:"):
-                    break
                 code_block += next_line + '\n'
+                if "__CODE_BLOCK_END__" in next_line:
+                    code_end_found = True
+                    i += 1
+                    break
                 i += 1
+            
+            # Если маркер конца не найден, все равно сохраняем как код
+            if not code_end_found:
+                logger.warning("Code block end marker not found, treating until end as code")
             
             code_block_len = len(code_block)
             if current_chunk and current_len + code_block_len > max_chars:
@@ -341,7 +382,7 @@ def split_text_structurally(
                     list_block += '\n'
                     i += 1
                     break
-                if re.match(r'^\s*[\d+\.\-\*\•]\s+', next_line) or re.match(r'^\s{2,}', next_line):
+                if re.match(r'^\s*\d+\.\s+', next_line) or re.match(r'^\s*[-*•]\s+', next_line) or re.match(r'^\s{2,}', next_line):
                     list_block += next_line + '\n'
                     i += 1
                 else:
@@ -353,7 +394,16 @@ def split_text_structurally(
                 if list_block_len <= max_chars * 1.2:
                     current_chunk = list_block
                 else:
-                    list_items = re.split(r'(\n\s*[\d+\.\-\*\•]\s+)', list_block)
+                    # Определить тип списка по первой строке
+                    first_line = list_block.split('\n')[0] if list_block else ""
+                    is_numbered = bool(re.match(r'^\s*\d+\.\s+', first_line))
+                    
+                    # Использовать правильный паттерн в зависимости от типа списка
+                    if is_numbered:
+                        list_items = re.split(r'(\n\s*\d+\.\s+)', list_block)
+                    else:
+                        list_items = re.split(r'(\n\s*[-*•]\s+)', list_block)
+                    
                     temp_list = ""
                     for j in range(0, len(list_items), 2):
                         item = (list_items[j] if j < len(list_items) else "") + \
@@ -370,7 +420,16 @@ def split_text_structurally(
                 if list_block_len <= max_chars * 1.2:
                     current_chunk = list_block
                 else:
-                    list_items = re.split(r'(\n\s*[\d+\.\-\*\•]\s+)', list_block)
+                    # Определить тип списка по первой строке
+                    first_line = list_block.split('\n')[0] if list_block else ""
+                    is_numbered = bool(re.match(r'^\s*\d+\.\s+', first_line))
+                    
+                    # Использовать правильный паттерн в зависимости от типа списка
+                    if is_numbered:
+                        list_items = re.split(r'(\n\s*\d+\.\s+)', list_block)
+                    else:
+                        list_items = re.split(r'(\n\s*[-*•]\s+)', list_block)
+                    
                     temp_list = ""
                     for j in range(0, len(list_items), 2):
                         item = (list_items[j] if j < len(list_items) else "") + \

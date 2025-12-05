@@ -7,9 +7,10 @@ import logging
 import threading
 from typing import List, Dict, Optional
 from datetime import datetime
+from collections import defaultdict
 import numpy as np
 from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog, engine, get_session
-from sqlalchemy import text
+from sqlalchemy import text, or_
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,11 @@ class RAGSystem:
         
         self.model_name = model_name
         self.encoder = None
-        self.index = None
-        self.chunks = []
+        self.index = None  # Устаревший: один индекс для всех KB
+        self.chunks = []  # Устаревший: все чанки вместе
+        # Индексы по базам знаний (для раздельного поиска)
+        self.index_by_kb: Dict[int, faiss.Index] = {}
+        self.chunks_by_kb: Dict[int, List[KnowledgeChunk]] = {}
         # Сессии создаются на каждую операцию, не храним глобальную сессию
         self.reranker = None
         # Количество кандидатов для векторного поиска перед rerank (минимальный апгрейд)
@@ -320,6 +324,8 @@ class RAGSystem:
             # Пересоздать индекс при следующем поиске (он будет пересоздан автоматически)
             self.index = None
             self.chunks = []
+            self.index_by_kb.clear()
+            self.chunks_by_kb.clear()
             
         except Exception as e:
             logger.error(f"❌ Критическая ошибка при перезагрузке моделей RAG: {e}", exc_info=True)
@@ -336,35 +342,104 @@ class RAGSystem:
             logger.error(f"Ошибка создания эмбеддинга: {e}")
             return None
     
-    def _load_index(self):
-        """Загрузить индекс из базы данных"""
+    def _load_index(self, knowledge_base_id: Optional[int] = None):
+        """Загрузить индекс из базы данных (по KB или все)"""
         if not HAS_EMBEDDINGS:
             return
         
         with get_session() as session:
-            chunks = session.query(KnowledgeChunk).all()
+            if knowledge_base_id is not None:
+                chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                total_chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).count()
+            else:
+                chunks = session.query(KnowledgeChunk).all()
+                total_chunks = session.query(KnowledgeChunk).count()
+            
             if not chunks:
                 return
-            
-            self.chunks = chunks
-        embeddings = []
-        valid_chunks = []
+        
+        # Группировать чанки по knowledge_base_id и подсчитать coverage
+        chunks_by_kb = defaultdict(list)
+        chunks_with_embedding = 0
+        expected_dim = None
+        dim_mismatches = 0
         
         for chunk in chunks:
             if chunk.embedding:
                 try:
                     embedding = np.array(json.loads(chunk.embedding))
-                    embeddings.append(embedding)
-                    valid_chunks.append(chunk)
-                except:
+                    embedding_dim = embedding.shape[0] if len(embedding.shape) == 1 else embedding.shape[1]
+                    
+                    # Запомнить expected_dim при первой валидной эмбеддинге
+                    if expected_dim is None:
+                        expected_dim = embedding_dim
+                    
+                    # Пропустить эмбеддинги с другой размерностью
+                    if embedding_dim != expected_dim:
+                        dim_mismatches += 1
+                        logger.warning(
+                            f"Skipping chunk {chunk.id}: embedding dimension {embedding_dim} != expected {expected_dim}"
+                        )
+                        continue
+                    
+                    chunks_by_kb[chunk.knowledge_base_id].append((chunk, embedding))
+                    chunks_with_embedding += 1
+                except Exception as e:
+                    logger.debug(f"Failed to parse embedding for chunk {chunk.id}: {e}")
                     continue
         
-        if embeddings:
-            self.chunks = valid_chunks
-            embeddings = np.array(embeddings).astype('float32')
-            self.dimension = embeddings.shape[1]
-            self.index = faiss.IndexFlatL2(self.dimension)
-            self.index.add(embeddings)
+        # Логировать информацию о несоответствиях размерности
+        if dim_mismatches > 0:
+            logger.warning(
+                f"Skipped {dim_mismatches} chunks with dimension mismatch (expected {expected_dim})"
+            )
+        
+        # Логировать coverage для диагностики
+        if total_chunks > 0:
+            coverage_pct = (chunks_with_embedding / total_chunks) * 100
+            kb_info = f"KB {knowledge_base_id}" if knowledge_base_id is not None else "all KBs"
+            logger.info(
+                f"Index coverage for {kb_info}: {chunks_with_embedding}/{total_chunks} chunks with embeddings ({coverage_pct:.1f}%)"
+            )
+            if coverage_pct < 50:
+                logger.warning(f"Low embedding coverage ({coverage_pct:.1f}%) - many chunks will fall back to keyword search")
+        
+        # Построить индексы для каждой KB отдельно
+        for kb_id, chunk_emb_pairs in chunks_by_kb.items():
+            if not chunk_emb_pairs:
+                continue
+            
+            valid_chunks = [pair[0] for pair in chunk_emb_pairs]
+            embeddings = np.array([pair[1] for pair in chunk_emb_pairs]).astype('float32')
+            
+            # Нормализовать эмбеддинги для cosine similarity
+            faiss.normalize_L2(embeddings)
+            
+            dimension = embeddings.shape[1]
+            # Использовать IndexFlatIP (Inner Product) для cosine similarity
+            index = faiss.IndexFlatIP(dimension)
+            index.add(embeddings)
+            
+            self.index_by_kb[kb_id] = index
+            self.chunks_by_kb[kb_id] = valid_chunks
+        
+        # Для обратной совместимости: если запрошен общий индекс
+        if knowledge_base_id is None and chunks_by_kb:
+            # Объединить все чанки для старого API
+            all_chunks = []
+            all_embeddings = []
+            for kb_id, chunk_emb_pairs in chunks_by_kb.items():
+                for chunk, emb in chunk_emb_pairs:
+                    all_chunks.append(chunk)
+                    all_embeddings.append(emb)
+            
+            if all_embeddings:
+                self.chunks = all_chunks
+                all_embeddings = np.array(all_embeddings).astype('float32')
+                faiss.normalize_L2(all_embeddings)
+                self.dimension = all_embeddings.shape[1]
+                self.index = faiss.IndexFlatIP(self.dimension)
+                self.index.add(all_embeddings)
     
     def add_knowledge_base(self, name: str, description: str = "") -> KnowledgeBase:
         """Создать новую базу знаний"""
@@ -417,13 +492,13 @@ class RAGSystem:
                         session.flush()  # Получить ID
                         session.refresh(chunk)
                     
-                    # Обновить индекс после успешного commit (вне сессии)
+                    # Убрать инкрементальное обновление индекса - индекс будет пересобран по запросу
+                    # Это обеспечивает консистентность с cosine similarity и per-KB индексами
                     if embedding is not None and HAS_EMBEDDINGS:
-                        if self.index is None:
-                            self.dimension = embedding.shape[0]
-                            self.index = faiss.IndexFlatL2(self.dimension)
-                        self.index.add(embedding.reshape(1, -1).astype('float32'))
-                        self.chunks.append(chunk)
+                        self.index = None
+                        self.chunks = []
+                        self.index_by_kb.clear()
+                        self.chunks_by_kb.clear()
                     
                     return chunk
                 except Exception as e:
@@ -590,6 +665,9 @@ class RAGSystem:
             if HAS_EMBEDDINGS and chunks_with_embeddings:
                 self.index = None
                 self.chunks = []
+                # Очистить индексы по KB
+                self.index_by_kb.clear()
+                self.chunks_by_kb.clear()
                 # Индекс будет пересобран при следующем поиске через _load_index()
         
         return all_chunks
@@ -597,40 +675,87 @@ class RAGSystem:
     def search(self, query: str, knowledge_base_id: Optional[int] = None, 
                top_k: int = 5) -> List[Dict]:
         """Поиск в базе знаний (dense + keyword с возможным rerank)."""
+        import re
+        # Токенизация запроса для использования в how-to бустах
+        query_words = re.findall(r'\w+', query.lower())
+        
         # Если эмбеддинги недоступны – используем только упрощённый поиск
         if not HAS_EMBEDDINGS or not self.encoder:
             return self._simple_search(query, knowledge_base_id, top_k)
         
+        # Загрузить индекс если не загружен (исправление логической ошибки)
+        if knowledge_base_id is not None:
+            if knowledge_base_id not in self.index_by_kb:
+                self._load_index(knowledge_base_id)
+        else:
+            if not self.index_by_kb:
+                self._load_index(None)
+        
         # Векторный поиск
         query_embedding = self._get_embedding(query)
-        if query_embedding is None or self.index is None:
+        if query_embedding is None:
             return self._simple_search(query, knowledge_base_id, top_k)
         
-        # Загрузить индекс если не загружен
-        if not self.chunks:
-            self._load_index()
+        # Определить, использовать ли индекс по KB или общий
+        if knowledge_base_id is not None:
+            if knowledge_base_id not in self.index_by_kb:
+                return self._simple_search(query, knowledge_base_id, top_k)
+            index = self.index_by_kb[knowledge_base_id]
+            chunks = self.chunks_by_kb[knowledge_base_id]
+        else:
+            if self.index is None or len(self.chunks) == 0:
+                return self._simple_search(query, knowledge_base_id, top_k)
+            index = self.index
+            chunks = self.chunks
         
-        if self.index is None or len(self.chunks) == 0:
+        if len(chunks) == 0:
             return []
         
-        # Dense‑поиск: широкий пул кандидатов
+        # Нормализовать query embedding для cosine similarity
         query_embedding = query_embedding.reshape(1, -1).astype('float32')
-        candidate_k = min(self.max_candidates, len(self.chunks))
-        distances, indices = self.index.search(query_embedding, candidate_k)
+        faiss.normalize_L2(query_embedding)
+        
+        # Определить режим поиска (how-to или обычный)
+        is_howto_query = self._is_howto_query(query)
+        
+        # Dense‑поиск: широкий пул кандидатов
+        # Для how-to запросов увеличиваем candidate_k (до 300-500 для больших баз)
+        if is_howto_query:
+            candidate_k = min(max(300, self.max_candidates * 3), len(chunks), 500)
+        else:
+            candidate_k = min(self.max_candidates, len(chunks))
+        scores, indices = index.search(query_embedding, candidate_k)
         
         dense_candidates: List[Dict] = []
         for i, idx in enumerate(indices[0]):
-            if idx < len(self.chunks):
-                chunk = self.chunks[idx]
-                if knowledge_base_id is not None and chunk.knowledge_base_id != knowledge_base_id:
-                    continue
+            if idx < len(chunks):
+                chunk = chunks[idx]
+                # KB уже отфильтрован через индекс, дополнительная проверка не нужна
+                metadata = json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {}
+                
+                # Для how-to запросов даем буст code/list чанкам
+                similarity = float(scores[0][i])  # Это уже cosine similarity (inner product, может быть от -1 до 1)
+                if is_howto_query:
+                    chunk_kind = metadata.get("chunk_kind", "text")
+                    if chunk_kind in ("code", "list"):
+                        similarity *= 1.5  # Буст для code/list в how-to режиме
+                    
+                    # Буст за совпадение в section_path
+                    section_path = (metadata.get("section_path") or "").lower()
+                    if section_path and any(word in section_path for word in query_words):
+                        similarity *= 1.2
+                
+                # Для cosine similarity: distance = -similarity (сортировка по возрастанию distance = по убыванию similarity)
+                distance = -similarity
+                
                 dense_candidates.append(
                     {
                         "content": chunk.content,
-                        "metadata": json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {},
+                        "metadata": metadata,
                         "source_type": chunk.source_type,
                         "source_path": chunk.source_path,
-                        "distance": float(distances[0][i]),
+                        "distance": distance,
+                        "similarity": similarity,  # Сохраняем similarity для отладки
                         "origin": "dense",
                     }
                 )
@@ -697,12 +822,27 @@ class RAGSystem:
                 logger.warning("⚠️ Ошибка работы reranker, продолжаю без него: %s", e)
                 import traceback
                 logger.debug("Traceback reranker: %s", traceback.format_exc())
-                # fallthrough к сортировке только по расстоянию
+                # fallthrough к сортировке merged (dense + keyword)
         
-        # Если reranker недоступен — fallback: берём top_k только из dense‑кандидатов по distance
-        dense_sorted = sorted(dense_candidates, key=lambda c: float(c.get("distance", 0.0)))[: top_k]
+        # Если reranker недоступен — fallback: смешанный ранжир для how-to запросов
+        # Для how-to: приоритет code/list, затем bm25, затем distance
+        # Для обычных: сортировка по distance
+        if is_howto_query:
+            # Для how-to: is_code_or_list (code/list выше) → origin_priority (bm25 выше) → distance
+            def sort_key_howto(c):
+                metadata = c.get("metadata") or {}
+                chunk_kind = metadata.get("chunk_kind", "text")
+                is_code_or_list = 0 if chunk_kind in ("code", "list") else 1  # code/list = 0 (выше)
+                origin_priority = 0 if c.get("origin") == "bm25" else 1  # bm25 = 0 (выше), dense = 1
+                distance = float(c.get("distance", float("inf")))
+                return (is_code_or_list, origin_priority, distance)
+            merged_sorted = sorted(merged, key=sort_key_howto)[: top_k]
+        else:
+            # Для обычных запросов: только по distance
+            merged_sorted = sorted(merged, key=lambda c: float(c.get("distance", float("inf"))))[: top_k]
+        
         results = []
-        for cand in dense_sorted:
+        for cand in merged_sorted:
             results.append(
                 {
                     "content": cand.get("content", ""),
@@ -715,32 +855,156 @@ class RAGSystem:
             )
         return results
     
+    def _is_howto_query(self, query: str) -> bool:
+        """Определить, является ли запрос запросом типа 'how-to' (инструкция/процедура)."""
+        import re
+        query_lower = query.lower()
+        
+        # Ключевые слова, указывающие на how-to запрос
+        howto_keywords = [
+            'how to', 'howto', 'how do', 'how can', 'how should',
+            'initialize', 'init', 'setup', 'set up', 'install', 'configure',
+            'create', 'build', 'compile', 'sync', 'sync and build',
+            'run', 'execute', 'start', 'begin', 'get started',
+            'tutorial', 'guide', 'steps', 'procedure', 'process',
+            'command', 'example', 'demo'
+        ]
+        
+        # Проверка на наличие how-to ключевых слов
+        for keyword in howto_keywords:
+            if keyword in query_lower:
+                return True
+        
+        # Проверка на паттерны типа "как сделать", "как создать" и т.д.
+        russian_howto_patterns = [
+            r'как\s+(сделать|создать|настроить|установить|запустить|начать)',
+            r'инструкция',
+            r'руководство',
+            r'шаги',
+        ]
+        for pattern in russian_howto_patterns:
+            if re.search(pattern, query_lower):
+                return True
+        
+        return False
+    
     def _simple_search(self, query: str, knowledge_base_id: Optional[int] = None, 
                       top_k: int = 5) -> List[Dict]:
         """Упрощенный поиск по ключевым словам"""
         import re
+        import json
         # Улучшенная токенизация: разбиваем по пробелам и специальным символам
         query_lower = query.lower()
         # Разбиваем по пробелам, амперсандам, дефисам и другим разделителям
         query_words = re.findall(r'\w+', query_lower)
         
+        # Определить режим поиска
+        is_howto = self._is_howto_query(query)
+        
+        # Сильные токены для how-to запросов (команды, флаги, ключевые слова)
+        strong_tokens = ['repo', '--depth', '--reference', 'mkdir', 'cd', 'git', 'init', 'sync', 
+                        'build', 'compile', 'install', 'docker', 'npm', 'yarn', 'pip', 'apt', 'yum']
+        
         with get_session() as session:
-            chunks = session.query(KnowledgeChunk).all()
+            # Для how-to запросов с сильными токенами: предварительный SQL-фильтр
+            if is_howto:
+                # Найти сильные токены в запросе
+                found_strong_tokens = [token for token in strong_tokens if token in query_lower]
+                
+                if found_strong_tokens:
+                    # Построить SQL-фильтр: content LIKE '%token%' OR content LIKE '%token%' ...
+                    filters = []
+                    for token in found_strong_tokens:
+                        # Ищем токен как отдельное слово или как часть команды
+                        filters.append(KnowledgeChunk.content.like(f'%{token}%'))
+                    
+                    # Базовый запрос с фильтром по KB
+                    query_obj = session.query(KnowledgeChunk)
+                    if knowledge_base_id is not None:
+                        query_obj = query_obj.filter_by(knowledge_base_id=knowledge_base_id)
+                    
+                    # Применить SQL-фильтр по сильным токенам
+                    chunks = query_obj.filter(or_(*filters)).all()
+                    logger.debug(f"Pre-filtered {len(chunks)} chunks using strong tokens: {found_strong_tokens}")
+                else:
+                    # Нет сильных токенов - загружаем все (как раньше)
+                    if knowledge_base_id is not None:
+                        chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                    else:
+                        chunks = session.query(KnowledgeChunk).all()
+            else:
+                # Для обычных запросов - загружаем все (как раньше)
+                if knowledge_base_id is not None:
+                    chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                else:
+                    chunks = session.query(KnowledgeChunk).all()
         
         scored_chunks = []
         for chunk in chunks:
-            if knowledge_base_id and chunk.knowledge_base_id != knowledge_base_id:
-                continue
-            
             content_lower = chunk.content.lower()
             # Также проверяем source_path для лучшего поиска по именам файлов
             source_path_lower = (chunk.source_path or "").lower()
             
-            # Подсчет совпадений в контенте и пути к источнику
-            score = sum(1 for word in query_words if word in content_lower)
+            # Извлекаем метаданные для поиска по заголовкам
+            metadata = {}
+            try:
+                if chunk.chunk_metadata:
+                    metadata = json.loads(chunk.chunk_metadata)
+            except:
+                pass
+            
+            # Поиск в заголовке и section_title (важно для поиска по заголовкам документов)
+            title_lower = (metadata.get("title") or "").lower()
+            section_title_lower = (metadata.get("section_title") or "").lower()
+            section_path_lower = (metadata.get("section_path") or "").lower()
+            chunk_kind = metadata.get("chunk_kind", "text")
+            
+            # Подсчет совпадений в контенте
+            content_score = sum(1 for word in query_words if word in content_lower)
+            
+            # Бонус за совпадение в заголовке (очень важно)
+            title_score = sum(2 for word in query_words if word in title_lower)
+            
+            # Бонус за совпадение в section_title
+            section_score = sum(1.5 for word in query_words if word in section_title_lower)
+            
+            # Бонус за совпадение в section_path
+            section_path_score = sum(1.5 for word in query_words if word in section_path_lower)
+            
             # Бонус за совпадение в имени файла/пути
             path_score = sum(1 for word in query_words if word in source_path_lower)
-            total_score = score + path_score * 2  # Путь к файлу важнее
+            
+            # Для how-to запросов: буст для code/list чанков
+            chunk_kind_boost = 0
+            if is_howto and chunk_kind in ("code", "list"):
+                chunk_kind_boost = 3
+            
+            # Поиск командных строк в контенте (для how-to)
+            command_score = 0
+            if is_howto:
+                command_pattern = r'(^|\n)(repo|git|mkdir|cd|python|docker|npm|yarn|pip|apt|yum)\b'
+                if re.search(command_pattern, chunk.content, re.IGNORECASE):
+                    command_score = 2
+            
+            # Также проверяем точное совпадение фразы (для запросов типа "Initialize repository and sync code")
+            phrase_in_content = query_lower in content_lower
+            phrase_in_title = query_lower in title_lower
+            phrase_in_section = query_lower in section_title_lower
+            phrase_in_section_path = query_lower in section_path_lower
+            
+            total_score = (
+                content_score + 
+                title_score * 3 +  # Заголовок очень важен
+                section_score * 2 +
+                section_path_score * 2.5 +  # section_path важен для навигации
+                path_score * 2 +
+                chunk_kind_boost +
+                command_score +
+                (10 if phrase_in_title else 0) +  # Большой бонус за точное совпадение в заголовке
+                (8 if phrase_in_section_path else 0) +
+                (5 if phrase_in_section else 0) +
+                (3 if phrase_in_content else 0)
+            )
             
             if total_score > 0:
                 scored_chunks.append((total_score, chunk))
@@ -785,6 +1049,8 @@ class RAGSystem:
             # Пересоздать индекс (вне сессии)
             self.chunks = []
             self.index = None
+            self.index_by_kb.clear()
+            self.chunks_by_kb.clear()
             self._load_index()
             return True
     
@@ -806,6 +1072,8 @@ class RAGSystem:
             # Пересоздать индекс (вне сессии)
             self.chunks = []
             self.index = None
+            self.index_by_kb.clear()
+            self.chunks_by_kb.clear()
             self._load_index()
             return True
 
@@ -844,7 +1112,13 @@ class RAGSystem:
                 # Полностью пересоздать индекс, чтобы он соответствовал текущему состоянию БД
                 self.chunks = []
                 self.index = None
-                self._load_index()
+                # Удалить индекс для этой KB
+                if knowledge_base_id in self.index_by_kb:
+                    del self.index_by_kb[knowledge_base_id]
+                if knowledge_base_id in self.chunks_by_kb:
+                    del self.chunks_by_kb[knowledge_base_id]
+                # Пересоздать индекс для этой KB
+                self._load_index(knowledge_base_id)
 
             return deleted
 
@@ -882,7 +1156,13 @@ class RAGSystem:
                 # Полностью пересоздать индекс, чтобы он соответствовал текущему состоянию БД
                 self.chunks = []
                 self.index = None
-                self._load_index()
+                # Удалить индекс для этой KB
+                if knowledge_base_id in self.index_by_kb:
+                    del self.index_by_kb[knowledge_base_id]
+                if knowledge_base_id in self.chunks_by_kb:
+                    del self.chunks_by_kb[knowledge_base_id]
+                # Пересоздать индекс для этой KB
+                self._load_index(knowledge_base_id)
 
             return deleted
 

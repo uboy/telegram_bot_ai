@@ -235,13 +235,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             len(backend_sources),
         )
 
-        from shared.utils import format_markdown_to_html
+        from shared.utils import format_for_telegram_answer
         from html import escape
         from urllib.parse import unquote
 
         if backend_answer:
-            # Формируем HTML-ответ на основе текста от backend
-            ai_answer_html = format_markdown_to_html(backend_answer)
+            # Формируем HTML-ответ на основе markdown от backend
+            # format_for_telegram_answer() применяет clean_citations, format_commands_in_text и format_markdown_to_html
+            try:
+                from shared.config import RAG_ENABLE_CITATIONS
+                enable_citations = RAG_ENABLE_CITATIONS
+            except ImportError:
+                enable_citations = True
+            ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
 
             # Формируем список источников из backend_sources
             sources_html_list: list[str] = []
@@ -305,7 +311,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ai_answer = ai_manager.query(
                 prompt, provider_name=user.preferred_provider, model=model
             )
-            ai_answer_html = format_markdown_to_html(ai_answer)
+            # Используем format_for_telegram_answer() для единообразного форматирования
+            ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
             answer_html = (
                 f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
                 f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
@@ -342,9 +349,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             model = user.preferred_model if user.preferred_model else None
             ai_answer = ai_manager.query(prompt, provider_name=user.preferred_provider, model=model)
             
-            # Форматировать ответ с HTML
-            from shared.utils import format_markdown_to_html
-            ai_answer_html = format_markdown_to_html(ai_answer)
+            # Форматировать ответ с HTML (используем единый пайплайн форматирования)
+            from shared.utils import format_for_telegram_answer
+            ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
             
             # Добавить ссылки в HTML формате
             sources_html_parts = []
@@ -379,9 +386,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         model = user.preferred_model if user.preferred_model else None
         ai_answer = ai_manager.query(prompt, provider_name=user.preferred_provider, model=model)
         
-        # Форматируем ответ с HTML для лучшего форматирования
-        from shared.utils import format_markdown_to_html
-        ai_answer_html = format_markdown_to_html(ai_answer)
+        # Форматируем ответ с HTML для лучшего форматирования (используем единый пайплайн)
+        from shared.utils import format_for_telegram_answer
+        ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
         answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
         
         menu = main_menu(is_admin=(user.role == 'admin'))
@@ -730,9 +737,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model=model,
             )
             
-            # Форматируем ответ с HTML для лучшего форматирования
-            from shared.utils import format_markdown_to_html
-            ai_answer_html = format_markdown_to_html(ai_answer)
+            # Форматируем ответ с HTML для лучшего форматирования (используем единый пайплайн)
+            from shared.utils import format_for_telegram_answer
+            ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
             
             # Формируем HTML список источников с ссылками
             # Группируем по уникальным URL для устранения дубликатов
@@ -1026,8 +1033,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model=image_model,
             )
             menu = main_menu(is_admin=(user.role == 'admin'))
-            answer = format_text_safe(f"🖼️ Описание изображения:\n\n{description}")
-            await update.message.reply_text(answer, reply_markup=menu, parse_mode=None)
+            # Форматируем описание изображения с HTML
+            from shared.utils import format_for_telegram_answer
+            description_html = format_for_telegram_answer(description, enable_citations=False)
+            answer = f"🖼️ <b>Описание изображения:</b>\n\n{description_html}"
+            try:
+                await update.message.reply_text(answer, reply_markup=menu, parse_mode='HTML')
+            except Exception as e:
+                logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
+                answer_plain = format_text_safe(f"🖼️ Описание изображения:\n\n{description}")
+                await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка обработки изображения: {str(e)}")
     finally:

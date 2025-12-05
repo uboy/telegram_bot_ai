@@ -169,13 +169,9 @@ def _restore_wiki_url_from_path(file_path: str, wiki_root: str) -> str:
         
         # Собрать URL
         if encoded_parts:
+            # Всегда используем полный путь с каталогами (подразделами вики)
+            # Каталоги важны для структуры вики, поэтому сохраняем весь путь
             wiki_path = '/'.join(encoded_parts)
-            
-            # Для Gitee: если последняя часть совпадает с предпоследней (например, Category/Category),
-            # это означает, что это индексная страница категории
-            # В этом случае используем только путь до последней части
-            if len(encoded_parts) >= 2 and encoded_parts[-1] == encoded_parts[-2]:
-                wiki_path = '/'.join(encoded_parts[:-1])
             
             result_url = f"{wiki_root}/{wiki_path}"
             logger.debug(f"[wiki-git] Восстановлен URL: {original_path} -> {result_url}")

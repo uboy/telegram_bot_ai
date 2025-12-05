@@ -21,10 +21,16 @@ def detect_language(text: str) -> str:
 
 
 def clean_text_for_telegram(text: str) -> str:
-    """Очистить текст от markdown символов для безопасной отправки в Telegram"""
+    """Очистить текст от markdown символов для безопасной отправки в Telegram
+    
+    ВНИМАНИЕ: Эта функция удаляет markdown символы и НЕ должна использоваться
+    для ответов RAG, которые содержат код. Используйте format_for_telegram_answer()
+    для форматирования ответов с кодом.
+    """
     # Удалить markdown символы, которые могут вызвать проблемы
     # Заменяем на обычный текст
-    text = text.replace('*', '').replace('_', '').replace('`', '').replace('~', '')
+    # НЕ удаляем backticks - они нужны для кода
+    text = text.replace('*', '').replace('_', '').replace('~', '')
     text = text.replace('[', '').replace(']', '').replace('(', '').replace(')', '')
     # Удаляем множественные пробелы
     text = re.sub(r'\s+', ' ', text)
@@ -43,6 +49,222 @@ def format_text_safe(text: str, max_length: int = 4096) -> str:
     return text
 
 
+def format_commands_in_text(text: str) -> str:
+    """Автоматически форматировать команды в тексте как inline код или блоки кода"""
+    import re
+    
+    if not text:
+        return ""
+    
+    # Сначала защищаем уже отформатированные блоки кода
+    code_blocks = []
+    code_block_pattern = r'```([a-zA-Z0-9+_-]*)\s*\n(.*?)```'
+    
+    def replace_code_block(match):
+        idx = len(code_blocks)
+        lang = match.group(1).strip() if match.group(1) else ''
+        code = match.group(2)
+        code_blocks.append((lang, code))
+        return f'__CODE_BLOCK_{idx}__'
+    
+    text = re.sub(code_block_pattern, replace_code_block, text, flags=re.DOTALL)
+    
+    # Обрабатываем случаи, когда блок кода без языка и без переноса строки
+    simple_code_pattern = r'```([^`\n]+?)```'
+    def replace_simple_code(match):
+        idx = len(code_blocks)
+        code = match.group(1)
+        code_blocks.append(('', code))
+        return f'__CODE_BLOCK_{idx}__'
+    
+    text = re.sub(simple_code_pattern, replace_simple_code, text)
+    
+    # Защищаем inline код
+    inline_code_blocks = []
+    inline_code_pattern = r'`([^`]+)`'
+    
+    def replace_inline_code(match):
+        idx = len(inline_code_blocks)
+        code = match.group(1)
+        inline_code_blocks.append(code)
+        return f'__INLINE_CODE_{idx}__'
+    
+    text = re.sub(inline_code_pattern, replace_inline_code, text)
+    
+    # Команды, которые должны быть обнаружены
+    command_prefixes = [
+        r'repo\s+', r'git\s+', r'mkdir\s+', r'cd\s+', r'docker\s+', r'kubectl\s+',
+        r'python\s+', r'pip\s+', r'make\s+', r'cmake\s+', r'ninja\s+', r'sudo\s+'
+    ]
+    
+    def is_command_line(line: str) -> bool:
+        """Проверить, является ли строка командной строкой"""
+        line_stripped = line.strip()
+        if not line_stripped:
+            return False
+        
+        # Проверяем начало строки на команды
+        for prefix_pattern in command_prefixes:
+            if re.match(prefix_pattern, line_stripped, re.IGNORECASE):
+                return True
+        
+        # Проверяем наличие флагов (--)
+        if '--' in line_stripped:
+            return True
+        
+        # Проверяем наличие путей типа /data/... или ~/proj и команды рядом
+        if re.search(r'[/~][\w/]+', line_stripped):
+            # Если есть путь и похоже на команду (содержит пробелы и не похоже на обычный текст)
+            if re.search(r'\s+', line_stripped) and not re.match(r'^[А-Яа-яЁё]', line_stripped):
+                return True
+        
+        return False
+    
+    # Разбиваем текст на строки и ищем последовательности командных строк
+    lines = text.split('\n')
+    result_lines = []
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i]
+        
+        # Если это командная строка, собираем последовательность команд
+        if is_command_line(line):
+            command_lines = [line]
+            i += 1
+            
+            # Собираем следующие командные строки подряд
+            while i < len(lines) and is_command_line(lines[i]):
+                command_lines.append(lines[i])
+                i += 1
+            
+            # Если 2+ командных строки подряд - оборачиваем в блок кода
+            if len(command_lines) >= 2:
+                commands_text = '\n'.join(command_lines)
+                result_lines.append(f'```bash\n{commands_text}\n```')
+            else:
+                # Одна командная строка
+                cmd = command_lines[0].strip()
+                # Если короткая (до 60 символов) - inline код, иначе блок
+                if len(cmd) <= 60:
+                    result_lines.append(f'`{cmd}`')
+                else:
+                    result_lines.append(f'```bash\n{cmd}\n```')
+        else:
+            result_lines.append(line)
+            i += 1
+    
+    text = '\n'.join(result_lines)
+    
+    # Восстанавливаем inline код
+    for idx, code in enumerate(inline_code_blocks):
+        text = text.replace(f'__INLINE_CODE_{idx}__', f'`{code}`')
+    
+    # Восстанавливаем блоки кода
+    for idx, (lang, code) in enumerate(code_blocks):
+        if lang:
+            text = text.replace(f'__CODE_BLOCK_{idx}__', f'```{lang}\n{code}```')
+        else:
+            text = text.replace(f'__CODE_BLOCK_{idx}__', f'```\n{code}```')
+    
+    return text
+
+
+def clean_citations(text: str) -> str:
+    """Очистить ответ от некорректных тегов citations"""
+    import re
+    
+    if not text:
+        return ""
+    
+    # Сначала обрабатываем блоки кода, чтобы не трогать их содержимое
+    code_blocks = []
+    # Улучшенный паттерн: ищем ```lang или ```, затем содержимое до закрывающего ```
+    # Используем более точный паттерн для правильной обработки
+    code_block_pattern = r'```([a-zA-Z0-9+_-]*)\s*\n(.*?)```'
+    
+    def replace_code_block(match):
+        idx = len(code_blocks)
+        lang = match.group(1).strip() if match.group(1) else ''
+        code = match.group(2)
+        # Убираем citations из кода сразу при извлечении
+        code_clean = re.sub(r'\[source_id\][^\]]+\]', '', code)
+        code_clean = re.sub(r'\[/source_id\]', '', code_clean)
+        code_blocks.append((lang, code_clean))
+        return f'__CODE_BLOCK_{idx}__'
+    
+    # Заменяем блоки кода на плейсхолдеры (нежадный поиск)
+    text = re.sub(code_block_pattern, replace_code_block, text, flags=re.DOTALL)
+    
+    # Обрабатываем случаи, когда блок кода без языка и без переноса строки
+    # Паттерн: ```text``` (без языка и переноса)
+    simple_code_pattern = r'```([^`\n]+?)```'
+    def replace_simple_code(match):
+        idx = len(code_blocks)
+        code = match.group(1)
+        code_clean = re.sub(r'\[source_id\][^\]]+\]', '', code)
+        code_clean = re.sub(r'\[/source_id\]', '', code_clean)
+        code_blocks.append(('', code_clean))
+        return f'__CODE_BLOCK_{idx}__'
+    
+    text = re.sub(simple_code_pattern, replace_simple_code, text)
+    
+    # Исправляем случаи с неправильным форматом типа [/source_id]Text</source_id>
+    # Заменяем на правильный формат [source_id]Text
+    text = re.sub(r'\[/source_id\]([^<\[]+?)</source_id>', r'[\1]', text)
+    
+    # Удаляем закрывающие теги [/source_id] - они не нужны
+    text = re.sub(r'\[/source_id\]', '', text)
+    
+    # Удаляем дублирующиеся [source_id] теги подряд
+    text = re.sub(r'\[source_id\]([^\]]+)\s*\[source_id\]', r'[source_id]\1', text)
+    
+    # Удаляем пустые citations [source_id] с пробелами
+    text = re.sub(r'\[source_id\]\s+\[source_id\]', '[source_id]', text)
+    
+    # Исправляем случаи, когда citation находится сразу после закрывающего ``` без пробела
+    text = re.sub(r'```\s*\[source_id\]', '```\n\n[source_id]', text)
+    
+    # Убираем citations, которые находятся в начале строки без текста перед ними
+    # (кроме случаев, когда это начало нового пункта списка)
+    text = re.sub(r'^\s*\[source_id\]([^\]]+)\]\s*$', '', text, flags=re.MULTILINE)
+    
+    # Убираем лишние пробелы вокруг citations
+    text = re.sub(r'\s+\[source_id\]', ' [source_id]', text)
+    text = re.sub(r'\[source_id\]\s+', '[source_id]', text)
+    
+    # Исправляем случаи, когда citation находится в неправильном месте (например, внутри строки кода)
+    # Если [source_id] находится сразу после открывающего ```, перемещаем его после закрывающего
+    text = re.sub(r'```([a-z]*)\n?\s*\[source_id\]([^\]]+)\]([^`]*?)```', r'```\1\n\3``` [\2]', text, flags=re.DOTALL)
+    
+    # Восстанавливаем блоки кода
+    for idx, (lang, code) in enumerate(code_blocks):
+        # Код уже очищен от citations при извлечении
+        # Формируем правильный блок кода
+        if lang:
+            text = text.replace(f'__CODE_BLOCK_{idx}__', f'```{lang}\n{code}```')
+        else:
+            # Для блоков без языка проверяем, нужен ли перенос строки
+            if code and not code.startswith('\n'):
+                text = text.replace(f'__CODE_BLOCK_{idx}__', f'```\n{code}```')
+            else:
+                text = text.replace(f'__CODE_BLOCK_{idx}__', f'```{code}```')
+    
+    # Исправляем незакрытые блоки кода (если есть ``` без закрывающего)
+    # Просто закрываем в конце, если нужно
+    open_count = text.count('```')
+    if open_count % 2 != 0:
+        # Есть незакрытый блок кода - просто добавляем закрывающий в конце
+        text = text + '\n```'
+    
+    # Финальная очистка: убираем множественные пробелы и переносы строк
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r' \n', '\n', text)
+    
+    return text.strip()
+
+
 def format_markdown_to_html(text: str) -> str:
     """Конвертировать markdown-подобные конструкции в HTML для Telegram (безопасно)"""
     from html import escape
@@ -53,15 +275,28 @@ def format_markdown_to_html(text: str) -> str:
     
     # Сначала обрабатываем блоки кода (чтобы не экранировать их содержимое)
     code_blocks = []
-    code_block_pattern = r'```([^`]+?)```'
+    # Паттерн для блоков кода с языком: ```lang\ncode\n``` или ```lang\ncode``` или ```code\n```
+    code_block_pattern = r'```([a-zA-Z0-9+_-]*)\s*\n(.*?)```'
     
     def replace_code_block(match):
         idx = len(code_blocks)
-        code_blocks.append(match.group(1))
+        lang = match.group(1).strip() if match.group(1) else ''
+        code = match.group(2)
+        code_blocks.append((lang, code))
         return f'__CODE_BLOCK_{idx}__'
     
     # Заменяем блоки кода на плейсхолдеры
     text = re.sub(code_block_pattern, replace_code_block, text, flags=re.DOTALL)
+    
+    # Обрабатываем случаи, когда блок кода без языка и без переноса строки: ```text```
+    simple_code_pattern = r'```([^`\n]+?)```'
+    def replace_simple_code(match):
+        idx = len(code_blocks)
+        code = match.group(1)
+        code_blocks.append(('', code))
+        return f'__CODE_BLOCK_{idx}__'
+    
+    text = re.sub(simple_code_pattern, replace_simple_code, text)
     
     # Обрабатываем inline код перед экранированием (чтобы не экранировать содержимое кода)
     inline_code_blocks = []
@@ -83,9 +318,10 @@ def format_markdown_to_html(text: str) -> str:
         text = text.replace(f'__INLINE_CODE_{idx}__', f'<code>{code_escaped}</code>')
     
     # Восстанавливаем блоки кода (содержимое уже экранировано)
-    for idx, code in enumerate(code_blocks):
+    for idx, (lang, code) in enumerate(code_blocks):
         code_escaped = escape(code)
-        text = text.replace(f'__CODE_BLOCK_{idx}__', f'<pre>{code_escaped}</pre>')
+        # Используем <pre><code>...</code></pre> для блоков кода (Telegram HTML формат)
+        text = text.replace(f'__CODE_BLOCK_{idx}__', f'<pre><code>{code_escaped}</code></pre>')
     
     # Обрабатываем заголовки (после escape, чтобы не экранировать дважды)
     # Заголовки ### -> <b> (с новой строки)
@@ -116,6 +352,35 @@ def format_markdown_to_html(text: str) -> str:
     return text.strip()
 
 
+def format_for_telegram_answer(text: str, enable_citations: bool = True) -> str:
+    """
+    Единый пайплайн форматирования ответа для отправки в Telegram.
+    
+    Порядок обработки:
+    1. clean_citations() - очистка citations (не трогает содержимое code blocks)
+    2. format_commands_in_text() - автоматическое форматирование командных строк
+    3. format_markdown_to_html() - конвертация markdown в HTML
+    
+    Возвращает HTML-текст, готовый для отправки с parse_mode="HTML".
+    
+    ВАЖНО: После этого НЕ используйте clean_text_for_telegram() на результате!
+    """
+    if not text:
+        return ""
+    
+    # Шаг 1: Очистка citations (защищает содержимое code blocks)
+    if enable_citations:
+        text = clean_citations(text)
+    
+    # Шаг 2: Автоматическое форматирование командных строк
+    text = format_commands_in_text(text)
+    
+    # Шаг 3: Конвертация markdown в HTML
+    html = format_markdown_to_html(text)
+    
+    return html
+
+
 def create_prompt_with_language(query: str, context: Optional[str] = None, task: str = "answer", enable_citations: bool = True) -> str:
     """Создать промпт с учетом языка запроса и поддержкой inline citations"""
     language = detect_language(query)
@@ -134,8 +399,10 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
                 if enable_citations:
                     citations_instruction = """
 - Используй inline citations в формате [source_id] ТОЛЬКО когда в контексте явно указан тег <source_id>
+- НЕ используй закрывающие теги [/source_id] - используй только [source_id] в начале citation
 - Не используй citations, если тег <source_id> отсутствует в контексте
-- Citations должны быть краткими и напрямую связаны с предоставленной информацией"""
+- Citations должны быть краткими и напрямую связаны с предоставленной информацией
+- НЕ размещай citations внутри блоков кода (```...```) - размещай их после блока кода"""
                 
                 prompt = f"""### Task:
 
@@ -151,11 +418,20 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
 - Если ты не знаешь ответа, четко скажи об этом.
 - Отвечай на том же языке, что и запрос пользователя.
 - Если контекст нечитаемый или низкого качества, сообщи пользователю об этом.
-- **ВАЖНО: Если ответа нет в предоставленном контексте, четко скажи пользователю, что в базе знаний нет информации по этому вопросу. НЕ придумывай ответы, которых нет в контексте.**
+- **КРИТИЧЕСКИ ВАЖНО: Используй ТОЛЬКО информацию, которая явно присутствует в предоставленном контексте.**
+- **НЕ придумывай команды, URL, пути к файлам или другую информацию, которой нет в контексте.**
+- **Если в контексте нет конкретной команды или URL, НЕ выдумывай их - скажи, что этой информации нет в базе знаний.**
+- **Если ответа нет в предоставленном контексте, четко скажи пользователю, что в базе знаний нет информации по этому вопросу.**
 - **Включай inline citations используя [source_id] только когда тег <source_id> явно указан в контексте.**
+- **НЕ используй закрывающие теги [/source_id] - используй только [source_id]**
 - Не используй citations, если тег <source_id> отсутствует в контексте.
 - Не используй XML теги в ответе.
 - Убедись, что citations кратки и напрямую связаны с предоставленной информацией.
+- **НЕ размещай citations внутри блоков кода - размещай их после закрывающего ```**
+- **При цитировании команд или URL используй ТОЛЬКО те, которые точно указаны в контексте.**
+- **Форматируй все команды в блоки кода: ```bash\nкоманда\n``` или как inline код: `команда`**
+- **Если в контексте указана команда, обязательно форматируй её как код.**
+- **Если информация неполная или отсутствует, НЕ выдумывай недостающие части - скажи, что информации нет.**
 - **Приоритет: сначала дай наиболее релевантный и полный ответ, затем кратко упомяни другие найденные темы.**
 
 ### Format ответа:
@@ -166,13 +442,36 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
 **Дополнительно найдено:**
 • [Краткое упоминание других релевантных тем] [source_id]
 
+### Важные правила форматирования:
+
+- **Все команды должны быть в блоках кода**: ```bash\nкоманда\n``` или как inline код: `команда`
+- **Если команда длинная или многострочная, используй блок кода с языком (bash, sh, и т.д.)**
+- **Если команда короткая (одна строка), используй inline код: `команда`**
+- **НЕ повторяй одну и ту же информацию дважды в одном пункте**
+- **Если информация неполная (например, есть только для Windows, но нет для Mac), НЕ выдумывай недостающую информацию - явно укажи, что информации нет**
+- **НЕ создавай пункты типа "Run X for Y: X" - это бессмысленное повторение. Если информации нет, просто скажи об этом.**
+- **Если в контексте указано только название команды без деталей, НЕ выдумывай детали - просто упомяни название команды.**
+
 ### Example:
 
 **Основной ответ:**
+Для синхронизации репозитория выполните:
 
+```bash
+git clone https://example.com/repo.git
+cd repo
+git pull
+```
+
+Для сборки проекта:
+```bash
+./build.sh --product-name rk3568
+```
+
+[source_id]sync_build_guide]
 
 **Дополнительно найдено:**
-
+• Информация о настройке окружения [source_id]env_setup]
 
 Если <source_id> отсутствует, ответ должен пропустить citation.
 
@@ -220,8 +519,10 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
                 if enable_citations:
                     citations_instruction = """
 - Use inline citations in the format [source_id] **only when the <source_id> tag is explicitly provided** in the context.
+- **DO NOT use closing tags [/source_id] - use only [source_id] at the start of citation**
 - Do not cite if the <source_id> tag is not provided in the context.
-- Ensure citations are concise and directly related to the information provided."""
+- Ensure citations are concise and directly related to the information provided.
+- **DO NOT place citations inside code blocks (```...```) - place them after the code block"""
                 
                 prompt = f"""### Task:
 
@@ -237,11 +538,22 @@ Respond to the user query using the provided context. Structure your response as
 - If you don't know the answer, clearly state that.
 - Respond in the same language as the user's query.
 - If the context is unreadable or of poor quality, inform the user about this.
-- **IMPORTANT: If the answer isn't present in the provided context, clearly tell the user that there is no information in the knowledge base about this question. DO NOT make up answers that are not in the context.**
+- **CRITICALLY IMPORTANT: Use ONLY information that is explicitly present in the provided context.**
+- **DO NOT make up commands, URLs, file paths, or any other information that is not in the context.**
+- **If a specific command or URL is not in the context, DO NOT invent it - tell the user that this information is not in the knowledge base.**
+- **If the answer isn't present in the provided context, clearly tell the user that there is no information in the knowledge base about this question.**
 - **Only include inline citations using [source_id] when a <source_id> tag is explicitly provided in the context.**
+- **DO NOT use closing tags [/source_id] - use only [source_id]**
 - Do not cite if the <source_id> tag is not provided in the context.
 - Do not use XML tags in your response.
 - Ensure citations are concise and directly related to the information provided.
+- **DO NOT place citations inside code blocks - place them after the closing ```**
+- **When quoting commands or URLs, use ONLY those that are exactly specified in the context.**
+- **Format all commands as code blocks: ```bash\ncommand\n``` or as inline code: `command`**
+- **If a command is mentioned in the context, always format it as code.**
+- **If information is incomplete or missing, DO NOT make up missing parts - say that the information is not available.**
+- **DO NOT repeat the same information twice in one point (e.g., "Run X for Y: X" is meaningless).**
+- **If the context only mentions a command name without details, DO NOT make up details - just mention the command name.**
 - **Priority: first give the most relevant and complete answer, then briefly mention other topics found.**
 
 ### Response Format:
@@ -252,12 +564,31 @@ Respond to the user query using the provided context. Structure your response as
 **Additionally Found:**
 • [Brief mention of other relevant topics] [source_id]
 
+### Important formatting rules:
+
+- **All commands must be in code blocks**: ```bash\ncommand\n``` or as inline code: `command`
+- **If a command is long or multi-line, use a code block with language (bash, sh, etc.)**
+- **If a command is short (single line), use inline code: `command`**
+- **DO NOT repeat the same information twice in one point**
+- **If information is incomplete (e.g., only for Windows but not for Mac), DO NOT make up missing information - explicitly state that the information is not available**
+
 ### Example:
 
 **Main Answer:**
-To sync and build the master version of O HoS, use the following commands:
-1. Clone repository: `git clone https://...` [sync_build_guide]
-2. Build: `cmake .. && make` [sync_build_guide]
+To sync the repository, run:
+
+```bash
+git clone https://example.com/repo.git
+cd repo
+git pull
+```
+
+To build the project:
+```bash
+./build.sh --product-name rk3568
+```
+
+[source_id]sync_build_guide]
 
 **Additionally Found:**
 • Environment setup information [environment_setup]
