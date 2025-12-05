@@ -1,6 +1,8 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from datetime import datetime, timezone
+from contextlib import contextmanager
+from typing import Generator
 import os
 
 from shared.logging_config import logger
@@ -138,8 +140,73 @@ if '@' in safe_url and '://' in safe_url:
         pass
 logger.info(f"🔗 URL базы данных: {safe_url}")
 
-engine = create_engine(db_url, echo=False)
-Session = sessionmaker(bind=engine)
+# Настройки для SQLite: WAL режим и таймауты для предотвращения блокировок
+connect_args = {}
+if 'sqlite' in db_url:
+    # Включить WAL (Write-Ahead Logging) режим для лучшей производительности и параллелизма
+    connect_args = {
+        'check_same_thread': False,  # Разрешить использование из разных потоков
+        'timeout': 60,  # Таймаут ожидания блокировки на уровне sqlite3 (60 секунд)
+    }
+
+engine = create_engine(
+    db_url, 
+    echo=False,
+    connect_args=connect_args,
+    pool_pre_ping=True,  # Проверять соединения перед использованием
+    pool_recycle=3600,  # Переиспользовать соединения каждый час
+)
+
+# Включить WAL режим для SQLite после создания engine
+if 'sqlite' in db_url:
+    from sqlalchemy import event
+    def _set_sqlite_pragma(dbapi_conn, connection_record):
+        # Включить WAL режим (Write-Ahead Logging) для лучшего параллелизма
+        cursor = dbapi_conn.cursor()
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA synchronous=NORMAL')  # Баланс между производительностью и надежностью
+        cursor.execute('PRAGMA busy_timeout=60000')  # 60 секунд таймаут (60000 мс) - должен совпадать с timeout
+        cursor.execute('PRAGMA wal_autocheckpoint=1000')  # Автоматический checkpoint каждые 1000 страниц
+        # Временно для диагностики: принудительный checkpoint
+        # cursor.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        cursor.close()
+    
+    event.listen(engine, "connect", _set_sqlite_pragma)
+    
+    # Также проверить и включить WAL при первом подключении
+    try:
+        with engine.connect() as conn:
+            result = conn.execute("PRAGMA journal_mode").fetchone()
+            if result and result[0].upper() != 'WAL':
+                logger.warning(f"SQLite WAL режим не включен, текущий режим: {result[0]}")
+            else:
+                logger.info("✅ SQLite WAL режим включен")
+    except Exception as e:
+        logger.warning(f"Не удалось проверить WAL режим: {e}")
+
+Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@contextmanager
+def get_session() -> Generator[Session, None, None]:
+    """Контекстный менеджер для создания и закрытия сессии БД
+    
+    Использование:
+        with get_session() as session:
+            # работа с session
+            session.add(...)
+            # commit выполнится автоматически при выходе из with
+    """
+    session = Session()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
 
 def migrate_database():
     """Автоматическая миграция базы данных"""

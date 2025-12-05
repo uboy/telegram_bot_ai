@@ -4,12 +4,17 @@ RAG система для хранения и поиска знаний
 import os
 import json
 import logging
+import threading
 from typing import List, Dict, Optional
 from datetime import datetime
 import numpy as np
-from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog
+from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog, engine, get_session
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
+# Глобальный lock для всех операций записи в БД (SQLite не любит конкурирующие writers)
+_db_write_lock = threading.Lock()
 
 HAS_EMBEDDINGS = False
 HAS_RERANKER = False
@@ -45,7 +50,7 @@ class RAGSystem:
         self.encoder = None
         self.index = None
         self.chunks = []
-        self.session = Session()
+        # Сессии создаются на каждую операцию, не храним глобальную сессию
         self.reranker = None
         # Количество кандидатов для векторного поиска перед rerank (минимальный апгрейд)
         # Увеличиваем до 100 для лучшей релевантности при больших базах знаний
@@ -336,11 +341,12 @@ class RAGSystem:
         if not HAS_EMBEDDINGS:
             return
         
-        chunks = self.session.query(KnowledgeChunk).all()
-        if not chunks:
-            return
-        
-        self.chunks = chunks
+        with get_session() as session:
+            chunks = session.query(KnowledgeChunk).all()
+            if not chunks:
+                return
+            
+            self.chunks = chunks
         embeddings = []
         valid_chunks = []
         
@@ -362,48 +368,231 @@ class RAGSystem:
     
     def add_knowledge_base(self, name: str, description: str = "") -> KnowledgeBase:
         """Создать новую базу знаний"""
-        kb = KnowledgeBase(name=name, description=description)
-        self.session.add(kb)
-        self.session.commit()
-        return kb
+        with _db_write_lock:
+            with get_session() as session:
+                kb = KnowledgeBase(name=name, description=description)
+                session.add(kb)
+                session.flush()  # Получить ID
+                session.refresh(kb)
+                return kb
     
     def get_knowledge_base(self, name_or_id) -> Optional[KnowledgeBase]:
         """Получить базу знаний по имени или ID"""
-        if isinstance(name_or_id, int):
-            return self.session.query(KnowledgeBase).filter_by(id=name_or_id).first()
-        return self.session.query(KnowledgeBase).filter_by(name=name_or_id).first()
+        with get_session() as session:
+            if isinstance(name_or_id, int):
+                return session.query(KnowledgeBase).filter_by(id=name_or_id).first()
+            return session.query(KnowledgeBase).filter_by(name=name_or_id).first()
     
     def list_knowledge_bases(self) -> List[KnowledgeBase]:
         """Список всех баз знаний"""
-        return self.session.query(KnowledgeBase).all()
+        with get_session() as session:
+            return session.query(KnowledgeBase).all()
     
     def add_chunk(self, knowledge_base_id: int, content: str, 
                   source_type: str = "text", source_path: str = "",
                   metadata: Optional[Dict] = None) -> KnowledgeChunk:
-        """Добавить фрагмент знания"""
+        """Добавить фрагмент знания с retry логикой для обработки блокировок БД"""
+        import time
+        import random
+        max_retries = 10  # Увеличено для длительных блокировок
+        base_delay = 0.2  # Увеличено с 0.05 до 0.2 секунды
+        
+        # Подготовить embedding заранее, чтобы минимизировать время транзакции
         embedding = self._get_embedding(content)
         embedding_json = json.dumps(embedding.tolist()) if embedding is not None else None
         
-        chunk = KnowledgeChunk(
-            knowledge_base_id=knowledge_base_id,
-            content=content,
-            chunk_metadata=json.dumps(metadata or {}),
-            embedding=embedding_json,
-            source_type=source_type,
-            source_path=source_path
-        )
-        self.session.add(chunk)
-        self.session.commit()
+        with _db_write_lock:
+            for attempt in range(max_retries):
+                try:
+                    with get_session() as session:
+                        chunk = KnowledgeChunk(
+                            knowledge_base_id=knowledge_base_id,
+                            content=content,
+                            chunk_metadata=json.dumps(metadata or {}),
+                            embedding=embedding_json,
+                            source_type=source_type,
+                            source_path=source_path
+                        )
+                        session.add(chunk)
+                        session.flush()  # Получить ID
+                        session.refresh(chunk)
+                    
+                    # Обновить индекс после успешного commit (вне сессии)
+                    if embedding is not None and HAS_EMBEDDINGS:
+                        if self.index is None:
+                            self.dimension = embedding.shape[0]
+                            self.index = faiss.IndexFlatL2(self.dimension)
+                        self.index.add(embedding.reshape(1, -1).astype('float32'))
+                        self.chunks.append(chunk)
+                    
+                    return chunk
+                except Exception as e:
+                    if "locked" in str(e).lower() or "database is locked" in str(e):
+                        if attempt < max_retries - 1:
+                            # Экспоненциальный backoff с джиттером
+                            delay = base_delay * (2 ** attempt)
+                            jitter = delay * 0.2 * (random.random() * 2 - 1)
+                            delay_with_jitter = max(0.1, delay + jitter)
+                            logger.warning(
+                                f"База данных заблокирована, попытка {attempt + 1}/{max_retries}, "
+                                f"повтор через {delay_with_jitter:.2f}с (timeout=60s, busy_timeout=60000ms)"
+                            )
+                            time.sleep(delay_with_jitter)
+                            continue
+                        else:
+                            logger.error(
+                                f"Не удалось добавить чанк после {max_retries} попыток: {e} "
+                                f"(timeout=60s, busy_timeout=60000ms)"
+                            )
+                            raise
+                    else:
+                        raise
+    
+    def add_chunks_batch(self, chunks_data: List[Dict]) -> List[KnowledgeChunk]:
+        """
+        Добавить несколько фрагментов знания пакетно (оптимизировано для SQLite)
         
-        # Обновить индекс
-        if embedding is not None and HAS_EMBEDDINGS:
-            if self.index is None:
-                self.dimension = embedding.shape[0]
-                self.index = faiss.IndexFlatL2(self.dimension)
-            self.index.add(embedding.reshape(1, -1).astype('float32'))
-            self.chunks.append(chunk)
+        Использует двухфазную запись:
+        1. Вставка чанков без embedding (быстро)
+        2. Обновление embedding батчами (минимизирует блокировки)
         
-        return chunk
+        Args:
+            chunks_data: Список словарей с данными чанков:
+                {
+                    'knowledge_base_id': int,
+                    'content': str,
+                    'source_type': str,
+                    'source_path': str,
+                    'metadata': dict (опционально)
+                }
+        
+        Returns:
+            Список созданных KnowledgeChunk объектов
+        """
+        import time
+        import random
+        max_retries = 10  # Увеличено для длительных блокировок
+        base_delay = 0.2  # Увеличено с 0.02 до 0.2 секунды
+        batch_size = 50  # Размер батча для bulk операций
+        
+        with _db_write_lock:
+            # Подготовить все embeddings заранее (до любых транзакций)
+            prepared_data = []
+            for chunk_data in chunks_data:
+                content = chunk_data.get('content', '')
+                embedding = self._get_embedding(content)
+                embedding_json = json.dumps(embedding.tolist()) if embedding is not None else None
+                prepared_data.append((chunk_data, embedding, embedding_json))
+            
+            all_chunks = []
+            chunks_with_embeddings = []  # (chunk_id, embedding_json, embedding) для второй фазы
+            
+            # Фаза 1: Вставка чанков без embedding (быстро, минимизирует блокировки)
+            for batch_start in range(0, len(prepared_data), batch_size):
+                batch_data = prepared_data[batch_start:batch_start + batch_size]
+                
+                for attempt in range(max_retries):
+                    try:
+                        with get_session() as session:
+                            chunks_to_add = []
+                            batch_embeddings = []
+                            
+                            for chunk_data, embedding, embedding_json in batch_data:
+                                chunk = KnowledgeChunk(
+                                    knowledge_base_id=chunk_data['knowledge_base_id'],
+                                    content=chunk_data.get('content', ''),
+                                    chunk_metadata=json.dumps(chunk_data.get('metadata') or {}),
+                                    embedding=None,  # Вставляем без embedding сначала
+                                    source_type=chunk_data.get('source_type', 'text'),
+                                    source_path=chunk_data.get('source_path', '')
+                                )
+                                chunks_to_add.append(chunk)
+                                if embedding_json:
+                                    batch_embeddings.append((chunk, embedding_json, embedding))
+                            
+                            # Использовать add_all для вставки
+                            session.add_all(chunks_to_add)
+                            session.flush()  # Получить IDs
+                            
+                            # Сохранить все чанки (исправление C)
+                            all_chunks.extend(chunks_to_add)
+                            
+                            # Сохранить для второй фазы (ID доступны после flush)
+                            for chunk, emb_json, emb in batch_embeddings:
+                                # ID должен быть доступен после flush
+                                if hasattr(chunk, 'id') and chunk.id:
+                                    chunks_with_embeddings.append((chunk.id, emb_json, emb))
+                                else:
+                                    logger.warning(f"Не удалось получить ID для чанка, будет пропущен embedding")
+                        
+                        break  # Успешно добавлено
+                    except Exception as e:
+                        if "locked" in str(e).lower() or "database is locked" in str(e):
+                            if attempt < max_retries - 1:
+                                delay = base_delay * (2 ** attempt)
+                                if attempt == 0:
+                                    logger.warning(f"База данных заблокирована при вставке батча {batch_start//batch_size + 1}, повторная попытка через {delay:.2f}с")
+                                time.sleep(delay)
+                                continue
+                            else:
+                                logger.error(f"Не удалось добавить батч после {max_retries} попыток: {e}")
+                                raise
+                        else:
+                            raise
+                
+                # Небольшая задержка между батчами
+                if batch_start + batch_size < len(prepared_data):
+                    time.sleep(0.01)
+            
+            # Фаза 2: Обновление embedding короткими пачками с commit после каждой (исправление B)
+            if chunks_with_embeddings:
+                embedding_batch_size = 30  # Уменьшено для коротких транзакций
+                for batch_start in range(0, len(chunks_with_embeddings), embedding_batch_size):
+                    batch_embeddings = chunks_with_embeddings[batch_start:batch_start + embedding_batch_size]
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            # Короткая транзакция: update + commit
+                            with get_session() as session:
+                                for chunk_id, embedding_json, _ in batch_embeddings:
+                                    session.query(KnowledgeChunk).filter_by(id=chunk_id).update(
+                                        {'embedding': embedding_json}
+                                    )
+                                # commit выполнится автоматически при выходе из with
+                            break
+                        except Exception as e:
+                            if "locked" in str(e).lower() or "database is locked" in str(e):
+                                if attempt < max_retries - 1:
+                                    # Экспоненциальный backoff с джиттером
+                                    delay = base_delay * (2 ** attempt)
+                                    jitter = delay * 0.2 * (random.random() * 2 - 1)
+                                    delay_with_jitter = max(0.1, delay + jitter)
+                                    logger.warning(
+                                        f"База данных заблокирована при обновлении embedding батча, "
+                                        f"попытка {attempt + 1}/{max_retries}, повтор через {delay_with_jitter:.2f}с"
+                                    )
+                                    time.sleep(delay_with_jitter)
+                                    continue
+                                else:
+                                    logger.error(
+                                        f"Не удалось обновить embedding батча после {max_retries} попыток: {e} "
+                                        f"(timeout=60s, busy_timeout=60000ms)"
+                                    )
+                                    # Не прерываем процесс, просто логируем ошибку
+                                    break
+                            else:
+                                raise
+            
+            # Исправление D: отключить инкрементальное обновление индекса после батча
+            # Индекс будет пересобран по запросу через _load_index()
+            # Это снижает число обращений к БД в момент записи
+            # После успешного большого импорта просто сбрасываем индекс
+            if HAS_EMBEDDINGS and chunks_with_embeddings:
+                self.index = None
+                self.chunks = []
+                # Индекс будет пересобран при следующем поиске через _load_index()
+        
+        return all_chunks
     
     def search(self, query: str, knowledge_base_id: Optional[int] = None, 
                top_k: int = 5) -> List[Dict]:
@@ -535,7 +724,8 @@ class RAGSystem:
         # Разбиваем по пробелам, амперсандам, дефисам и другим разделителям
         query_words = re.findall(r'\w+', query_lower)
         
-        chunks = self.session.query(KnowledgeChunk).all()
+        with get_session() as session:
+            chunks = session.query(KnowledgeChunk).all()
         
         scored_chunks = []
         for chunk in chunks:
@@ -571,48 +761,53 @@ class RAGSystem:
     
     def delete_knowledge_base(self, knowledge_base_id: int) -> bool:
         """Удалить базу знаний, все её фрагменты и журнал загрузок"""
-        # Удалить все фрагменты
-        chunks = self.session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
-        for chunk in chunks:
-            self.session.delete(chunk)
-        
-        # Удалить все записи из журнала загрузок для этой базы знаний
-        logs = self.session.query(KnowledgeImportLog).filter_by(knowledge_base_id=knowledge_base_id).all()
-        for log in logs:
-            self.session.delete(log)
-        
-        # Удалить саму базу знаний
-        kb = self.session.query(KnowledgeBase).filter_by(id=knowledge_base_id).first()
-        if kb:
-            self.session.delete(kb)
-            self.session.commit()
+        with _db_write_lock:
+            with get_session() as session:
+                # Удалить все фрагменты
+                chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                for chunk in chunks:
+                    session.delete(chunk)
+                
+                # Удалить все записи из журнала загрузок для этой базы знаний
+                logs = session.query(KnowledgeImportLog).filter_by(knowledge_base_id=knowledge_base_id).all()
+                for log in logs:
+                    session.delete(log)
+                
+                # Удалить саму базу знаний
+                kb = session.query(KnowledgeBase).filter_by(id=knowledge_base_id).first()
+                if kb:
+                    session.delete(kb)
+                    session.flush()
+                
+                if not kb:
+                    return False
             
-            # Пересоздать индекс
+            # Пересоздать индекс (вне сессии)
             self.chunks = []
             self.index = None
             self._load_index()
             return True
-        return False
     
     def clear_knowledge_base(self, knowledge_base_id: int) -> bool:
         """Очистить базу знаний от всех фрагментов и журнала загрузок"""
-        # Удалить все фрагменты
-        chunks = self.session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
-        for chunk in chunks:
-            self.session.delete(chunk)
-        
-        # Удалить все записи из журнала загрузок для этой базы знаний
-        logs = self.session.query(KnowledgeImportLog).filter_by(knowledge_base_id=knowledge_base_id).all()
-        for log in logs:
-            self.session.delete(log)
-        
-        self.session.commit()
-        
-        # Пересоздать индекс
-        self.chunks = []
-        self.index = None
-        self._load_index()
-        return True
+        with _db_write_lock:
+            with get_session() as session:
+                # Удалить все фрагменты
+                chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                for chunk in chunks:
+                    session.delete(chunk)
+                
+                # Удалить все записи из журнала загрузок для этой базы знаний
+                logs = session.query(KnowledgeImportLog).filter_by(knowledge_base_id=knowledge_base_id).all()
+                for log in logs:
+                    session.delete(log)
+                session.flush()
+            
+            # Пересоздать индекс (вне сессии)
+            self.chunks = []
+            self.index = None
+            self._load_index()
+            return True
 
     def delete_chunks_by_source_exact(
         self,
@@ -628,28 +823,30 @@ class RAGSystem:
         if not source_path:
             return 0
 
-        q = (
-            self.session.query(KnowledgeChunk)
-            .filter_by(
-                knowledge_base_id=knowledge_base_id,
-                source_type=source_type,
-                source_path=source_path,
-            )
-        )
-        chunks = q.all()
-        deleted = 0
-        for chunk in chunks:
-            self.session.delete(chunk)
-            deleted += 1
+        with _db_write_lock:
+            with get_session() as session:
+                q = (
+                    session.query(KnowledgeChunk)
+                    .filter_by(
+                        knowledge_base_id=knowledge_base_id,
+                        source_type=source_type,
+                        source_path=source_path,
+                    )
+                )
+                chunks = q.all()
+                deleted = 0
+                for chunk in chunks:
+                    session.delete(chunk)
+                    deleted += 1
+                session.flush()
 
-        if deleted:
-            self.session.commit()
-            # Полностью пересоздать индекс, чтобы он соответствовал текущему состоянию БД
-            self.chunks = []
-            self.index = None
-            self._load_index()
+            if deleted:
+                # Полностью пересоздать индекс, чтобы он соответствовал текущему состоянию БД
+                self.chunks = []
+                self.index = None
+                self._load_index()
 
-        return deleted
+            return deleted
 
     def delete_chunks_by_source_prefix(
         self,
@@ -665,27 +862,29 @@ class RAGSystem:
         if not source_prefix:
             return 0
 
-        # Найти все фрагменты в указанной базе знаний и с нужным типом источника
-        query = (
-            self.session.query(KnowledgeChunk)
-            .filter_by(knowledge_base_id=knowledge_base_id, source_type=source_type)
-        )
-        chunks = query.all()
-        deleted = 0
+        with _db_write_lock:
+            with get_session() as session:
+                # Найти все фрагменты в указанной базе знаний и с нужным типом источника
+                query = (
+                    session.query(KnowledgeChunk)
+                    .filter_by(knowledge_base_id=knowledge_base_id, source_type=source_type)
+                )
+                chunks = query.all()
+                deleted = 0
 
-        for chunk in chunks:
-            if chunk.source_path and chunk.source_path.startswith(source_prefix):
-                self.session.delete(chunk)
-                deleted += 1
+                for chunk in chunks:
+                    if chunk.source_path and chunk.source_path.startswith(source_prefix):
+                        session.delete(chunk)
+                        deleted += 1
+                session.flush()
 
-        if deleted:
-            self.session.commit()
-            # Полностью пересоздать индекс, чтобы он соответствовал текущему состоянию БД
-            self.chunks = []
-            self.index = None
-            self._load_index()
+            if deleted:
+                # Полностью пересоздать индекс, чтобы он соответствовал текущему состоянию БД
+                self.chunks = []
+                self.index = None
+                self._load_index()
 
-        return deleted
+            return deleted
 
 
 # Глобальный экземпляр RAG системы

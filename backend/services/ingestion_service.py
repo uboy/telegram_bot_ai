@@ -13,19 +13,27 @@ import tempfile
 import zipfile
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
-from shared.database import KnowledgeImportLog  # type: ignore
+from shared.database import KnowledgeImportLog, get_session  # type: ignore
 from shared.rag_system import rag_system  # type: ignore
 from shared.document_loaders import document_loader_manager  # type: ignore
 from shared.utils import detect_language  # type: ignore
 from shared.wiki_scraper import crawl_wiki_to_kb  # type: ignore
 from shared.wiki_git_loader import load_wiki_from_git, load_wiki_from_zip  # type: ignore
 from shared.image_processor import image_processor  # type: ignore
+from shared.logging_config import logger  # type: ignore
 
 
 class IngestionService:
     def __init__(self, db: Session) -> None:
-        self.db = db
+        self.db = db  # Используется только для совместимости, но не для логов во время массового импорта
+    
+    def _write_import_log(self, log_obj: KnowledgeImportLog) -> None:
+        """Записать лог импорта через отдельную короткую сессию"""
+        with get_session() as session:
+            session.add(log_obj)
+            # commit выполнится автоматически при выходе из with
 
     def ingest_web_page(self, kb_id: int, url: str, telegram_id: str | None, username: str | None) -> Dict[str, Any]:
         """Загрузить одну веб-страницу в базу знаний."""
@@ -46,7 +54,8 @@ class IngestionService:
         doc_version = existing_logs + 1
         source_updated_at = datetime.now(timezone.utc).isoformat()
 
-        added = 0
+        # Использовать batch insert для лучшей производительности
+        chunks_data = []
         for chunk in chunks:
             content = chunk.get("content", "")
             base_meta = dict(chunk.get("metadata") or {})
@@ -55,14 +64,44 @@ class IngestionService:
             base_meta["doc_version"] = doc_version
             base_meta["source_updated_at"] = source_updated_at
 
-            rag_system.add_chunk(
-                knowledge_base_id=kb_id,
-                content=content,
-                source_type="web",
-                source_path=url,
-                metadata=base_meta,
-            )
-            added += 1
+            chunks_data.append({
+                'knowledge_base_id': kb_id,
+                'content': content,
+                'source_type': "web",
+                'source_path': url,
+                'metadata': base_meta,
+            })
+        
+        # Добавить все чанки пакетно
+        if chunks_data:
+            import time
+            max_retries = 3
+            base_delay = 0.1
+            added = 0
+            
+            for attempt in range(max_retries):
+                try:
+                    rag_system.add_chunks_batch(chunks_data)
+                    added = len(chunks_data)
+                    break
+                except OperationalError as e:
+                    if "database is locked" in str(e).lower():
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            logger.warning(f"Database locked, retrying batch insert in {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"Failed to add chunks after {max_retries} retries: {e}")
+                            raise
+                    else:
+                        raise
+                except Exception as e:
+                    # Для других ошибок не делаем fallback на поштучную вставку
+                    logger.error(f"Batch insert failed: {e}")
+                    raise
+        else:
+            added = 0
 
         # Записать в журнал загрузок
         log = KnowledgeImportLog(
@@ -138,8 +177,7 @@ class IngestionService:
             source_path=wiki_root,
             total_chunks=added,
         )
-        self.db.add(log)
-        self.db.commit()
+        self._write_import_log(log)
 
         return {
             "deleted_chunks": deleted,
@@ -259,6 +297,8 @@ class IngestionService:
                     doc_version = existing_logs + 1
                     source_updated_at = datetime.now(timezone.utc).isoformat()
 
+                    # Использовать batch insert для лучшей производительности
+                    chunks_data = []
                     for chunk in chunks:
                         content = chunk.get("content", "")
                         base_meta = dict(chunk.get("metadata") or {})
@@ -268,14 +308,44 @@ class IngestionService:
                         base_meta["doc_version"] = doc_version
                         base_meta["source_updated_at"] = source_updated_at
 
-                        rag_system.add_chunk(
-                            knowledge_base_id=kb_id,
-                            content=content,
-                            source_type=inner_ext or "unknown",
-                            source_path=source_path,
-                            metadata=base_meta,
-                        )
-                        added += 1
+                        chunks_data.append({
+                            'knowledge_base_id': kb_id,
+                            'content': content,
+                            'source_type': inner_ext or "unknown",
+                            'source_path': source_path,
+                            'metadata': base_meta,
+                        })
+                    
+                    # Добавить все чанки пакетно
+                    if chunks_data:
+                        import time
+                        max_retries = 3
+                        base_delay = 0.1
+                        added = 0
+                        
+                        for attempt in range(max_retries):
+                            try:
+                                rag_system.add_chunks_batch(chunks_data)
+                                added = len(chunks_data)
+                                break
+                            except OperationalError as e:
+                                if "database is locked" in str(e).lower():
+                                    if attempt < max_retries - 1:
+                                        delay = base_delay * (2 ** attempt)
+                                        logger.warning(f"Database locked for {name}, retrying batch insert in {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
+                                        time.sleep(delay)
+                                        continue
+                                    else:
+                                        logger.error(f"Failed to add chunks from {name} after {max_retries} retries: {e}")
+                                        raise
+                                else:
+                                    raise
+                            except Exception as e:
+                                # Для других ошибок не делаем fallback на поштучную вставку
+                                logger.error(f"Batch insert failed for {name}: {e}")
+                                raise
+                    else:
+                        added = 0
                     total_chunks += added
                     per_file_stats.append(
                         {
@@ -283,7 +353,7 @@ class IngestionService:
                             "chunks_added": added,
                         }
                     )
-                    # Записать в журнал загрузок для каждого файла
+                    # Записать в журнал загрузок для каждого файла через отдельную короткую сессию
                     log = KnowledgeImportLog(
                         knowledge_base_id=kb_id,
                         user_telegram_id=tg_id,
@@ -292,11 +362,12 @@ class IngestionService:
                         source_path=source_path,
                         total_chunks=added,
                     )
-                    self.db.add(log)
+                    self._write_import_log(log)
                     try:
                         os.remove(inner_path)
                     except OSError:
                         pass
+                # Финальный commit для оставшихся логов
                 self.db.commit()
 
             return {
@@ -330,7 +401,8 @@ class IngestionService:
         doc_version = existing_logs + 1
         source_updated_at = datetime.now(timezone.utc).isoformat()
 
-        added = 0
+        # Использовать batch insert для лучшей производительности
+        chunks_data = []
         for chunk in chunks:
             content = chunk.get("content", "")
             base_meta = dict(chunk.get("metadata") or {})
@@ -340,14 +412,44 @@ class IngestionService:
             base_meta["doc_version"] = doc_version
             base_meta["source_updated_at"] = source_updated_at
 
-            rag_system.add_chunk(
-                knowledge_base_id=kb_id,
-                content=content,
-                source_type=file_type or "unknown",
-                source_path=source_path,
-                metadata=base_meta,
-            )
-            added += 1
+            chunks_data.append({
+                'knowledge_base_id': kb_id,
+                'content': content,
+                'source_type': file_type or "unknown",
+                'source_path': source_path,
+                'metadata': base_meta,
+            })
+        
+        # Добавить все чанки пакетно
+        if chunks_data:
+            import time
+            max_retries = 3
+            base_delay = 0.1
+            added = 0
+            
+            for attempt in range(max_retries):
+                try:
+                    rag_system.add_chunks_batch(chunks_data)
+                    added = len(chunks_data)
+                    break
+                except OperationalError as e:
+                    if "database is locked" in str(e).lower():
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            logger.warning(f"Database locked, retrying batch insert in {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"Failed to add chunks after {max_retries} retries: {e}")
+                            raise
+                    else:
+                        raise
+                except Exception as e:
+                    # Для других ошибок не делаем fallback на поштучную вставку
+                    logger.error(f"Batch insert failed: {e}")
+                    raise
+        else:
+            added = 0
 
         # Записать в журнал загрузок
         log = KnowledgeImportLog(

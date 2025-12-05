@@ -25,6 +25,8 @@ class BackendClient:
         # Общий префикс API
         self.api_prefix = os.getenv("BACKEND_API_PREFIX", "/api/v1")
         self.timeout = timeout
+        # Таймаут для длительных операций (ingestion) - по умолчанию 5 минут
+        self.ingestion_timeout = float(os.getenv("BACKEND_INGESTION_TIMEOUT", "300.0"))
         # API-ключ для авторизации запросов к backend (опционально)
         self.api_key = os.getenv("BACKEND_API_KEY", "")
 
@@ -102,7 +104,8 @@ class BackendClient:
         url_api = self._url("/ingestion/web")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            # Используем увеличенный таймаут для ingestion операций
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -145,7 +148,8 @@ class BackendClient:
         url_api = self._url("/ingestion/wiki-crawl")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            # Используем увеличенный таймаут для ingestion операций
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, params=params)
                 resp.raise_for_status()
                 return resp.json()
@@ -170,7 +174,8 @@ class BackendClient:
         url_api = self._url("/ingestion/wiki-git")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            # Используем увеличенный таймаут для ingestion операций
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, params=params)
                 resp.raise_for_status()
                 return resp.json()
@@ -200,7 +205,8 @@ class BackendClient:
             "username": username or "",
         }
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            # Используем увеличенный таймаут для ingestion операций
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
@@ -234,7 +240,8 @@ class BackendClient:
         if username is not None:
             data["username"] = username
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            # Используем увеличенный таймаут для ingestion операций (загрузка документов может занимать много времени)
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
@@ -268,7 +275,8 @@ class BackendClient:
         if model is not None:
             data["model"] = model
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            # Используем увеличенный таймаут для ingestion операций (обработка изображений может занимать время)
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
