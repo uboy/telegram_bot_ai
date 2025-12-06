@@ -1,11 +1,12 @@
 """
 Обработчики команд и сообщений для бота
 """
+import asyncio
 import os
 import tempfile
 import hashlib
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from telegram import Update
 from telegram.ext import ContextTypes
 from shared.database import Session, User, Message, KnowledgeBase, KnowledgeImportLog
@@ -15,41 +16,15 @@ from frontend.backend_client import backend_client
 from shared.document_loaders import document_loader_manager
 from shared.image_processor import image_processor
 from shared.web_search import search_web, format_search_results
-from shared.utils import format_text_safe, create_prompt_with_language, detect_language
-from urllib.parse import urlparse, parse_qs, unquote
+from shared.utils import (
+    format_text_safe, create_prompt_with_language, detect_language, 
+    format_for_telegram_answer, strip_html_tags, normalize_wiki_url_for_display
+)
+from shared.types import UserContext
+from urllib.parse import unquote
+from html import escape
 
 
-def _normalize_wiki_url_for_display(url: str) -> str:
-    """Нормализовать URL вики для отображения (конвертировать export URL в читаемый формат)"""
-    if not url or not url.startswith(('http://', 'https://')):
-        return url
-    
-    # Если это export URL Gitee вики, конвертируем в нормальный формат
-    # Пример: https://gitee.com/.../wikis/pages/export?type=markdown&doc_id=2921510
-    # -> https://gitee.com/.../wikis/Sync&Build/Sync%26Build
-    if '/wikis/pages/export' in url:
-        try:
-            parsed = urlparse(url)
-            query_params = parse_qs(parsed.query)
-            
-            # Извлекаем doc_id из query параметров
-            if 'doc_id' in query_params:
-                doc_id = query_params['doc_id'][0]
-                # Строим нормальный URL вики
-                # Базовый путь до /wikis
-                path_parts = parsed.path.split('/wikis')
-                if len(path_parts) >= 2:
-                    base_path = path_parts[0] + '/wikis'
-                    # Попытаемся найти название страницы из других параметров или использовать doc_id
-                    # Для Gitee обычно можно использовать doc_id для построения URL
-                    # Но лучше использовать оригинальный URL если он есть в метаданных
-                    # Пока просто возвращаем базовый путь вики
-                    return f"{parsed.scheme}://{parsed.netloc}{base_path}"
-        except Exception:
-            pass
-    
-    # Если это обычный URL вики, возвращаем как есть
-    return url
 from frontend.templates.buttons import (
     main_menu, admin_menu, settings_menu, ai_providers_menu,
     user_management_menu, knowledge_base_menu, kb_actions_menu,
@@ -58,7 +33,7 @@ from frontend.templates.buttons import (
 from shared.config import ADMIN_IDS
 from shared.n8n_client import n8n_client
 
-session = Session()
+# Глобальный session удалён - создаём session локально в функциях
 
 
 def emit_n8n_import_event(
@@ -101,9 +76,12 @@ def emit_n8n_import_event(
         logger.warning("Не удалось отправить событие в n8n: %s", message)
 
 
-async def check_user(update: Update) -> Optional[User]:
+async def check_user(update: Update) -> Optional[UserContext]:
     """Проверить и зарегистрировать пользователя через backend.
-
+    
+    ВАЖНО: Возвращает UserContext (DTO), а не ORM объект, чтобы избежать
+    DetachedInstanceError после закрытия session.
+    
     Локальная БД всё ещё используется как кэш до полного выноса моделей в backend_service.
     """
     tg = update.effective_user
@@ -115,7 +93,8 @@ async def check_user(update: Update) -> Optional[User]:
     full_name = getattr(tg, "full_name", None)
 
     # 1. Синхронизируем пользователя с backend (создание/обновление, роли, approved)
-    backend_user = backend_client.auth_telegram(
+    backend_user = await asyncio.to_thread(
+        backend_client.auth_telegram,
         telegram_id=user_id,
         username=username,
         full_name=full_name,
@@ -128,28 +107,54 @@ async def check_user(update: Update) -> Optional[User]:
         return None
 
     # 2. Обновляем/создаём локальную запись (будет убрана после полного переноса моделей)
-    user = session.query(User).filter_by(telegram_id=user_id).first()
-    if not user:
-        user = User(
-            telegram_id=user_id,
-            username=backend_user.get("username") or user_id,
-            full_name=backend_user.get("full_name"),
-            phone=backend_user.get("phone"),
-            role=backend_user.get("role") or "user",
-            approved=bool(backend_user.get("approved", False)),
-        )
-        session.add(user)
-    else:
-        user.username = backend_user.get("username") or user.username
-        if hasattr(user, "full_name"):
-            user.full_name = backend_user.get("full_name")
-        if hasattr(user, "phone"):
-            user.phone = backend_user.get("phone")
-        user.role = backend_user.get("role") or user.role
-        user.approved = bool(backend_user.get("approved", user.approved))
-    session.commit()
+    # Получаем preferred_* из локальной БД для кэша
+    preferred_provider = None
+    preferred_model = None
+    preferred_image_model = None
+    
+    session = Session()
+    try:
+        user = session.query(User).filter_by(telegram_id=user_id).first()
+        if not user:
+            user = User(
+                telegram_id=user_id,
+                username=backend_user.get("username") or user_id,
+                full_name=backend_user.get("full_name"),
+                phone=backend_user.get("phone"),
+                role=backend_user.get("role") or "user",
+                approved=bool(backend_user.get("approved", False)),
+            )
+            session.add(user)
+        else:
+            user.username = backend_user.get("username") or user.username
+            if hasattr(user, "full_name"):
+                user.full_name = backend_user.get("full_name")
+            if hasattr(user, "phone"):
+                user.phone = backend_user.get("phone")
+            user.role = backend_user.get("role") or user.role
+            user.approved = bool(backend_user.get("approved", user.approved))
+        session.commit()
 
-    if not user.approved and user.role != "admin":
+        # ВАЖНО: preferred_* должны быть заполнены и для нового пользователя тоже
+        preferred_provider = getattr(user, "preferred_provider", None)
+        preferred_model = getattr(user, "preferred_model", None)
+        preferred_image_model = getattr(user, "preferred_image_model", None)
+    finally:
+        session.close()
+
+    # Формируем UserContext из backend_user (source of truth) + локального кэша
+    user_context = UserContext(
+        telegram_id=user_id,
+        username=backend_user.get("username"),
+        full_name=backend_user.get("full_name"),
+        role=backend_user.get("role") or "user",
+        approved=bool(backend_user.get("approved", False)),
+        preferred_provider=preferred_provider,
+        preferred_model=preferred_model,
+        preferred_image_model=preferred_image_model,
+    )
+
+    if not user_context.approved and user_context.role != "admin":
         # Пользователь не одобрен - отправить сообщение
         if update.message:
             await update.message.reply_text(
@@ -157,10 +162,215 @@ async def check_user(update: Update) -> Optional[User]:
             )
         return None
 
-    return user
+    return user_context
 
 
 from frontend.templates.buttons import approve_menu
+
+
+def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) -> tuple[str, bool]:
+    """
+    Формирует HTML-ответ из результата RAG-запроса.
+    
+    Args:
+        backend_result: Результат backend_client.rag_query()
+        enable_citations: Включить ли citations в форматирование
+        
+    Returns:
+        tuple: (answer_html, has_answer) - готовый HTML и флаг наличия ответа
+    """
+    backend_answer = (backend_result.get("answer") or "").strip()
+    backend_sources = backend_result.get("sources") or []
+    
+    if not backend_answer:
+        return "", False
+    
+    # Формируем HTML-ответ на основе markdown от backend
+    ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
+    
+    # Формируем список источников из backend_sources (убираем дубликаты)
+    sources_html_list: list[str] = []
+    seen_sources = set()  # Ключ: (source_type, source_path)
+    source_counter = 1
+    
+    for s in backend_sources:
+        source_path = s.get("source_path") or ""
+        source_type = s.get("source_type") or "unknown"
+        
+        if not source_path or ".keep" in source_path.lower():
+            continue
+        
+        # Проверяем дубликаты по (source_type, source_path)
+        source_key = (source_type, source_path)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        
+        is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
+        
+        if is_url:
+            url_for_link = source_path
+            # Для красоты: если это export-URL вики, покажем "нормальный" путь (но ссылка остаётся исходной)
+            display_url = normalize_wiki_url_for_display(source_path) or source_path
+            
+            # Извлекаем читаемый заголовок из URL
+            if "/" in url_for_link:
+                parts = [p for p in url_for_link.split("/") if p]
+                if parts:
+                    title = parts[-1]
+                else:
+                    title = url_for_link
+            else:
+                title = url_for_link
+            
+            title = unquote(title)
+            if not title or len(title) < 2:
+                parts = [p for p in url_for_link.split("/") if p]
+                if len(parts) > 1:
+                    title = unquote(parts[-2])
+                else:
+                    title = url_for_link
+            
+            title_escaped = escape(title)
+            url_escaped = escape(url_for_link, quote=True)
+            # Можно показать display_url как title, если title выглядит мусорно
+            nice_title = title if title and len(title) >= 2 else display_url
+            sources_html_list.append(f'{source_counter}. <a href="{url_escaped}">{escape(nice_title)}</a>')
+        else:
+            # Не-URL источники показываем как текст/имя файла
+            if "::" in source_path:
+                file_name = source_path.split("::")[-1]
+            elif "/" in source_path:
+                file_name = source_path.split("/")[-1]
+            else:
+                file_name = source_path
+            file_name = unquote(file_name) if "%" in file_name else file_name
+            file_name_escaped = escape(file_name or "неизвестный источник")
+            sources_html_list.append(f"{source_counter}. <code>{file_name_escaped}</code>")
+        
+        source_counter += 1
+    
+    if sources_html_list:
+        sources_html = "\n".join(f"• {s}" for s in sources_html_list)
+        answer_html = (
+            f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+            f"📎 <b>Использованные источники:</b>\n{sources_html}"
+        )
+    else:
+        answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
+    
+    return answer_html, True
+
+
+async def perform_rag_query_and_render(
+    query: str,
+    kb_id: int,
+    user: UserContext,
+    fallback_to_ai: bool = True
+) -> tuple[str, bool]:
+    """
+    Выполняет RAG-запрос и формирует HTML-ответ.
+    
+    Args:
+        query: Текст запроса
+        kb_id: ID базы знаний
+        user: Пользователь (для fallback на AI)
+        fallback_to_ai: Если True, при отсутствии ответа от RAG использовать общий AI
+        
+    Returns:
+        tuple: (answer_html, has_answer) - готовый HTML и флаг наличия ответа
+    """
+    # Получить настройки RAG из конфига
+    try:
+        from shared.config import RAG_TOP_K, RAG_ENABLE_CITATIONS
+        top_k_search = RAG_TOP_K
+        enable_citations = RAG_ENABLE_CITATIONS
+    except ImportError:
+        top_k_search = 10
+        enable_citations = True
+    
+    # Поиск через backend RAG API (единый источник правды)
+    backend_result = await asyncio.to_thread(
+        backend_client.rag_query,
+        query=query,
+        knowledge_base_id=kb_id,
+        top_k=top_k_search,
+    )
+    backend_answer = (backend_result.get("answer") or "").strip()
+    backend_sources = backend_result.get("sources") or []
+    debug_chunks = backend_result.get("debug_chunks")
+    
+    logger.info(
+        "Поиск в БЗ (backend): user=%s, query=%r, kb_id=%s, has_answer=%s, sources=%s",
+        user.telegram_id if user else "unknown",
+        query,
+        kb_id,
+        bool(backend_answer),
+        len(backend_sources),
+    )
+    
+    # Логирование debug_chunks если включен debug mode
+    if debug_chunks:
+        logger.info("Debug chunks (top-5): %s", [
+            {
+                "chunk_kind": c.get("chunk_kind"),
+                "section_path": c.get("section_path"),
+                "score": c.get("score"),
+                "rerank_score": c.get("rerank_score"),
+            }
+            for c in debug_chunks
+        ])
+    
+    if backend_answer:
+        answer_html, has_answer = render_rag_answer_html(backend_result, enable_citations=enable_citations)
+        return answer_html, has_answer
+    elif fallback_to_ai:
+        # Если backend не нашёл релевантных фрагментов, fallback на общий ИИ-ответ
+        prompt = create_prompt_with_language(query, None, task="answer")
+        model = user.preferred_model if user and user.preferred_model else None
+        provider = user.preferred_provider if user else None
+        ai_answer = await asyncio.to_thread(
+            ai_manager.query,
+            prompt,
+            provider_name=provider,
+            model=model,
+        )
+        # Используем format_for_telegram_answer() для единообразного форматирования
+        ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
+        answer_html = (
+            f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+            f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
+        )
+        return answer_html, True
+    else:
+        return "", False
+
+
+async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT_TYPE, user: UserContext, query: str) -> Tuple[Optional[int], bool]:
+    """
+    Проверяет, выбрана ли KB. Если нет — показывает меню выбора и сохраняет pending_query.
+    Returns: (kb_id, did_prompt_select)
+    """
+    kb_id = context.user_data.get('kb_id')
+    if kb_id:
+        return kb_id, False
+
+    kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+    if not kbs:
+        await update.message.reply_text(
+            "❌ Нет доступных баз знаний. Создайте базу знаний в админ-панели.",
+            reply_markup=main_menu(is_admin=(user.role == 'admin'))
+        )
+        context.user_data['state'] = None
+        return None, True
+
+    context.user_data['pending_query'] = query
+    context.user_data['state'] = 'waiting_kb_for_query'
+    await update.message.reply_text(
+        "📚 Выберите базу знаний для поиска:",
+        reply_markup=knowledge_base_menu(kbs)
+    )
+    return None, True
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,153 +426,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == 'waiting_query':
         # Поиск в базе знаний через backend (RAG API)
         query = update.message.text
-        
-        # Проверка: KB должна быть выбрана
-        kb_id = context.user_data.get('kb_id')
-        if not kb_id:
-            # Показать меню выбора KB
-            kbs = backend_client.list_knowledge_bases()
-            if not kbs:
-                await update.message.reply_text(
-                    "❌ Нет доступных баз знаний. Создайте базу знаний в админ-панели.",
-                    reply_markup=main_menu(is_admin=(user.role == 'admin'))
-                )
-                context.user_data['state'] = None
-                return
-            
-            # Сохранить запрос для повторного выполнения после выбора KB
-            context.user_data['pending_query'] = query
-            context.user_data['state'] = 'waiting_kb_for_query'
-            await update.message.reply_text(
-                "📚 Выберите базу знаний для поиска:",
-                reply_markup=knowledge_base_menu(kbs)
-            )
+        kb_id, prompted = await _ensure_kb_or_ask_select(update, context, user, query)
+        if prompted:
             return
         
-        # Получить настройки RAG из конфига
-        try:
-            from shared.config import RAG_TOP_K
-            top_k_search = RAG_TOP_K
-        except ImportError:
-            top_k_search = 10
-
-        backend_result = backend_client.rag_query(query=query, knowledge_base_id=kb_id, top_k=top_k_search)
-        backend_answer = (backend_result.get("answer") or "").strip()
-        backend_sources = backend_result.get("sources") or []
-        debug_chunks = backend_result.get("debug_chunks")  # Для debug mode
-
-        logger.info(
-            "Поиск в БЗ (backend): user=%s, query=%r, kb_id=%s, has_answer=%s, sources=%s",
-            user.telegram_id,
-            query,
-            kb_id,
-            bool(backend_answer),
-            len(backend_sources),
-        )
-        
-        # Логирование debug_chunks если включен debug mode
-        if debug_chunks:
-            logger.info("Debug chunks (top-5): %s", [
-                {
-                    "chunk_kind": c.get("chunk_kind"),
-                    "section_path": c.get("section_path"),
-                    "score": c.get("score"),
-                    "rerank_score": c.get("rerank_score"),
-                }
-                for c in debug_chunks
-            ])
-
-        from shared.utils import format_for_telegram_answer
-        from html import escape
-        from urllib.parse import unquote
-
-        if backend_answer:
-            # Формируем HTML-ответ на основе markdown от backend
-            # format_for_telegram_answer() применяет clean_citations, format_commands_in_text и format_markdown_to_html
-            try:
-                from shared.config import RAG_ENABLE_CITATIONS
-                enable_citations = RAG_ENABLE_CITATIONS
-            except ImportError:
-                enable_citations = True
-            ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
-
-            # Формируем список источников из backend_sources
-            sources_html_list: list[str] = []
-            for idx, s in enumerate(backend_sources, start=1):
-                source_path = s.get("source_path") or ""
-                source_type = s.get("source_type") or "unknown"
-
-                if not source_path or ".keep" in source_path.lower():
-                    continue
-
-                is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
-
-                if is_url:
-                    url_for_link = source_path
-
-                    # Извлекаем читаемый заголовок из URL
-                    if "/" in url_for_link:
-                        parts = [p for p in url_for_link.split("/") if p]
-                        if parts:
-                            title = parts[-1]
-                        else:
-                            title = url_for_link
-                    else:
-                        title = url_for_link
-
-                    title = unquote(title)
-                    if not title or len(title) < 2:
-                        parts = [p for p in url_for_link.split("/") if p]
-                        if len(parts) > 1:
-                            title = unquote(parts[-2])
-                        else:
-                            title = url_for_link
-
-                    title_escaped = escape(title)
-                    url_escaped = escape(url_for_link)
-                    sources_html_list.append(f'{idx}. <a href="{url_escaped}">{title_escaped}</a>')
-                else:
-                    # Не-URL источники показываем как текст/имя файла
-                    if "::" in source_path:
-                        file_name = source_path.split("::")[-1]
-                    elif "/" in source_path:
-                        file_name = source_path.split("/")[-1]
-                    else:
-                        file_name = source_path
-                    file_name = unquote(file_name) if "%" in file_name else file_name
-                    file_name_escaped = escape(file_name or "неизвестный источник")
-                    sources_html_list.append(f"{idx}. <code>{file_name_escaped}</code>")
-
-            if sources_html_list:
-                sources_html = "\n".join(f"• {s}" for s in sources_html_list)
-                answer_html = (
-                    f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
-                    f"📎 <b>Использованные источники:</b>\n{sources_html}"
-                )
-            else:
-                answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
-        else:
-            # Если backend не нашёл релевантных фрагментов, fallback на общий ИИ-ответ
-            prompt = create_prompt_with_language(query, None, task="answer")
-            model = user.preferred_model if user.preferred_model else None
-            ai_answer = ai_manager.query(
-                prompt, provider_name=user.preferred_provider, model=model
-            )
-            # Используем format_for_telegram_answer() для единообразного форматирования
-            ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
-            answer_html = (
-                f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
-                f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
-            )
+        # Выполняем RAG-запрос и формируем HTML-ответ
+        answer_html, has_answer = await perform_rag_query_and_render(query, kb_id, user)
         
         menu = main_menu(is_admin=(user.role == 'admin'))
         # Используем HTML для форматирования, но с безопасной обработкой ошибок
         try:
             await update.message.reply_text(answer_html, reply_markup=menu, parse_mode='HTML')
         except Exception as e:
-            # Если HTML не работает, отправляем без форматирования
-            logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-            answer_plain = format_text_safe(answer_html)
+            # Если HTML не работает, отправляем plain текст без HTML-тегов
+            logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
+            answer_plain = strip_html_tags(answer_html)
             await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
         context.user_data['state'] = None
         
@@ -398,7 +476,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 title = result.get('title', 'Без названия')
                 title_escaped = escape(title)
                 if url:
-                    sources_html_parts.append(f"• {i}. <a href=\"{url}\">{title_escaped}</a>")
+                    url_escaped = escape(url, quote=True)
+                    sources_html_parts.append(f"• {i}. <a href=\"{url_escaped}\">{title_escaped}</a>")
                 else:
                     sources_html_parts.append(f"• {i}. <b>{title_escaped}</b>")
             
@@ -411,8 +490,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.message.reply_text(answer_html, reply_markup=menu, parse_mode='HTML')
         except Exception as e:
-            logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-            answer_plain = format_text_safe(answer_html)
+            logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
+            answer_plain = strip_html_tags(answer_html)
             await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
         context.user_data['state'] = None
         
@@ -433,7 +512,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(answer_html, reply_markup=menu, parse_mode='HTML')
         except Exception as e:
             logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-            answer_plain = format_text_safe(f"🤖 Ответ:\n\n{ai_answer}")
+            answer_plain = strip_html_tags(f"🤖 Ответ:\n\n{ai_answer}")
             await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
         context.user_data['state'] = None
         
@@ -469,7 +548,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_id = str(update.effective_user.id) if update.effective_user else ""
             username = update.effective_user.username if update.effective_user else ""
 
-            stats = backend_client.ingest_wiki_crawl(
+            stats = await asyncio.to_thread(
+                backend_client.ingest_wiki_crawl,
                 kb_id=kb_id,
                 url=wiki_url,
                 telegram_id=tg_id or None,
@@ -553,15 +633,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         try:
-            target_id = update.message.text.strip()
-            target_user = session.query(User).filter_by(telegram_id=target_id).first()
-            if target_user:
-                username = target_user.username
-                session.delete(target_user)
-                session.commit()
-                await update.message.reply_text(f"✅ Пользователь @{username} удален!", reply_markup=admin_menu())
-            else:
+            target_tg = (update.message.text or "").strip()
+            users = await asyncio.to_thread(backend_client.list_users)
+            target = next((u for u in users if str(u.get("telegram_id")) == target_tg), None)
+
+            if not target or not target.get("id"):
                 await update.message.reply_text("Пользователь не найден.", reply_markup=admin_menu())
+                context.user_data['state'] = None
+                return
+
+            ok = backend_client.delete_user(int(target["id"]))
+            if ok:
+                await update.message.reply_text("✅ Пользователь удален!", reply_markup=admin_menu())
+            else:
+                await update.message.reply_text("❌ Не удалось удалить пользователя (backend).", reply_markup=admin_menu())
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}", reply_markup=admin_menu())
         context.user_data['state'] = None
@@ -596,20 +681,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['state'] = None
                 return
             
-            target_user = session.query(User).filter_by(telegram_id=target_id).first()
-            if not target_user:
-                await update.message.reply_text("Пользователь не найден.", reply_markup=admin_menu())
-                context.user_data['state'] = None
-                return
-            
-            old_role = target_user.role
-            target_user.role = new_role
-            session.commit()
-            
-            await update.message.reply_text(
-                f"✅ Роль пользователя @{target_user.username} изменена: {old_role} → {new_role}.",
-                reply_markup=admin_menu(),
-            )
+            session = Session()
+            try:
+                target_user = session.query(User).filter_by(telegram_id=target_id).first()
+                if not target_user:
+                    await update.message.reply_text("Пользователь не найден.", reply_markup=admin_menu())
+                    context.user_data['state'] = None
+                    return
+                
+                old_role = target_user.role
+                target_user.role = new_role
+                session.commit()
+                
+                await update.message.reply_text(
+                    f"✅ Роль пользователя @{target_user.username} изменена: {old_role} → {new_role}.",
+                    reply_markup=admin_menu(),
+                )
+            finally:
+                session.close()
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}", reply_markup=admin_menu())
         finally:
@@ -620,156 +709,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.message.text
 
         # Сохранить сообщение в историю (как и раньше)
-        session.add(Message(
-            chat_id=chat_id,
-            user=update.effective_user.username or str(update.effective_user.id),
-            text=query,
-        ))
-        session.commit()
+        session = Session()
+        try:
+            session.add(Message(
+                chat_id=chat_id,
+                user=update.effective_user.username or str(update.effective_user.id),
+                text=query,
+            ))
+            session.commit()
+        finally:
+            session.close()
         
         # Проверка: KB должна быть выбрана
-        kb_id = context.user_data.get('kb_id')
-        if not kb_id:
-            # Показать меню выбора KB
-            kbs = backend_client.list_knowledge_bases()
-            if not kbs:
-                await update.message.reply_text(
-                    "❌ Нет доступных баз знаний. Создайте базу знаний в админ-панели.",
-                    reply_markup=main_menu(is_admin=(user.role == 'admin'))
-                )
-                return
-            
-            # Сохранить запрос для повторного выполнения после выбора KB
-            context.user_data['pending_query'] = query
-            context.user_data['state'] = 'waiting_kb_for_query'
-            await update.message.reply_text(
-                "📚 Выберите базу знаний для поиска:",
-                reply_markup=knowledge_base_menu(kbs)
-            )
+        kb_id, prompted = await _ensure_kb_or_ask_select(update, context, user, query)
+        if prompted:
             return
         
-        # Получить настройки RAG из конфига
-        try:
-            from shared.config import RAG_TOP_K, RAG_ENABLE_CITATIONS
-            top_k_search = RAG_TOP_K
-            enable_citations = RAG_ENABLE_CITATIONS
-        except ImportError:
-            top_k_search = 10
-            enable_citations = True
-
-        # Поиск через backend RAG API (единый источник правды)
-        backend_result = backend_client.rag_query(query=query, knowledge_base_id=kb_id, top_k=top_k_search)
-        backend_answer = (backend_result.get("answer") or "").strip()
-        backend_sources = backend_result.get("sources") or []
-        debug_chunks = backend_result.get("debug_chunks")  # Для debug mode
-
-        logger.info(
-            "Поиск в БЗ (backend): user=%s, query=%r, kb_id=%s, has_answer=%s, sources=%s",
-            user.telegram_id,
-            query,
-            kb_id,
-            bool(backend_answer),
-            len(backend_sources),
-        )
-        
-        # Логирование debug_chunks если включен debug mode
-        if debug_chunks:
-            logger.info("Debug chunks (top-5): %s", [
-                {
-                    "chunk_kind": c.get("chunk_kind"),
-                    "section_path": c.get("section_path"),
-                    "score": c.get("score"),
-                    "rerank_score": c.get("rerank_score"),
-                }
-                for c in debug_chunks
-            ])
-
-        from shared.utils import format_for_telegram_answer
-        from html import escape
-        from urllib.parse import unquote
-
-        if backend_answer:
-            # Формируем HTML-ответ на основе markdown от backend
-            # format_for_telegram_answer() применяет clean_citations, format_commands_in_text и format_markdown_to_html
-            ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
-
-            # Формируем список источников из backend_sources
-            sources_html_list: list[str] = []
-            for idx, s in enumerate(backend_sources, start=1):
-                source_path = s.get("source_path") or ""
-                source_type = s.get("source_type") or "unknown"
-
-                if not source_path or ".keep" in source_path.lower():
-                    continue
-
-                is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
-
-                if is_url:
-                    url_for_link = source_path
-
-                    # Извлекаем читаемый заголовок из URL
-                    if "/" in url_for_link:
-                        parts = [p for p in url_for_link.split("/") if p]
-                        if parts:
-                            title = parts[-1]
-                        else:
-                            title = url_for_link
-                    else:
-                        title = url_for_link
-
-                    title = unquote(title)
-                    if not title or len(title) < 2:
-                        parts = [p for p in url_for_link.split("/") if p]
-                        if len(parts) > 1:
-                            title = unquote(parts[-2])
-                        else:
-                            title = url_for_link
-
-                    title_escaped = escape(title)
-                    url_escaped = escape(url_for_link)
-                    sources_html_list.append(f'{idx}. <a href="{url_escaped}">{title_escaped}</a>')
-                else:
-                    # Не-URL источники показываем как текст/имя файла
-                    if "::" in source_path:
-                        file_name = source_path.split("::")[-1]
-                    elif "/" in source_path:
-                        file_name = source_path.split("/")[-1]
-                    else:
-                        file_name = source_path
-                    file_name = unquote(file_name) if "%" in file_name else file_name
-                    file_name_escaped = escape(file_name or "неизвестный источник")
-                    sources_html_list.append(f"{idx}. <code>{file_name_escaped}</code>")
-
-            if sources_html_list:
-                sources_html = "\n".join(f"• {s}" for s in sources_html_list)
-                answer_html = (
-                    f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
-                    f"📎 <b>Использованные источники:</b>\n{sources_html}"
-                )
-            else:
-                answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
-        else:
-            # Если backend не нашёл релевантных фрагментов, fallback на общий ИИ-ответ
-            prompt = create_prompt_with_language(query, None, task="answer")
-            model = user.preferred_model if user.preferred_model else None
-            ai_answer = ai_manager.query(
-                prompt, provider_name=user.preferred_provider, model=model
-            )
-            # Используем format_for_telegram_answer() для единообразного форматирования
-            ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
-            answer_html = (
-                f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
-                f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
-            )
+        # Выполняем RAG-запрос и формируем HTML-ответ
+        answer_html, has_answer = await perform_rag_query_and_render(query, kb_id, user)
         
         menu = main_menu(is_admin=(user.role == 'admin'))
         # Используем HTML для форматирования, но с безопасной обработкой ошибок
         try:
             await update.message.reply_text(answer_html, reply_markup=menu, parse_mode='HTML')
         except Exception as e:
-            # Если HTML не работает, отправляем без форматирования
-            logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-            answer_plain = format_text_safe(answer_html)
+            # Если HTML не работает, отправляем plain текст без HTML-тегов
+            logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
+            answer_plain = strip_html_tags(answer_html)
             await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
 
 
@@ -808,7 +774,8 @@ async def load_document_to_kb(query_or_update, context, document_info, kb_id):
         file_type = (document_info.get("file_type") or "").lower()
         file_name = document_info.get("file_name") or ""
 
-        result = backend_client.ingest_document(
+        result = await asyncio.to_thread(
+            backend_client.ingest_document,
             kb_id=kb_id,
             file_name=file_name,
             file_bytes=bytes(file_bytes),
@@ -878,7 +845,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file = await bot.get_file(document.file_id)
             temp_bytes = await file.download_as_bytearray()
 
-            result = backend_client.ingest_wiki_zip(
+            result = await asyncio.to_thread(
+                backend_client.ingest_wiki_zip,
                 kb_id=kb_id,
                 url=wiki_url,
                 zip_bytes=bytes(temp_bytes),
@@ -924,7 +892,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Если база знаний не выбрана, показать меню выбора
     if not kb_id:
-        kbs = backend_client.list_knowledge_bases()
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
         if not kbs:
             await update.message.reply_text("Сначала создайте базу знаний в админ-панели.")
             return
@@ -958,7 +926,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         file = await context.bot.get_file(photo.file_id)
-        temp_path = os.path.join(tempfile.gettempdir(), f"{photo.file_id}.jpg")
+        # Уникальное имя файла во избежание коллизий
+        temp_path = os.path.join(tempfile.gettempdir(), f"{photo.file_id}_{os.getpid()}_{int(datetime.now().timestamp())}.jpg")
         await file.download_to_drive(temp_path)
         # Проверить, нужно ли загрузить в RAG
         kb_id = context.user_data.get('kb_id')
@@ -975,7 +944,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = update.effective_user.username if update.effective_user else ""
 
             try:
-                result = backend_client.ingest_image(
+                result = await asyncio.to_thread(
+                    backend_client.ingest_image,
                     kb_id=kb_id,
                     file_id=photo.file_id,
                     image_bytes=img_bytes,
@@ -1012,12 +982,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(answer, reply_markup=menu, parse_mode='HTML')
             except Exception as e:
                 logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-                answer_plain = format_text_safe(f"🖼️ Описание изображения:\n\n{description}")
+                answer_plain = strip_html_tags(f"🖼️ Описание изображения:\n\n{description}")
                 await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка обработки изображения: {str(e)}")
     finally:
-        if os.path.exists(temp_path):
+        if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
@@ -1027,7 +997,8 @@ async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url:
         tg_id = str(update.effective_user.id) if update.effective_user else ""
         username = update.effective_user.username if update.effective_user else ""
 
-        result = backend_client.ingest_web_page(
+        result = await asyncio.to_thread(
+            backend_client.ingest_web_page,
             kb_id=kb_id,
             url=url,
             telegram_id=tg_id or None,

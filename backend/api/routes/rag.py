@@ -134,27 +134,27 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     if len(content) > context_length:
                         content_preview += "..."
 
-                # Формируем блок контекста с метаданными
+                # Формируем блок контекста в плоском формате (без XML-тегов)
                 context_block_parts = []
                 
                 if enable_citations:
-                    context_block_parts.append(f"<source_id>{source_id}</source_id>")
+                    context_block_parts.append(f"SOURCE_ID: {source_id}")
                 
                 if doc_title:
-                    context_block_parts.append(f"<doc_title>{doc_title}</doc_title>")
+                    context_block_parts.append(f"DOC: {doc_title}")
                 
                 if section_path:
-                    context_block_parts.append(f"<section_path>{section_path}</section_path>")
+                    context_block_parts.append(f"SECTION: {section_path}")
                 
                 if chunk_kind:
-                    context_block_parts.append(f"<chunk_kind>{chunk_kind}</chunk_kind>")
+                    context_block_parts.append(f"TYPE: {chunk_kind}")
                 
                 if code_lang:
-                    context_block_parts.append(f"<code_lang>{code_lang}</code_lang>")
+                    context_block_parts.append(f"LANG: {code_lang}")
                 
-                context_block_parts.append("<content>")
+                context_block_parts.append("CONTENT:")
                 context_block_parts.append(content_preview)
-                context_block_parts.append("</content>")
+                context_block_parts.append("---")
                 
                 context_parts.append("\n".join(context_block_parts))
             except Exception as e:  # noqa: BLE001

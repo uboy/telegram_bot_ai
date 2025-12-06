@@ -1,12 +1,15 @@
 """
 Обработчики callback'ов для кнопок
 """
+from shared.types import UserContext
 import os
 import tempfile
+import re
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
+import asyncio
 from shared.database import Session, User, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog
 from shared.ai_providers import ai_manager
 from shared.document_loaders import document_loader_manager
@@ -37,7 +40,10 @@ except ImportError:
 from shared.logging_config import logger
 from shared.n8n_client import n8n_client
 
-session = Session()
+# Строковые id админов для безопасных сравнений
+ADMIN_ID_STRINGS = {str(x) for x in ADMIN_IDS}
+
+# Глобальный session удалён - создаём session локально в функциях
 
 
 def update_env_file(var_name: str, var_value: str) -> bool:
@@ -56,32 +62,77 @@ def update_env_file(var_name: str, var_value: str) -> bool:
             return False
     
     try:
+        pattern = re.compile(rf'^\s*{re.escape(var_name)}\s*=')
+        commented_pattern = re.compile(rf'^\s*#\s*{re.escape(var_name)}\s*=')
+        is_rag_var = var_name.startswith("RAG_")
         # Читаем весь файл
         with open(env_file_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
         # Ищем переменную и обновляем её значение
         found = False
+        has_rag_section = False
         updated_lines = []
+        rag_section_line_idx = None
+        
+        # Проверяем наличие секции # RAG Configuration
+        for idx, line in enumerate(lines):
+            if line.strip() == "# RAG Configuration":
+                has_rag_section = True
+                rag_section_line_idx = idx
+                break
         
         for line in lines:
             stripped = line.strip()
             # Проверяем, является ли строка нашей переменной (с учетом комментариев)
-            if stripped.startswith(f"{var_name}=") and not stripped.startswith('#'):
-                # Обновляем значение
-                updated_lines.append(f"{var_name}={var_value}\n")
+            if pattern.match(line) and not line.lstrip().startswith('#'):
+                # Если значение содержит пробелы, экранируем кавычками
+                if ' ' in var_value:
+                    # Экранируем кавычки в значении
+                    escaped_value = var_value.replace('"', '\\"')
+                    updated_lines.append(f'{var_name}="{escaped_value}"\n')
+                else:
+                    updated_lines.append(f"{var_name}={var_value}\n")
                 found = True
-            elif stripped.startswith(f"# {var_name}="):
+            elif commented_pattern.match(line):
                 # Если переменная закомментирована, раскомментируем и обновим
-                updated_lines.append(f"{var_name}={var_value}\n")
+                if ' ' in var_value:
+                    escaped_value = var_value.replace('"', '\\"')
+                    updated_lines.append(f'{var_name}="{escaped_value}"\n')
+                else:
+                    updated_lines.append(f"{var_name}={var_value}\n")
                 found = True
             else:
                 updated_lines.append(line)
         
         # Если переменная не найдена, добавляем в конец
         if not found:
-            updated_lines.append(f"\n# RAG Configuration\n")
-            updated_lines.append(f"{var_name}={var_value}\n")
+            # Подготовим строку значения
+            if ' ' in var_value:
+                escaped_value = var_value.replace('"', '\\"')
+                new_line = f'{var_name}="{escaped_value}"\n'
+            else:
+                new_line = f"{var_name}={var_value}\n"
+
+            if is_rag_var and has_rag_section and rag_section_line_idx is not None:
+                # Вставляем сразу после секции RAG (или в конец секции)
+                # Найдём позицию: после последней RAG_* строки следующей за # RAG Configuration
+                insert_at = None
+                for j in range(rag_section_line_idx + 1, len(updated_lines)):
+                    t = updated_lines[j].strip()
+                    if not t or t.startswith("#"):
+                        continue
+                    if not t.startswith("RAG_"):
+                        insert_at = j
+                        break
+                if insert_at is None:
+                    insert_at = len(updated_lines)
+                updated_lines.insert(insert_at, new_line)
+            else:
+                # Добавляем секцию только если её ещё нет
+                if is_rag_var and not has_rag_section:
+                    updated_lines.append("\n# RAG Configuration\n")
+                updated_lines.append(new_line)
         
         # Записываем обратно
         with open(env_file_path, 'w', encoding='utf-8') as f:
@@ -119,7 +170,11 @@ async def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except BadRequest as e:
         error_msg = str(e).lower()
-        if 'button_data_invalid' in error_msg or 'inline keyboard expected' in error_msg or 'message is not modified' in error_msg:
+        # ВАЖНО: "message is not modified" - не ошибка, просто игнорируем
+        if 'message is not modified' in error_msg:
+            return
+        
+        if 'button_data_invalid' in error_msg or 'inline keyboard expected' in error_msg:
             # Старые кнопки или невалидный формат - отправляем новое сообщение
             logger.warning("Не удалось отредактировать сообщение (старые кнопки?), отправляю новое: %s", e)
             try:
@@ -184,21 +239,42 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     user_id = str(query.from_user.id)
-    user = session.query(User).filter_by(telegram_id=user_id).first()
+    username = query.from_user.username if query.from_user else None
+    full_name = getattr(query.from_user, "full_name", None) if query.from_user else None
     
-    if not user or not user.approved:
+    # ВАЖНО: Права пользователя/approved берём только из backend, локальная БД — кэш.
+    backend_user = backend_client.auth_telegram(
+        telegram_id=user_id,
+        username=username,
+        full_name=full_name,
+    )
+    
+    if not backend_user or (not backend_user.get("approved") and backend_user.get("role") != "admin"):
         await safe_edit_message_text(query, "Вы не одобрены для использования бота.")
         return
     
+    role = backend_user.get("role") or "user"
+    approved = bool(backend_user.get("approved", False))
+    
+    # Получаем preferred_* из локальной БД для кэша (если нужно)
+    session = Session()
+    try:
+        user = session.query(User).filter_by(telegram_id=user_id).first()
+        preferred_provider = user.preferred_provider if user else None
+        preferred_model = user.preferred_model if user else None
+        preferred_image_model = getattr(user, "preferred_image_model", None) if user else None
+    finally:
+        session.close()
+    
     # Обработка одобрения/отклонения пользователей (только для админов)
     if data.startswith("approve:") or data.startswith("decline:"):
-        if user_id not in [str(aid) for aid in ADMIN_IDS]:
+        if user_id not in ADMIN_ID_STRINGS:
             return
 
         _, tg_id = data.split(":")
 
         # Получаем список пользователей из backend и ищем по telegram_id
-        users = backend_client.list_users()
+        users = await asyncio.to_thread(backend_client.list_users)
         target = next((u for u in users if str(u.get("telegram_id")) == str(tg_id)), None)
         if not target:
             await safe_edit_message_text(query, "Пользователь не найден в backend.")
@@ -210,7 +286,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data.startswith("approve:"):
-            ok = backend_client.toggle_user_role(int(target_internal_id))
+            ok = await asyncio.to_thread(backend_client.toggle_user_role, int(target_internal_id))
             if ok:
                 await safe_edit_message_text(query, "✅ Пользователь одобрен")
                 try:
@@ -224,7 +300,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await safe_edit_message_text(query, "❌ Не удалось одобрить пользователя через backend.")
         else:
-            ok = backend_client.delete_user(int(target_internal_id))
+            ok = await asyncio.to_thread(backend_client.delete_user, int(target_internal_id))
             if ok:
                 await safe_edit_message_text(query, "❌ Пользователь отклонен")
             else:
@@ -233,7 +309,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Главное меню
     if data == 'main_menu':
-        menu = main_menu(is_admin=(user.role == 'admin'))
+        menu = main_menu(is_admin=(role == 'admin'))
         # main_menu возвращает ReplyKeyboardMarkup, поэтому отправляем новое сообщение
         try:
             await query.message.reply_text("Выберите действие:", reply_markup=menu)
@@ -262,8 +338,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith('provider:'):
         provider_name = data.split(':', 1)[1]
         if ai_manager.set_provider(provider_name):
-            user.preferred_provider = provider_name
-            session.commit()
+            session = Session()
+            try:
+                user_db = session.query(User).filter_by(telegram_id=user_id).first()
+                if user_db:
+                    user_db.preferred_provider = provider_name
+                    session.commit()
+                    preferred_provider = provider_name  # Обновляем локальную переменную
+            finally:
+                session.close()
             
             # Если выбран Ollama, можно дальше выбрать модели в настройках
             if provider_name == 'ollama':
@@ -312,7 +395,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
-            current_model = user.preferred_model or (provider.model if hasattr(provider, 'model') else '')
+            current_model = preferred_model or (provider.model if hasattr(provider, 'model') else '')
             logger.info(f"Текущая модель для текста: {current_model}")
             
             await safe_edit_message_text(
@@ -362,7 +445,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
-            current_model = getattr(user, 'preferred_image_model', '') or (provider.model if hasattr(provider, 'model') else '')
+            current_model = preferred_image_model or (provider.model if hasattr(provider, 'model') else '')
             logger.info(f"Текущая модель для изображений: {current_model}")
             
             await safe_edit_message_text(
@@ -380,18 +463,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if data.startswith('ollama_model:'):
+        # ВАЖНО: Callback_data парсим только через split(':', 1) + явную валидацию payload.
         # Формат: ollama_model:<target>:<model_name> или ollama_model:<target>:hash:<hash>
-        parts = data.split(':', 3)
-        if len(parts) < 3:
+        _, payload = data.split(':', 1)  # payload = "text:llama3" или "text:hash:abcd1234"
+        
+        parts = payload.split(':')
+        if len(parts) < 2:
             await query.answer("Некорректный формат callback_data", show_alert=True)
             return
         
-        target = parts[1]
-        model_identifier = parts[2] if len(parts) > 2 else ''
+        target = parts[0]
         
         # Если используется хеш, получаем модель из сохраненного списка
-        if model_identifier == 'hash' and len(parts) > 3:
-            model_hash = parts[3]
+        if len(parts) >= 3 and parts[1] == 'hash':
+            model_hash = parts[2]
             # Получаем список моделей из context
             models_key = 'ollama_models_text' if target == 'text' else 'ollama_models_image'
             models = context.user_data.get(models_key, [])
@@ -412,21 +497,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("Модель не найдена. Пожалуйста, выберите модель заново.", show_alert=True)
                 return
         else:
-            # Прямое имя модели (для коротких имен)
-            model_name = model_identifier
+            # model_name может содержать ':', поэтому объединяем все части после target
+            model_name = ':'.join(parts[1:])
 
         if not model_name:
             await query.answer("Некорректное имя модели", show_alert=True)
             return
 
-        if target == 'image':
-            user.preferred_image_model = model_name
-            message = f"✅ Модель для изображений изменена на {model_name}"
-        else:
-            user.preferred_model = model_name
-            message = f"✅ Модель для текста изменена на {model_name}"
-
-        session.commit()
+        session = Session()
+        try:
+            user_db = session.query(User).filter_by(telegram_id=user_id).first()
+            if user_db:
+                if target == 'image':
+                    user_db.preferred_image_model = model_name
+                    preferred_image_model = model_name  # Обновляем локальную переменную
+                    message = f"✅ Модель для изображений изменена на {model_name}"
+                else:
+                    user_db.preferred_model = model_name
+                    preferred_model = model_name  # Обновляем локальную переменную
+                    message = f"✅ Модель для текста изменена на {model_name}"
+                session.commit()
+        finally:
+            session.close()
+        
         await safe_edit_message_text(query, message, reply_markup=settings_menu())
         return
     
@@ -568,17 +661,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith('rag_embedding_model:') or data.startswith('rag_rerank_model:'):
         import hashlib
         
+        # ВАЖНО: Callback_data парсим только через split(':', 1) + явную валидацию payload.
         # Формат: rag_embedding_model:model_name или rag_embedding_model:hash:XXXXXXXX
-        parts = data.split(':', 2)
-        model_type = parts[0]
-        
-        if len(parts) < 2:
-            await query.answer("Некорректный формат callback_data", show_alert=True)
-            return
+        prefix, payload = data.split(':', 1)  # prefix = "rag_embedding_model", payload = "model_name" или "hash:XXXXXXXX"
+        model_type = prefix
         
         # Проверяем, используется ли хеш
-        if len(parts) == 3 and parts[1] == 'hash':
-            model_hash = parts[2]
+        if payload.startswith('hash:'):
+            _, model_hash = payload.split(':', 1)
             # Получаем список моделей из context
             models_key = 'rag_embedding_models' if model_type == 'rag_embedding_model' else 'rag_rerank_models'
             models = context.user_data.get(models_key, [])
@@ -598,8 +688,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("Модель не найдена. Пожалуйста, выберите модель заново.", show_alert=True)
                 return
         else:
-            # Прямое имя модели (для коротких имен)
-            model_name = parts[1] if len(parts) > 1 else ''
+            # Прямое имя модели
+            model_name = payload
         
         if not model_name:
             await query.answer("Некорректное имя модели", show_alert=True)
@@ -652,7 +742,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await safe_edit_message_text(query, "🔄 Перезагрузка моделей RAG...\n\nЭто может занять некоторое время.")
 
-            result = backend_client.rag_reload_models()
+            result = await asyncio.to_thread(backend_client.rag_reload_models)
             embedding_ok = bool(result.get("embedding"))
             reranker_ok = bool(result.get("reranker"))
 
@@ -719,8 +809,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Админ-меню
-    if user.role == 'admin':
-        await handle_admin_callbacks(query, context, data, user)
+    if role == 'admin':
+        # Передаём данные пользователя как dict для совместимости
+        user_data = {
+            "telegram_id": user_id,
+            "username": username,
+            "role": role,
+            "preferred_provider": preferred_provider,
+            "preferred_model": preferred_model,
+            "preferred_image_model": preferred_image_model,
+        }
+        await handle_admin_callbacks(query, context, data, user_data)
     else:
         await query.answer("У вас нет прав администратора", show_alert=True)
 
@@ -824,8 +923,12 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
     return InlineKeyboardMarkup(buttons)
 
 
-async def handle_admin_callbacks(query, context, data: str, user: User):
-    """Обработка админских callback'ов"""
+async def handle_admin_callbacks(query, context, data: str, user: dict):
+    """Обработка админских callback'ов
+    
+    ВАЖНО: user - это dict с данными пользователя, не ORM объект.
+    Права пользователя/approved берём только из backend, локальная БД — кэш.
+    """
     
     # Админ-меню
     if data == 'admin_menu':
@@ -835,7 +938,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     # Управление пользователями
     if data == 'admin_users':
         # Показать первую страницу списка пользователей (через backend)
-        users = backend_client.list_users()
+        users = await asyncio.to_thread(backend_client.list_users)
         from html import escape
 
         if not users:
@@ -877,7 +980,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             page = int(data.split(":")[1])
         except (ValueError, IndexError):
             page = 1
-        users = backend_client.list_users()
+        users = await asyncio.to_thread(backend_client.list_users)
         from html import escape
 
         if not users:
@@ -933,13 +1036,13 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             await query.answer("Некорректный идентификатор пользователя", show_alert=True)
             return
 
-        ok = backend_client.toggle_user_role(target_id)
+        ok = await asyncio.to_thread(backend_client.toggle_user_role, target_id)
         if not ok:
             await query.answer("Не удалось изменить роль пользователя (backend)", show_alert=True)
             return
 
         # Перерисуем текущую страницу
-        users = backend_client.list_users()
+        users = await asyncio.to_thread(backend_client.list_users)
         from html import escape
 
         keyboard = _build_users_page_keyboard(users, page)
@@ -987,12 +1090,12 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
             await query.answer("Некорректный идентификатор пользователя", show_alert=True)
             return
 
-        ok = backend_client.delete_user(target_id)
+        ok = await asyncio.to_thread(backend_client.delete_user, target_id)
         if not ok:
             await query.answer("Не удалось удалить пользователя (backend)", show_alert=True)
             return
 
-        users = backend_client.list_users()
+        users = await asyncio.to_thread(backend_client.list_users)
         from html import escape
 
         if not users:
@@ -1038,7 +1141,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     # Управление базами знаний
     if data == 'admin_kb':
         # Теперь список баз знаний получаем из backend-сервиса
-        kbs = backend_client.list_knowledge_bases()
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
         await safe_edit_message_text(query, "📚 Базы знаний:", reply_markup=knowledge_base_menu(kbs))
         return
     
@@ -1050,12 +1153,12 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     if data.startswith('kb_select:'):
         kb_id = int(data.split(':')[1])
         # Получаем список баз знаний и ищем нужную
-        kbs = backend_client.list_knowledge_bases()
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
         kb = next((item for item in kbs if int(item.get("id")) == kb_id), None) if kbs else None
         if kb:
             # Получить количество фрагментов через список источников
             try:
-                sources = backend_client.list_knowledge_sources(kb_id) or []
+                sources = await asyncio.to_thread(backend_client.list_knowledge_sources, kb_id) or []
                 chunks_count = sum(int(src.get("chunks_count", 0)) for src in sources)
             except Exception:
                 chunks_count = 0
@@ -1085,100 +1188,38 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 
                 await safe_edit_message_text(query, f"🔍 Ищу в базе знаний '{name}'...")
                 
-                # Выполняем RAG-запрос напрямую (как в handle_text)
-                try:
-                    from shared.config import RAG_TOP_K, RAG_ENABLE_CITATIONS
-                    top_k_search = RAG_TOP_K
-                    enable_citations = RAG_ENABLE_CITATIONS
-                except ImportError:
-                    top_k_search = 10
-                    enable_citations = True
-                
-                backend_result = backend_client.rag_query(query=pending_query, knowledge_base_id=kb_id, top_k=top_k_search)
-                backend_answer = (backend_result.get("answer") or "").strip()
-                backend_sources = backend_result.get("sources") or []
-                
-                from shared.utils import format_for_telegram_answer, format_text_safe
-                from html import escape
-                from urllib.parse import unquote
+                from shared.utils import strip_html_tags
                 from frontend.templates.buttons import main_menu
+                from frontend.bot_handlers import perform_rag_query_and_render
                 
-                # Получаем пользователя для проверки роли
-                user = None
-                try:
-                    from shared.database import User
-                    tg_id = str(query.from_user.id) if query.from_user else ""
-                    user = session.query(User).filter_by(telegram_id=tg_id).first()
-                except Exception:
-                    pass
+                tg_id = str(query.from_user.id) if query.from_user else ""
+                username = query.from_user.username if query.from_user else None
+                full_name = getattr(query.from_user, "full_name", None) if query.from_user else None
                 
-                if backend_answer:
-                    ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
-                    
-                    sources_html_list: list[str] = []
-                    for idx, s in enumerate(backend_sources, start=1):
-                        source_path = s.get("source_path") or ""
-                        source_type = s.get("source_type") or "unknown"
-                        
-                        if not source_path or ".keep" in source_path.lower():
-                            continue
-                        
-                        is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
-                        
-                        if is_url:
-                            url_for_link = source_path
-                            if "/" in url_for_link:
-                                parts = [p for p in url_for_link.split("/") if p]
-                                title = parts[-1] if parts else url_for_link
-                            else:
-                                title = url_for_link
-                            
-                            title = unquote(title)
-                            if not title or len(title) < 2:
-                                parts = [p for p in url_for_link.split("/") if p]
-                                title = unquote(parts[-2]) if len(parts) > 1 else url_for_link
-                            
-                            title_escaped = escape(title)
-                            url_escaped = escape(url_for_link)
-                            sources_html_list.append(f'{idx}. <a href="{url_escaped}">{title_escaped}</a>')
-                        else:
-                            if "::" in source_path:
-                                file_name = source_path.split("::")[-1]
-                            elif "/" in source_path:
-                                file_name = source_path.split("/")[-1]
-                            else:
-                                file_name = source_path
-                            file_name = unquote(file_name) if "%" in file_name else file_name
-                            file_name_escaped = escape(file_name or "неизвестный источник")
-                            sources_html_list.append(f"{idx}. <code>{file_name_escaped}</code>")
-                    
-                    if sources_html_list:
-                        sources_html = "\n".join(f"• {s}" for s in sources_html_list)
-                        answer_html = (
-                            f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
-                            f"📎 <b>Использованные источники:</b>\n{sources_html}"
-                        )
-                    else:
-                        answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
-                else:
-                    # Fallback на общий ИИ-ответ
-                    from shared.utils import create_prompt_with_language
-                    prompt = create_prompt_with_language(pending_query, None, task="answer")
-                    model = user.preferred_model if user and user.preferred_model else None
-                    provider = user.preferred_provider if user else None
-                    ai_answer = ai_manager.query(prompt, provider_name=provider, model=model)
-                    ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
-                    answer_html = (
-                        f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
-                        f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
-                    )
+                # Берём source-of-truth из backend_user (уже получен в callback_handler),
+                # а preferred_* — из локального кэша (preferred_model/provider переменные выше по стеку)
+                # Здесь user - dict, который мы передали в handle_admin_callbacks
+                user_for_rag = UserContext(
+                    telegram_id=tg_id,
+                    username=username,
+                    full_name=full_name,
+                    role=(user.get("role") or "user"),
+                    approved=True,
+                    preferred_provider=user.get("preferred_provider"),
+                    preferred_model=user.get("preferred_model"),
+                    preferred_image_model=user.get("preferred_image_model"),
+                )
                 
-                menu = main_menu(is_admin=(user.role == 'admin') if user else False)
+                answer_html, has_answer = await perform_rag_query_and_render(
+                    pending_query, kb_id, user_for_rag
+                )
+                
+                menu = main_menu(is_admin=(user_for_rag.role == 'admin') if user_for_rag else False)
                 try:
                     await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
                 except Exception as e:
-                    logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-                    answer_plain = format_text_safe(answer_html)
+                    logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
+                    answer_plain = strip_html_tags(answer_html)
                     await safe_edit_message_text(query, answer_plain, reply_markup=menu, parse_mode=None)
                 return
             
@@ -1354,27 +1395,11 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         page_size = 15  # Кол-во источников на страницу
 
         # Теперь источники берём из backend-сервиса
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote
         from html import escape
+        from shared.utils import normalize_wiki_url_for_display
 
-        def _normalize_wiki_url_for_display(url: str) -> str:
-            """Нормализовать URL вики для отображения (конвертировать export URL в читаемый формат)."""
-            if not url or not url.startswith(("http://", "https://")):
-                return url
-
-            if "/wikis/pages/export" in url:
-                try:
-                    parsed = urlparse(url)
-                    path_parts = parsed.path.split("/wikis")
-                    if len(path_parts) >= 2:
-                        base_path = path_parts[0] + "/wikis"
-                        return f"{parsed.scheme}://{parsed.netloc}{base_path}"
-                except Exception:
-                    pass
-
-            return url
-
-        sources_list = backend_client.list_knowledge_sources(kb_id)
+        sources_list = await asyncio.to_thread(backend_client.list_knowledge_sources, kb_id)
         total_sources = len(sources_list)
         logger.info("[kb_sources] Получено %s источников из backend для kb_id=%s", total_sources, kb_id)
 
@@ -1410,7 +1435,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 if is_url and source_path:
                     url_for_link = source_path
                     # Нормализуем URL для вики (для отображения)
-                    display_path = _normalize_wiki_url_for_display(source_path)
+                    display_path = normalize_wiki_url_for_display(source_path)
 
                     # Извлекаем название из пути для отображения
                     if "/" in url_for_link:
@@ -1565,7 +1590,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
         
         if action == 'kb_delete' and item_id:
             kb_id = int(item_id)
-            ok = backend_client.delete_knowledge_base(kb_id)
+            ok = await asyncio.to_thread(backend_client.delete_knowledge_base, kb_id)
             if ok:
                 await safe_edit_message_text(query, "✅ База знаний удалена!", reply_markup=admin_menu())
             else:
@@ -1598,8 +1623,8 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
 
     if data == 'n8n_test_event':
         payload = {
-            "telegram_id": user.telegram_id,
-            "username": user.username,
+            "telegram_id": user.get("telegram_id"),
+            "username": user.get("username"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "context": "manual_test",
         }
@@ -1611,7 +1636,7 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
     
     # Загрузка документов (общее меню)
     if data == 'admin_upload':
-        kbs = backend_client.list_knowledge_bases()
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
         if not kbs:
             await safe_edit_message_text(query, "Сначала создайте базу знаний!", reply_markup=admin_menu())
         else:
