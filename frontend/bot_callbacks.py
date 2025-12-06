@@ -1076,6 +1076,112 @@ async def handle_admin_callbacks(query, context, data: str, user: User):
                 await load_document_to_kb(query, context, pending, kb_id)
                 return
             
+            # Проверить, есть ли ожидающий запрос для поиска
+            if context.user_data.get('state') == 'waiting_kb_for_query' and 'pending_query' in context.user_data:
+                # Установить базу знаний и выполнить запрос напрямую
+                context.user_data['kb_id'] = kb_id
+                pending_query = context.user_data.pop('pending_query')
+                context.user_data['state'] = None
+                
+                await safe_edit_message_text(query, f"🔍 Ищу в базе знаний '{name}'...")
+                
+                # Выполняем RAG-запрос напрямую (как в handle_text)
+                try:
+                    from shared.config import RAG_TOP_K, RAG_ENABLE_CITATIONS
+                    top_k_search = RAG_TOP_K
+                    enable_citations = RAG_ENABLE_CITATIONS
+                except ImportError:
+                    top_k_search = 10
+                    enable_citations = True
+                
+                backend_result = backend_client.rag_query(query=pending_query, knowledge_base_id=kb_id, top_k=top_k_search)
+                backend_answer = (backend_result.get("answer") or "").strip()
+                backend_sources = backend_result.get("sources") or []
+                
+                from shared.utils import format_for_telegram_answer, format_text_safe
+                from html import escape
+                from urllib.parse import unquote
+                from frontend.templates.buttons import main_menu
+                
+                # Получаем пользователя для проверки роли
+                user = None
+                try:
+                    from shared.database import User
+                    tg_id = str(query.from_user.id) if query.from_user else ""
+                    user = session.query(User).filter_by(telegram_id=tg_id).first()
+                except Exception:
+                    pass
+                
+                if backend_answer:
+                    ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
+                    
+                    sources_html_list: list[str] = []
+                    for idx, s in enumerate(backend_sources, start=1):
+                        source_path = s.get("source_path") or ""
+                        source_type = s.get("source_type") or "unknown"
+                        
+                        if not source_path or ".keep" in source_path.lower():
+                            continue
+                        
+                        is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
+                        
+                        if is_url:
+                            url_for_link = source_path
+                            if "/" in url_for_link:
+                                parts = [p for p in url_for_link.split("/") if p]
+                                title = parts[-1] if parts else url_for_link
+                            else:
+                                title = url_for_link
+                            
+                            title = unquote(title)
+                            if not title or len(title) < 2:
+                                parts = [p for p in url_for_link.split("/") if p]
+                                title = unquote(parts[-2]) if len(parts) > 1 else url_for_link
+                            
+                            title_escaped = escape(title)
+                            url_escaped = escape(url_for_link)
+                            sources_html_list.append(f'{idx}. <a href="{url_escaped}">{title_escaped}</a>')
+                        else:
+                            if "::" in source_path:
+                                file_name = source_path.split("::")[-1]
+                            elif "/" in source_path:
+                                file_name = source_path.split("/")[-1]
+                            else:
+                                file_name = source_path
+                            file_name = unquote(file_name) if "%" in file_name else file_name
+                            file_name_escaped = escape(file_name or "неизвестный источник")
+                            sources_html_list.append(f"{idx}. <code>{file_name_escaped}</code>")
+                    
+                    if sources_html_list:
+                        sources_html = "\n".join(f"• {s}" for s in sources_html_list)
+                        answer_html = (
+                            f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+                            f"📎 <b>Использованные источники:</b>\n{sources_html}"
+                        )
+                    else:
+                        answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
+                else:
+                    # Fallback на общий ИИ-ответ
+                    from shared.utils import create_prompt_with_language
+                    prompt = create_prompt_with_language(pending_query, None, task="answer")
+                    model = user.preferred_model if user and user.preferred_model else None
+                    provider = user.preferred_provider if user else None
+                    ai_answer = ai_manager.query(prompt, provider_name=provider, model=model)
+                    ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
+                    answer_html = (
+                        f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+                        f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
+                    )
+                
+                menu = main_menu(is_admin=(user.role == 'admin') if user else False)
+                try:
+                    await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
+                except Exception as e:
+                    logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
+                    answer_plain = format_text_safe(answer_html)
+                    await safe_edit_message_text(query, answer_plain, reply_markup=menu, parse_mode=None)
+                return
+            
             await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
         return
     

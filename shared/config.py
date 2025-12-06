@@ -72,6 +72,7 @@ RAG_TOP_K = int(os.getenv("RAG_TOP_K", "12"))  # Количество лучши
 RAG_CONTEXT_LENGTH = int(os.getenv("RAG_CONTEXT_LENGTH", "1500"))  # Максимальная длина контекста на источник в символах
 RAG_ENABLE_CITATIONS = os.getenv("RAG_ENABLE_CITATIONS", "true").lower() == "true"  # Включить inline citations
 RAG_MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.15"))  # Порог уверенности для ответа (если есть reranker)
+RAG_DEBUG_RETURN_CHUNKS = os.getenv("RAG_DEBUG_RETURN_CHUNKS", "false").lower() == "true"  # Возвращать debug информацию о чанках
 
 # n8n Integration
 # Если N8N_BASE_URL не установлен или пустой, считаем что n8n отключен

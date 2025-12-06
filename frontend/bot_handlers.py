@@ -216,6 +216,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == 'waiting_query':
         # Поиск в базе знаний через backend (RAG API)
         query = update.message.text
+        
+        # Проверка: KB должна быть выбрана
+        kb_id = context.user_data.get('kb_id')
+        if not kb_id:
+            # Показать меню выбора KB
+            kbs = backend_client.list_knowledge_bases()
+            if not kbs:
+                await update.message.reply_text(
+                    "❌ Нет доступных баз знаний. Создайте базу знаний в админ-панели.",
+                    reply_markup=main_menu(is_admin=(user.role == 'admin'))
+                )
+                context.user_data['state'] = None
+                return
+            
+            # Сохранить запрос для повторного выполнения после выбора KB
+            context.user_data['pending_query'] = query
+            context.user_data['state'] = 'waiting_kb_for_query'
+            await update.message.reply_text(
+                "📚 Выберите базу знаний для поиска:",
+                reply_markup=knowledge_base_menu(kbs)
+            )
+            return
+        
         # Получить настройки RAG из конфига
         try:
             from shared.config import RAG_TOP_K
@@ -223,17 +246,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ImportError:
             top_k_search = 10
 
-        backend_result = backend_client.rag_query(query=query, top_k=top_k_search)
+        backend_result = backend_client.rag_query(query=query, knowledge_base_id=kb_id, top_k=top_k_search)
         backend_answer = (backend_result.get("answer") or "").strip()
         backend_sources = backend_result.get("sources") or []
+        debug_chunks = backend_result.get("debug_chunks")  # Для debug mode
 
         logger.info(
-            "Поиск в БЗ (backend): user=%s, query=%r, has_answer=%s, sources=%s",
+            "Поиск в БЗ (backend): user=%s, query=%r, kb_id=%s, has_answer=%s, sources=%s",
             user.telegram_id,
             query,
+            kb_id,
             bool(backend_answer),
             len(backend_sources),
         )
+        
+        # Логирование debug_chunks если включен debug mode
+        if debug_chunks:
+            logger.info("Debug chunks (top-5): %s", [
+                {
+                    "chunk_kind": c.get("chunk_kind"),
+                    "section_path": c.get("section_path"),
+                    "score": c.get("score"),
+                    "rerank_score": c.get("rerank_score"),
+                }
+                for c in debug_chunks
+            ])
 
         from shared.utils import format_for_telegram_answer
         from html import escape
@@ -590,215 +627,149 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ))
         session.commit()
         
-        # Получить настройки RAG из конфига
-        try:
-            from shared.config import RAG_TOP_K, RAG_MAX_CANDIDATES
-            top_k_search = RAG_TOP_K
-            max_candidates = RAG_MAX_CANDIDATES
-        except ImportError:
-            top_k_search = 10
-            max_candidates = 100
-        
-        # Увеличиваем количество результатов для лучшего поиска
-        # Reranker обработает больше кандидатов для лучшей релевантности
-        search_top_k = min(top_k_search * 2, max_candidates)
-
-        # Поиск теперь выполняется через backend RAG API
-        rag_result = backend_client.rag_query(query, knowledge_base_id=None, top_k=search_top_k)
-        results = rag_result.get("chunks", []) if isinstance(rag_result, dict) else []
-        
-        # Фильтруем пустые файлы и файлы .keep
-        filtered_results = []
-        for r in results:
-            content = r.get('content', '').strip()
-            source_path = r.get('source_path', '')
-            # Пропускаем пустые файлы и файлы .keep
-            if not content or len(content) < 10:
-                continue
-            if '.keep' in source_path.lower() or source_path.endswith('/.keep'):
-                continue
-            filtered_results.append(r)
-        
-        # Если после фильтрации ничего не осталось, проверяем были ли вообще результаты
-        if not filtered_results:
-            # Если результатов нет, не используем общие знания
-            # Попробуем найти похожие слова/темы из базы знаний
-            similar_suggestions = []
-            if results:
-                # Берем первые несколько результатов для предложения похожих тем
-                for r in results[:5]:
-                    source_path = r.get('source_path', '')
-                    meta = r.get('metadata') or {}
-                    title = meta.get('title') or source_path or 'Без названия'
-                    if source_path and '.keep' not in source_path.lower():
-                        similar_suggestions.append({
-                            'title': title,
-                            'source_path': source_path
-                        })
+        # Проверка: KB должна быть выбрана
+        kb_id = context.user_data.get('kb_id')
+        if not kb_id:
+            # Показать меню выбора KB
+            kbs = backend_client.list_knowledge_bases()
+            if not kbs:
+                await update.message.reply_text(
+                    "❌ Нет доступных баз знаний. Создайте базу знаний в админ-панели.",
+                    reply_markup=main_menu(is_admin=(user.role == 'admin'))
+                )
+                return
             
-            if similar_suggestions:
-                # Формируем список похожих тем
-                suggestions_text = "Возможно, вас интересуют следующие темы из базы знаний:\n\n"
-                for i, sug in enumerate(similar_suggestions[:5], 1):
-                    display_url = _normalize_wiki_url_for_display(sug['source_path']) if sug['source_path'] else ''
-                    from html import escape
-                    title_escaped = escape(sug['title'])
-                    if display_url and display_url.startswith(('http://', 'https://')):
-                        suggestions_text += f"• {i}. <a href=\"{display_url}\">{title_escaped}</a>\n"
-                    else:
-                        suggestions_text += f"• {i}. <b>{title_escaped}</b>\n"
-                
-                answer = f"❌ <b>В базе знаний не найдено точного ответа на ваш вопрос.</b>\n\n{suggestions_text}"
-            else:
-                answer = "❌ <b>В базе знаний не найдено информации по вашему запросу.</b>\n\nПопробуйте переформулировать вопрос или загрузить соответствующие документы в базу знаний."
-            
-            menu = main_menu(is_admin=(user.role == 'admin'))
-            try:
-                await update.message.reply_text(answer, reply_markup=menu, parse_mode='HTML')
-            except Exception as e:
-                logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-                answer_plain = format_text_safe(answer)
-                await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
+            # Сохранить запрос для повторного выполнения после выбора KB
+            context.user_data['pending_query'] = query
+            context.user_data['state'] = 'waiting_kb_for_query'
+            await update.message.reply_text(
+                "📚 Выберите базу знаний для поиска:",
+                reply_markup=knowledge_base_menu(kbs)
+            )
             return
         
-        if filtered_results:
-            # Получить настройки RAG из конфига
-            try:
-                from shared.config import RAG_TOP_K, RAG_CONTEXT_LENGTH, RAG_ENABLE_CITATIONS
-                top_k_for_context = RAG_TOP_K
-                context_length = RAG_CONTEXT_LENGTH
-                enable_citations = RAG_ENABLE_CITATIONS
-            except ImportError:
-                top_k_for_context = 8
-                context_length = 1200
-                enable_citations = True
-            
-            context_parts = []
-            sources = []
-            # Используем до top_k лучших результатов после фильтрации для лучшей релевантности
-            for idx, r in enumerate(filtered_results[:top_k_for_context], start=1):
-                source_type = r.get('source_type') or 'unknown'
-                source_path = r.get('source_path') or ''
-                meta = r.get('metadata') or {}
-                title = meta.get('title') or source_path or 'Без названия'
-                doc_version = meta.get('doc_version')
-                language = meta.get('language')
-                updated_at = meta.get('source_updated_at')
-                
-                # Формируем source_id для citation (имя файла без расширения или путь)
-                if source_path and '.keep' not in source_path.lower():
-                    # Извлекаем имя файла для source_id
-                    if '::' in source_path:
-                        # Для архивов: берем имя файла внутри архива
-                        source_id = source_path.split('::')[-1]
-                    elif '/' in source_path:
-                        # Для URL или путей: берем последний сегмент
-                        source_id = source_path.split('/')[-1]
+        # Получить настройки RAG из конфига
+        try:
+            from shared.config import RAG_TOP_K, RAG_ENABLE_CITATIONS
+            top_k_search = RAG_TOP_K
+            enable_citations = RAG_ENABLE_CITATIONS
+        except ImportError:
+            top_k_search = 10
+            enable_citations = True
+
+        # Поиск через backend RAG API (единый источник правды)
+        backend_result = backend_client.rag_query(query=query, knowledge_base_id=kb_id, top_k=top_k_search)
+        backend_answer = (backend_result.get("answer") or "").strip()
+        backend_sources = backend_result.get("sources") or []
+        debug_chunks = backend_result.get("debug_chunks")  # Для debug mode
+
+        logger.info(
+            "Поиск в БЗ (backend): user=%s, query=%r, kb_id=%s, has_answer=%s, sources=%s",
+            user.telegram_id,
+            query,
+            kb_id,
+            bool(backend_answer),
+            len(backend_sources),
+        )
+        
+        # Логирование debug_chunks если включен debug mode
+        if debug_chunks:
+            logger.info("Debug chunks (top-5): %s", [
+                {
+                    "chunk_kind": c.get("chunk_kind"),
+                    "section_path": c.get("section_path"),
+                    "score": c.get("score"),
+                    "rerank_score": c.get("rerank_score"),
+                }
+                for c in debug_chunks
+            ])
+
+        from shared.utils import format_for_telegram_answer
+        from html import escape
+        from urllib.parse import unquote
+
+        if backend_answer:
+            # Формируем HTML-ответ на основе markdown от backend
+            # format_for_telegram_answer() применяет clean_citations, format_commands_in_text и format_markdown_to_html
+            ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
+
+            # Формируем список источников из backend_sources
+            sources_html_list: list[str] = []
+            for idx, s in enumerate(backend_sources, start=1):
+                source_path = s.get("source_path") or ""
+                source_type = s.get("source_type") or "unknown"
+
+                if not source_path or ".keep" in source_path.lower():
+                    continue
+
+                is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
+
+                if is_url:
+                    url_for_link = source_path
+
+                    # Извлекаем читаемый заголовок из URL
+                    if "/" in url_for_link:
+                        parts = [p for p in url_for_link.split("/") if p]
+                        if parts:
+                            title = parts[-1]
+                        else:
+                            title = url_for_link
                     else:
-                        source_id = source_path
-                    # Убираем расширение для более читаемого citation
-                    source_id = source_id.rsplit('.', 1)[0] if '.' in source_id else source_id
-                else:
-                    source_id = title.replace(' ', '_').lower()[:50]  # Fallback на title
-                
-                content_preview = r['content'][:context_length]
-                if len(r['content']) > context_length:
-                    content_preview += "..."
+                        title = url_for_link
 
-                # Формируем контекст с тегом <source_id> для inline citations
-                if enable_citations:
-                    context_parts.append(
-                        f"<source_id>{source_id}</source_id>\n{content_preview}"
-                    )
-                else:
-                    header = f"=== Источник {idx}: {title} ==="
-                    context_parts.append(
-                        f"{header}\n{content_preview}"
-                    )
+                    title = unquote(title)
+                    if not title or len(title) < 2:
+                        parts = [p for p in url_for_link.split("/") if p]
+                        if len(parts) > 1:
+                            title = unquote(parts[-2])
+                        else:
+                            title = url_for_link
 
-                # Сохраняем информацию об источнике для формирования HTML списка
-                sources.append({
-                    'title': title,
-                    'source_path': source_path,
-                    'index': idx
-                })
-            
-            context_text = "\n\n".join(context_parts)
-            prompt = create_prompt_with_language(
-                query,
-                context_text,
-                task="answer",
-                enable_citations=enable_citations,
-            )
+                    title_escaped = escape(title)
+                    url_escaped = escape(url_for_link)
+                    sources_html_list.append(f'{idx}. <a href="{url_escaped}">{title_escaped}</a>')
+                else:
+                    # Не-URL источники показываем как текст/имя файла
+                    if "::" in source_path:
+                        file_name = source_path.split("::")[-1]
+                    elif "/" in source_path:
+                        file_name = source_path.split("/")[-1]
+                    else:
+                        file_name = source_path
+                    file_name = unquote(file_name) if "%" in file_name else file_name
+                    file_name_escaped = escape(file_name or "неизвестный источник")
+                    sources_html_list.append(f"{idx}. <code>{file_name_escaped}</code>")
+
+            if sources_html_list:
+                sources_html = "\n".join(f"• {s}" for s in sources_html_list)
+                answer_html = (
+                    f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+                    f"📎 <b>Использованные источники:</b>\n{sources_html}"
+                )
+            else:
+                answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
+        else:
+            # Если backend не нашёл релевантных фрагментов, fallback на общий ИИ-ответ
+            prompt = create_prompt_with_language(query, None, task="answer")
             model = user.preferred_model if user.preferred_model else None
             ai_answer = ai_manager.query(
-                prompt,
-                provider_name=user.preferred_provider,
-                model=model,
+                prompt, provider_name=user.preferred_provider, model=model
             )
-            
-            # Форматируем ответ с HTML для лучшего форматирования (используем единый пайплайн)
-            from shared.utils import format_for_telegram_answer
+            # Используем format_for_telegram_answer() для единообразного форматирования
             ai_answer_html = format_for_telegram_answer(ai_answer, enable_citations=False)
-            
-            # Формируем HTML список источников с ссылками
-            # Группируем по уникальным URL для устранения дубликатов
-            seen_urls = set()
-            sources_html_parts = []
-            source_counter = 1
-            
-            for source_data in sources:
-                idx = source_data['index']
-                title = source_data['title']
-                source_path = source_data['source_path']
-                
-                # Нормализуем URL для вики
-                display_url = _normalize_wiki_url_for_display(source_path) if source_path else source_path
-                
-                # Используем полный URL как ключ для группировки
-                url_key = display_url if display_url else source_path
-                
-                # Пропускаем дубликаты
-                if url_key in seen_urls:
-                    continue
-                seen_urls.add(url_key)
-                
-                # Экранируем title для HTML
-                from html import escape
-                title_escaped = escape(title)
-                
-                if display_url and display_url.startswith(('http://', 'https://')):
-                    # Создаем HTML ссылку с полным URL и названием источника
-                    sources_html_parts.append(f"• {source_counter}. <a href=\"{display_url}\">{title_escaped}</a>")
-                else:
-                    # Без ссылки (файл) - показываем имя файла
-                    if source_path:
-                        if '::' in source_path:
-                            file_name = source_path.split('::')[-1]
-                        elif '/' in source_path:
-                            file_name = source_path.split('/')[-1]
-                        else:
-                            file_name = source_path
-                        file_name_escaped = escape(file_name)
-                        sources_html_parts.append(f"• {source_counter}. <b>{title_escaped}</b> (<code>{file_name_escaped}</code>)")
-                    else:
-                        sources_html_parts.append(f"• {source_counter}. <b>{title_escaped}</b>")
-                
-                source_counter += 1
-            
-            sources_html = "\n".join(sources_html_parts)
-            answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n📎 <b>Использованные источники:</b>\n{sources_html}"
-            answer = answer_html
-        # Этот блок больше не нужен, так как мы обрабатываем отсутствие результатов выше
-
+            answer_html = (
+                f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n"
+                f"<i>(В базе знаний ничего не найдено, ответ основан на общих знаниях)</i>"
+            )
+        
         menu = main_menu(is_admin=(user.role == 'admin'))
         # Используем HTML для форматирования, но с безопасной обработкой ошибок
         try:
-            await update.message.reply_text(answer, reply_markup=menu, parse_mode='HTML')
+            await update.message.reply_text(answer_html, reply_markup=menu, parse_mode='HTML')
         except Exception as e:
             # Если HTML не работает, отправляем без форматирования
             logger.warning("Ошибка форматирования HTML, отправляю без форматирования: %s", e)
-            answer_plain = format_text_safe(answer)
+            answer_plain = format_text_safe(answer_html)
             await update.message.reply_text(answer_plain, reply_markup=menu, parse_mode=None)
 
 

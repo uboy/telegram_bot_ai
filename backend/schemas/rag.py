@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from pydantic import BaseModel
 
@@ -19,5 +19,6 @@ class RAGSource(BaseModel):
 class RAGAnswer(BaseModel):
     answer: str
     sources: List[RAGSource] = []
+    debug_chunks: Optional[List[Dict]] = None  # Для debug mode: первые N чанков с метаданными
 
 
