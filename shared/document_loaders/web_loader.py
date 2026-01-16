@@ -6,13 +6,13 @@ import requests
 import time
 from typing import List, Dict
 from .base import DocumentLoader
-from .chunking import split_text_structurally
+from .chunking import split_text_structurally, split_text_into_chunks
 
 
 class WebLoader(DocumentLoader):
     """Загрузчик для веб-страниц"""
     
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить веб-страницу с повторными попытками при таймауте"""
         try:
             from bs4 import BeautifulSoup
@@ -70,6 +70,35 @@ class WebLoader(DocumentLoader):
             if page_title:
                 text = f"{page_title}\n\n{text}"
 
+            chunking_mode = (options or {}).get("chunking_mode") or "section"
+            max_chars = (options or {}).get("max_chars")
+            overlap = (options or {}).get("overlap")
+            try:
+                max_chars = int(max_chars) if max_chars is not None else None
+            except (ValueError, TypeError):
+                max_chars = None
+            try:
+                overlap = int(overlap) if overlap is not None else None
+            except (ValueError, TypeError):
+                overlap = None
+
+            if chunking_mode == "full":
+                content = text
+                if max_chars and max_chars > 0 and len(content) > max_chars:
+                    content = content[:max_chars]
+                return [{
+                    "content": content,
+                    "title": page_title or source,
+                    "metadata": {
+                        "type": "web",
+                        "url": source,
+                        "page_title": page_title,
+                        "section_title": page_title,
+                        "chunk_kind": "full_page",
+                        "truncated": bool(max_chars and len(text) > max_chars),
+                    },
+                }]
+
             sections: List[Dict[str, str]] = []
             current_section = ""
             current_title = page_title or ""
@@ -95,8 +124,12 @@ class WebLoader(DocumentLoader):
             for sec in sections:
                 sec_text = sec.get("content") or ""
                 sec_title = sec.get("title") or ""
-                
-                sec_chunks = split_text_structurally(sec_text)
+
+                if chunking_mode == "fixed":
+                    sec_chunks = split_text_into_chunks(sec_text, max_chars=max_chars, overlap=overlap)
+                else:
+                    sec_chunks = split_text_structurally(sec_text, max_chars=max_chars, overlap=overlap)
+
                 for idx, part in enumerate(sec_chunks, start=1):
                     title = sec_title or f"Фрагмент {idx}"
                     if len(sec_chunks) > 1:
@@ -104,7 +137,13 @@ class WebLoader(DocumentLoader):
                     chunks.append({
                         "content": part,
                         "title": title,
-                        "metadata": {"type": "web", "url": source, "page_title": page_title, "section_title": sec_title},
+                        "metadata": {
+                            "type": "web",
+                            "url": source,
+                            "page_title": page_title,
+                            "section_title": sec_title,
+                            "chunk_kind": "text",
+                        },
                     })
             
             return chunks if chunks else [

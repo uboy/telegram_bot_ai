@@ -184,7 +184,11 @@ def _restore_wiki_url_from_path(file_path: str, wiki_root: str) -> str:
         return wiki_root
 
 
-def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
+def load_wiki_from_git(
+    wiki_url: str,
+    knowledge_base_id: int,
+    loader_options: dict | None = None,
+) -> Dict[str, int]:
     """
     Загрузить вики Gitee через git-репозиторий и восстановить ссылки на оригинальные страницы.
     
@@ -240,7 +244,7 @@ def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
                 
                 # Загрузить содержимое файла
                 try:
-                    chunks = document_loader_manager.load_document(full_path, "md")
+                    chunks = document_loader_manager.load_document(full_path, "md", options=loader_options)
                 except Exception as e:
                     logger.warning(f"[wiki-git] Ошибка загрузки файла {rel_path}: {e}")
                     continue
@@ -290,7 +294,12 @@ def load_wiki_from_git(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
             logger.warning(f"[wiki-git] Не удалось удалить временную директорию {temp_dir}: {e}")
 
 
-def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> Dict[str, any]:
+def load_wiki_from_zip(
+    zip_path: str,
+    wiki_url: str,
+    knowledge_base_id: int,
+    loader_options: dict | None = None,
+) -> Dict[str, any]:
     """
     Загрузить вики Gitee из ZIP архива и восстановить ссылки на оригинальные страницы.
     
@@ -351,7 +360,7 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
                     wiki_page_url = _restore_wiki_url_from_path(file_name, wiki_root)
                     
                     # Загрузить содержимое файла
-                    chunks = document_loader_manager.load_document(temp_file_path, "md")
+                    chunks = document_loader_manager.load_document(temp_file_path, "md", options=loader_options)
                     
                     # Фильтруем пустые чанки
                     chunks = [chunk for chunk in chunks if chunk.get('content', '').strip() and len(chunk.get('content', '').strip()) > 10]
@@ -411,7 +420,11 @@ def load_wiki_from_zip(zip_path: str, wiki_url: str, knowledge_base_id: int) -> 
         raise
 
 
-async def load_wiki_from_git_async(wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
+async def load_wiki_from_git_async(
+    wiki_url: str,
+    knowledge_base_id: int,
+    loader_options: dict | None = None,
+) -> Dict[str, int]:
     """
     Асинхронная обёртка для использования из Telegram-хэндлеров.
     """
@@ -422,10 +435,16 @@ async def load_wiki_from_git_async(wiki_url: str, knowledge_base_id: int) -> Dic
         load_wiki_from_git,
         wiki_url,
         knowledge_base_id,
+        loader_options,
     )
 
 
-async def load_wiki_from_zip_async(zip_path: str, wiki_url: str, knowledge_base_id: int) -> Dict[str, int]:
+async def load_wiki_from_zip_async(
+    zip_path: str,
+    wiki_url: str,
+    knowledge_base_id: int,
+    loader_options: dict | None = None,
+) -> Dict[str, int]:
     """
     Асинхронная обёртка для использования из Telegram-хэндлеров.
     """
@@ -437,4 +456,5 @@ async def load_wiki_from_zip_async(zip_path: str, wiki_url: str, knowledge_base_
         zip_path,
         wiki_url,
         knowledge_base_id,
+        loader_options,
     )

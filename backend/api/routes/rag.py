@@ -10,6 +10,8 @@ from shared.rag_system import rag_system  # type: ignore
 from shared.ai_providers import ai_manager  # type: ignore
 from shared.utils import create_prompt_with_language  # type: ignore
 from shared.logging_config import logger  # type: ignore
+from shared.database import KnowledgeBase  # type: ignore
+from shared.kb_settings import normalize_kb_settings  # type: ignore
 
 
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -50,6 +52,20 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             enable_citations = True
             min_rerank_score = 0.0
             debug_return_chunks = False
+
+        # Настройки KB (single-page и контекст)
+        kb_settings = {}
+        if kb_id:
+            kb = db.query(KnowledgeBase).filter_by(id=kb_id).first()
+            if kb:
+                kb_settings = normalize_kb_settings(getattr(kb, "settings", None))
+        rag_settings = (kb_settings or {}).get("rag") or {}
+        single_page_mode = bool(rag_settings.get("single_page_mode", False))
+        single_page_top_k = int(rag_settings.get("single_page_top_k", top_k_for_context))
+        full_page_multiplier = int(rag_settings.get("full_page_context_multiplier", 5))
+
+        if single_page_mode:
+            top_k_for_context = min(top_k_for_context, max(1, single_page_top_k))
 
         # Поиск кандидатов в RAG (dense + keyword + optional rerank)
         logger.debug("RAG query: query=%r, kb_id=%s, top_k=%s", payload.query, kb_id, top_k_search)
@@ -103,7 +119,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 content = r.get("content") or ""
                 
                 # Правило обрезки в зависимости от chunk_kind
-                if chunk_kind == "code":
+                if chunk_kind in ("code", "code_file"):
                     # Для code-чанков не обрезаем или обрезаем очень мягко (context_length * 3)
                     max_length = context_length * 3
                     if len(content) > max_length:
@@ -115,6 +131,16 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                         else:
                             # Если не нашли, обрезаем по max_length, но не добавляем "..."
                             content_preview = content[:max_length]
+                    else:
+                        content_preview = content
+                elif chunk_kind in ("full_page", "full_doc"):
+                    max_length = context_length * max(1, full_page_multiplier)
+                    if len(content) > max_length:
+                        cut_point = content.rfind("\n", 0, max_length)
+                        if cut_point > max_length * 0.8:
+                            content_preview = content[:cut_point] + "..."
+                        else:
+                            content_preview = content[:max_length] + "..."
                     else:
                         content_preview = content
                 elif chunk_kind == "list":

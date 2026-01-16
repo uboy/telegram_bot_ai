@@ -9,7 +9,7 @@ from .base import DocumentLoader
 class ImageLoader(DocumentLoader):
     """Загрузчик для изображений (для мультимодальной обработки)"""
     
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить изображение (вернет путь к файлу для обработки)"""
         return [{
             'content': source,

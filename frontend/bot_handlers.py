@@ -7,7 +7,7 @@ import tempfile
 import hashlib
 from datetime import datetime, timezone
 from typing import Optional, Tuple
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from shared.database import Session, User, Message, KnowledgeBase, KnowledgeImportLog
 from shared.logging_config import logger
@@ -521,8 +521,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = update.message.text
         kb_id = context.user_data.get('kb_id')
         if kb_id:
-            logger.info("Загрузка одной веб-страницы в БЗ: kb_id=%s, url=%s, user=%s", kb_id, url, user.telegram_id)
-            await load_web_page(update, context, url, kb_id)
+            settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
+            settings = settings_resp.get("settings") if isinstance(settings_resp, dict) else {}
+            prompt_ingest = (settings.get("ui") or {}).get("prompt_on_ingest", True)
+            if prompt_ingest:
+                context.user_data["pending_ingest"] = {"kind": "web", "url": url, "kb_id": kb_id}
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Целиком", callback_data=f"ingest_chunking:{kb_id}:web:full")],
+                    [InlineKeyboardButton("По заголовкам", callback_data=f"ingest_chunking:{kb_id}:web:section")],
+                    [InlineKeyboardButton("Фикс. размер", callback_data=f"ingest_chunking:{kb_id}:web:fixed")],
+                ])
+                await update.message.reply_text(
+                    "Как разбивать страницу перед индексированием?",
+                    reply_markup=keyboard,
+                )
+            else:
+                logger.info("Загрузка одной веб-страницы в БЗ: kb_id=%s, url=%s, user=%s", kb_id, url, user.telegram_id)
+                await load_web_page(update, context, url, kb_id)
         context.user_data['state'] = None
     
     elif state == 'waiting_wiki_root':
@@ -536,6 +551,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=admin_menu(),
             )
             context.user_data['state'] = None
+            return
+
+        settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
+        settings = settings_resp.get("settings") if isinstance(settings_resp, dict) else {}
+        prompt_ingest = (settings.get("ui") or {}).get("prompt_on_ingest", True)
+        if prompt_ingest:
+            context.user_data["pending_ingest"] = {"kind": "wiki", "url": wiki_url, "kb_id": kb_id}
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Целиком", callback_data=f"ingest_chunking:{kb_id}:wiki:full")],
+                [InlineKeyboardButton("По заголовкам", callback_data=f"ingest_chunking:{kb_id}:wiki:section")],
+                [InlineKeyboardButton("Фикс. размер", callback_data=f"ingest_chunking:{kb_id}:wiki:fixed")],
+            ])
+            await update.message.reply_text(
+                "Как разбивать страницы вики перед индексированием?",
+                reply_markup=keyboard,
+            )
+            context.user_data['state'] = None
+            context.user_data.pop('kb_id_for_wiki', None)
             return
 
         await update.message.reply_text(
@@ -609,6 +642,80 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
         context.user_data.pop('kb_id_for_wiki', None)
         
+    elif state == 'waiting_code_path':
+        code_path = (update.message.text or "").strip()
+        kb_id = context.user_data.get('kb_id_for_code')
+        if not kb_id:
+            await update.message.reply_text(
+                "Не выбрана база знаний для индексации кода.",
+                reply_markup=admin_menu(),
+            )
+            context.user_data['state'] = None
+            return
+
+        await update.message.reply_text("?? Индексация кода началась. Это может занять время.")
+        try:
+            tg_id = str(update.effective_user.id) if update.effective_user else ""
+            username = update.effective_user.username if update.effective_user else ""
+            stats = await asyncio.to_thread(
+                backend_client.ingest_codebase_path,
+                kb_id=kb_id,
+                path=code_path,
+                telegram_id=tg_id or None,
+                username=username or None,
+            )
+            text = (
+                "? Индексация кода завершена.\n\n"
+                f"Корень: {stats.get('root', code_path)}\n"
+                f"Файлов обработано: {stats.get('files_processed', 0)}\n"
+                f"Файлов пропущено: {stats.get('files_skipped', 0)}\n"
+                f"Файлов обновлено: {stats.get('files_updated', 0)}\n"
+                f"Добавлено фрагментов: {stats.get('chunks_added', 0)}"
+            )
+            await update.message.reply_text(text, reply_markup=admin_menu())
+        except Exception as e:
+            await update.message.reply_text(f"? Ошибка индексации кода: {str(e)}", reply_markup=admin_menu())
+        finally:
+            context.user_data['state'] = None
+            context.user_data.pop('kb_id_for_code', None)
+
+    elif state == 'waiting_code_git':
+        git_url = (update.message.text or "").strip()
+        kb_id = context.user_data.get('kb_id_for_code')
+        if not kb_id:
+            await update.message.reply_text(
+                "Не выбрана база знаний для индексации кода.",
+                reply_markup=admin_menu(),
+            )
+            context.user_data['state'] = None
+            return
+
+        await update.message.reply_text("?? Индексация кода из git началась. Это может занять время.")
+        try:
+            tg_id = str(update.effective_user.id) if update.effective_user else ""
+            username = update.effective_user.username if update.effective_user else ""
+            stats = await asyncio.to_thread(
+                backend_client.ingest_codebase_git,
+                kb_id=kb_id,
+                git_url=git_url,
+                telegram_id=tg_id or None,
+                username=username or None,
+            )
+            text = (
+                "? Индексация кода завершена.\n\n"
+                f"Корень: {stats.get('root', git_url)}\n"
+                f"Файлов обработано: {stats.get('files_processed', 0)}\n"
+                f"Файлов пропущено: {stats.get('files_skipped', 0)}\n"
+                f"Файлов обновлено: {stats.get('files_updated', 0)}\n"
+                f"Добавлено фрагментов: {stats.get('chunks_added', 0)}"
+            )
+            await update.message.reply_text(text, reply_markup=admin_menu())
+        except Exception as e:
+            await update.message.reply_text(f"? Ошибка индексации кода: {str(e)}", reply_markup=admin_menu())
+        finally:
+            context.user_data['state'] = None
+            context.user_data.pop('kb_id_for_code', None)
+
     elif state == 'waiting_kb_name':
         # Создание базы знаний
         kb_name = update.message.text

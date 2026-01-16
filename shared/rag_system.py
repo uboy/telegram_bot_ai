@@ -678,6 +678,26 @@ class RAGSystem:
         import re
         # Токенизация запроса для использования в how-to бустах
         query_words = re.findall(r'\w+', query.lower())
+        query_lower = query.lower()
+
+        def compute_source_boost(candidate: Dict) -> float:
+            tokens = [t for t in query_words if len(t) >= 3]
+            if not tokens:
+                return 0.0
+            source_path = (candidate.get("source_path") or "").lower()
+            metadata = candidate.get("metadata") or {}
+            doc_title = (metadata.get("doc_title") or metadata.get("title") or "").lower()
+            section_path = (metadata.get("section_path") or "").lower()
+            boost = 0.0
+            if source_path and any(t in source_path for t in tokens):
+                boost += 0.08
+            if doc_title and any(t in doc_title for t in tokens):
+                boost += 0.06
+            if section_path and any(t in section_path for t in tokens):
+                boost += 0.04
+            if source_path and query_lower in source_path:
+                boost += 0.1
+            return min(boost, 0.25)
         
         # Если эмбеддинги недоступны – используем только упрощённый поиск
         if not HAS_EMBEDDINGS or not self.encoder:
@@ -737,7 +757,7 @@ class RAGSystem:
                 similarity = float(scores[0][i])  # Это уже cosine similarity (inner product, может быть от -1 до 1)
                 if is_howto_query:
                     chunk_kind = metadata.get("chunk_kind", "text")
-                    if chunk_kind in ("code", "list"):
+                    if chunk_kind in ("code", "code_file", "list"):
                         similarity *= 1.5  # Буст для code/list в how-to режиме
                     
                     # Буст за совпадение в section_path
@@ -788,8 +808,11 @@ class RAGSystem:
                 pairs = [[query, c.get("content", "")] for c in merged]
                 scores = self.reranker.predict(pairs)
 
-                scored = list(zip(merged, scores))
-                scored.sort(key=lambda x: x[1], reverse=True)
+                scored = []
+                for cand, score in zip(merged, scores):
+                    boost = compute_source_boost(cand)
+                    scored.append((cand, float(score), boost, float(score) + boost))
+                scored.sort(key=lambda x: x[3], reverse=True)
                 top = scored[: top_k]
 
                 logger.debug(
@@ -805,7 +828,7 @@ class RAGSystem:
                     )
 
                 results = []
-                for cand, score in top:
+                for cand, score, boost, _ in top:
                     results.append(
                         {
                             "content": cand.get("content", ""),
@@ -814,6 +837,7 @@ class RAGSystem:
                             "source_path": cand.get("source_path"),
                             "distance": float(cand.get("distance", 0.0)),
                             "rerank_score": float(score),
+                            "source_boost": float(boost),
                             "origin": cand.get("origin"),
                         }
                     )
@@ -832,17 +856,22 @@ class RAGSystem:
             def sort_key_howto(c):
                 metadata = c.get("metadata") or {}
                 chunk_kind = metadata.get("chunk_kind", "text")
-                is_code_or_list = 0 if chunk_kind in ("code", "list") else 1  # code/list = 0 (выше)
+                is_code_or_list = 0 if chunk_kind in ("code", "code_file", "list") else 1  # code/list = 0 (выше)
                 origin_priority = 0 if c.get("origin") == "bm25" else 1  # bm25 = 0 (выше), dense = 1
                 distance = float(c.get("distance", float("inf")))
-                return (is_code_or_list, origin_priority, distance)
+                boost = compute_source_boost(c)
+                return (is_code_or_list, origin_priority, distance - boost)
             merged_sorted = sorted(merged, key=sort_key_howto)[: top_k]
         else:
             # Для обычных запросов: только по distance
-            merged_sorted = sorted(merged, key=lambda c: float(c.get("distance", float("inf"))))[: top_k]
+            merged_sorted = sorted(
+                merged,
+                key=lambda c: float(c.get("distance", float("inf"))) - compute_source_boost(c),
+            )[: top_k]
         
         results = []
         for cand in merged_sorted:
+            boost = compute_source_boost(cand)
             results.append(
                 {
                     "content": cand.get("content", ""),
@@ -850,6 +879,7 @@ class RAGSystem:
                     "source_type": cand.get("source_type"),
                     "source_path": cand.get("source_path"),
                     "distance": float(cand.get("distance", 0.0)),
+                    "source_boost": float(boost),
                     "origin": cand.get("origin", "dense"),
                 }
             )
@@ -976,7 +1006,7 @@ class RAGSystem:
             
             # Для how-to запросов: буст для code/list чанков
             chunk_kind_boost = 0
-            if is_howto and chunk_kind in ("code", "list"):
+            if is_howto and chunk_kind in ("code", "code_file", "list"):
                 chunk_kind_boost = 3
             
             # Поиск командных строк в контенте (для how-to)

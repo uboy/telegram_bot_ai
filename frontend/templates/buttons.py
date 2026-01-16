@@ -65,6 +65,74 @@ def ai_providers_menu(providers: list, current_provider: str):
             callback_data=f"provider:{provider}"
         )])
     buttons.append([InlineKeyboardButton("🔙 Настройки", callback_data='settings')])
+    buttons.insert(2, [InlineKeyboardButton("?? Настройки KB", callback_data=f"kb_settings:{kb_id}")])
+    buttons.insert(3, [InlineKeyboardButton("?? Индексировать код", callback_data=f"kb_code:{kb_id}")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def kb_settings_menu(kb_id: int, settings: dict):
+    """Меню настроек базы знаний."""
+    def _get(path: str, default: str) -> str:
+        parts = path.split(".")
+        cur = settings or {}
+        for p in parts:
+            if not isinstance(cur, dict) or p not in cur:
+                return default
+            cur = cur[p]
+        return cur if isinstance(cur, str) else default
+
+    def _get_bool(path: str, default: bool) -> bool:
+        parts = path.split(".")
+        cur = settings or {}
+        for p in parts:
+            if not isinstance(cur, dict) or p not in cur:
+                return default
+            cur = cur[p]
+        return bool(cur)
+
+    def _next_value(current: str, options: list) -> str:
+        if current not in options:
+            return options[0]
+        idx = options.index(current)
+        return options[(idx + 1) % len(options)]
+
+    web_mode = _get("chunking.web.mode", "full")
+    wiki_mode = _get("chunking.wiki.mode", "full")
+    md_mode = _get("chunking.markdown.mode", "full")
+    code_mode = _get("chunking.code.mode", "file")
+    single_page = _get_bool("rag.single_page_mode", True)
+    prompt_ingest = _get_bool("ui.prompt_on_ingest", True)
+
+    mode_options = ["full", "section", "fixed"]
+    code_options = ["file", "fixed"]
+
+    buttons = [
+        [InlineKeyboardButton(
+            f"?? Web: {web_mode}",
+            callback_data=f"kb_setting:{kb_id}:chunking.web.mode:{_next_value(web_mode, mode_options)}",
+        )],
+        [InlineKeyboardButton(
+            f"?? Wiki: {wiki_mode}",
+            callback_data=f"kb_setting:{kb_id}:chunking.wiki.mode:{_next_value(wiki_mode, mode_options)}",
+        )],
+        [InlineKeyboardButton(
+            f"?? Markdown: {md_mode}",
+            callback_data=f"kb_setting:{kb_id}:chunking.markdown.mode:{_next_value(md_mode, mode_options)}",
+        )],
+        [InlineKeyboardButton(
+            f"?? Code: {code_mode}",
+            callback_data=f"kb_setting:{kb_id}:chunking.code.mode:{_next_value(code_mode, code_options)}",
+        )],
+        [InlineKeyboardButton(
+            f"?? Single-page: {'on' if single_page else 'off'}",
+            callback_data=f"kb_setting:{kb_id}:rag.single_page_mode:{'false' if single_page else 'true'}",
+        )],
+        [InlineKeyboardButton(
+            f"?? Prompt ingest: {'on' if prompt_ingest else 'off'}",
+            callback_data=f"kb_setting:{kb_id}:ui.prompt_on_ingest:{'false' if prompt_ingest else 'true'}",
+        )],
+        [InlineKeyboardButton("?? Назад", callback_data=f"kb_select:{kb_id}")],
+    ]
     return InlineKeyboardMarkup(buttons)
 
 

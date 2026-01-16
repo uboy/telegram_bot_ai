@@ -8,7 +8,7 @@ from .base import DocumentLoader
 class ExcelLoader(DocumentLoader):
     """Загрузчик для Excel файлов"""
     
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить Excel файл с учетом структуры листов и таблиц"""
         try:
             import pandas as pd

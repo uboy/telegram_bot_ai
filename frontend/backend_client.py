@@ -284,6 +284,58 @@ class BackendClient:
             logger.error("Ошибка при image ingestion через backend: %s", e, exc_info=True)
             return {}
 
+    def ingest_codebase_path(
+        self,
+        kb_id: int,
+        path: str,
+        repo_label: Optional[str] = None,
+        telegram_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Индексировать локальную кодовую базу через backend."""
+        url_api = self._url("/ingestion/code-path")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        payload: Dict[str, Any] = {
+            "knowledge_base_id": kb_id,
+            "path": path,
+            "repo_label": repo_label,
+            "telegram_id": telegram_id,
+            "username": username,
+        }
+        try:
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+                resp = client.post(url_api, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при индексировании кода (path) через backend: %s", e, exc_info=True)
+            return {}
+
+    def ingest_codebase_git(
+        self,
+        kb_id: int,
+        git_url: str,
+        telegram_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Индексировать кодовую базу из git через backend."""
+        url_api = self._url("/ingestion/code-git")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        payload: Dict[str, Any] = {
+            "knowledge_base_id": kb_id,
+            "git_url": git_url,
+            "telegram_id": telegram_id,
+            "username": username,
+        }
+        try:
+            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+                resp = client.post(url_api, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при индексировании кода (git) через backend: %s", e, exc_info=True)
+            return {}
+
     # === RAG utility ===
 
     def rag_reload_models(self) -> Dict[str, Any]:
@@ -329,6 +381,43 @@ class BackendClient:
                 exc_info=True,
             )
             return []
+
+    def get_kb_settings(self, kb_id: int) -> Dict[str, Any]:
+        """Получить настройки базы знаний."""
+        url = self._url(f"/knowledge-bases/{kb_id}/settings")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Ошибка при обращении к backend (knowledge-bases/%s/settings): %s",
+                kb_id,
+                e,
+                exc_info=True,
+            )
+            return {}
+
+    def update_kb_settings(self, kb_id: int, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Обновить настройки базы знаний."""
+        url = self._url(f"/knowledge-bases/{kb_id}/settings")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        payload = {"settings": settings}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.put(url, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Ошибка при обновлении настроек KB %s через backend: %s",
+                kb_id,
+                e,
+                exc_info=True,
+            )
+            return {}
 
     def get_import_log(self, kb_id: int) -> List[Dict[str, Any]]:
         """Получить журнал загрузок для указанной базы знаний."""

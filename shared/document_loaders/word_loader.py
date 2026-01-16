@@ -9,7 +9,7 @@ from .chunking import split_text_structurally
 class WordLoader(DocumentLoader):
     """Загрузчик для Word файлов"""
     
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить Word файл с учетом структуры (заголовки, абзацы, списки)"""
         try:
             from docx import Document

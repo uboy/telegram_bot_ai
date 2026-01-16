@@ -27,6 +27,7 @@ from frontend.templates.buttons import (
     confirm_menu,
     n8n_menu,
     rag_settings_menu,
+    kb_settings_menu,
 )
 from frontend.backend_client import backend_client
 try:
@@ -1226,6 +1227,168 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
         return
     
+    if data.startswith('ingest_chunking:'):
+        parts = data.split(':', 3)
+        if len(parts) < 4:
+            await query.answer("Некорректный формат callback_data", show_alert=True)
+            return
+        kb_id = int(parts[1])
+        source_kind = parts[2]
+        mode = parts[3]
+
+        pending = context.user_data.get("pending_ingest") or {}
+        if pending.get("kb_id") != kb_id or pending.get("kind") != source_kind:
+            await safe_edit_message_text(query, "?? Нет данных для продолжения загрузки.", reply_markup=kb_actions_menu(kb_id))
+            return
+
+        settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
+        settings = settings_resp.get("settings") if isinstance(settings_resp, dict) else {}
+        if not isinstance(settings, dict):
+            settings = {}
+
+        def set_nested(d: dict, path: str, val: object) -> None:
+            parts_path = path.split(".")
+            cur = d
+            for p in parts_path[:-1]:
+                if p not in cur or not isinstance(cur[p], dict):
+                    cur[p] = {}
+                cur = cur[p]
+            cur[parts_path[-1]] = val
+
+        set_nested(settings, f"chunking.{source_kind}.mode", mode)
+        await asyncio.to_thread(backend_client.update_kb_settings, kb_id, settings)
+
+        url = pending.get("url") or ""
+        tg_id = str(query.from_user.id) if query.from_user else ""
+        username = query.from_user.username if query.from_user else ""
+
+        if source_kind == "web":
+            await safe_edit_message_text(query, "?? Загружаю веб-страницу...")
+            stats = await asyncio.to_thread(
+                backend_client.ingest_web_page,
+                kb_id=kb_id,
+                url=url,
+                telegram_id=tg_id or None,
+                username=username or None,
+            )
+            chunks_added = int(stats.get("chunks_added", 0)) if stats else 0
+            text = f"? Загружено {chunks_added} фрагментов с веб-страницы."
+            await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        elif source_kind == "wiki":
+            await safe_edit_message_text(query, "?? Запускаю рекурсивный обход вики...")
+            stats = await asyncio.to_thread(
+                backend_client.ingest_wiki_crawl,
+                kb_id=kb_id,
+                url=url,
+                telegram_id=tg_id or None,
+                username=username or None,
+            )
+            deleted = stats.get("deleted_chunks", 0)
+            pages = stats.get("pages_processed", 0) or 0
+            added = stats.get("chunks_added", 0)
+            wiki_root = stats.get("wiki_root", url)
+            text = (
+                "? Сканирование вики завершено.\n\n"
+                f"Исходный URL: {url}\n"
+                f"Корневой wiki-URL: {wiki_root}\n"
+                f"Удалено старых фрагментов: {deleted}\n"
+                f"Обработано страниц: {pages}\n"
+                f"Добавлено фрагментов: {added}"
+            )
+            await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
+        else:
+            await safe_edit_message_text(query, "?? Неизвестный тип загрузки.", reply_markup=kb_actions_menu(kb_id))
+
+        context.user_data.pop("pending_ingest", None)
+        return
+
+    if data.startswith('kb_settings:'):
+        kb_id = int(data.split(':')[1])
+        settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
+        settings = settings_resp.get("settings") if isinstance(settings_resp, dict) else None
+        if not settings:
+            await safe_edit_message_text(query, "?? Не удалось загрузить настройки KB.", reply_markup=kb_actions_menu(kb_id))
+            return
+        text = (
+            f"?? Настройки базы знаний #{kb_id}\n\n"
+            "Нажимайте на кнопки, чтобы переключить режим."
+        )
+        await safe_edit_message_text(query, text, reply_markup=kb_settings_menu(kb_id, settings))
+        return
+
+    if data.startswith('kb_setting:'):
+        parts = data.split(':', 3)
+        if len(parts) < 4:
+            await query.answer("Некорректный формат callback_data", show_alert=True)
+            return
+        kb_id = int(parts[1])
+        key_path = parts[2]
+        value = parts[3]
+
+        settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
+        settings = settings_resp.get("settings") if isinstance(settings_resp, dict) else {}
+        if not isinstance(settings, dict):
+            settings = {}
+
+        def set_nested(d: dict, path: str, val: object) -> None:
+            parts_path = path.split(".")
+            cur = d
+            for p in parts_path[:-1]:
+                if p not in cur or not isinstance(cur[p], dict):
+                    cur[p] = {}
+                cur = cur[p]
+            cur[parts_path[-1]] = val
+
+        if value.lower() in ("true", "false"):
+            cast_val: object = value.lower() == "true"
+        else:
+            cast_val = value
+
+        set_nested(settings, key_path, cast_val)
+        updated = await asyncio.to_thread(backend_client.update_kb_settings, kb_id, settings)
+        updated_settings = updated.get("settings") if isinstance(updated, dict) else settings
+
+        await safe_edit_message_text(
+            query,
+            f"?? Настройки обновлены для KB #{kb_id}.",
+            reply_markup=kb_settings_menu(kb_id, updated_settings),
+        )
+        return
+
+    if data.startswith('kb_code:'):
+        kb_id = int(data.split(':')[1])
+        buttons = [
+            [InlineKeyboardButton("?? Локальный путь", callback_data=f"kb_code_path:{kb_id}")],
+            [InlineKeyboardButton("?? Git URL", callback_data=f"kb_code_git:{kb_id}")],
+            [InlineKeyboardButton("?? Назад", callback_data=f"kb_select:{kb_id}")],
+        ]
+        await safe_edit_message_text(
+            query,
+            "Выберите источник кода для индексирования:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    if data.startswith('kb_code_path:'):
+        kb_id = int(data.split(':')[1])
+        context.user_data['kb_id_for_code'] = kb_id
+        context.user_data['state'] = 'waiting_code_path'
+        await safe_edit_message_text(
+            query,
+            "Введите путь к локальной папке с кодом (путь должен быть доступен контейнеру).",
+        )
+        return
+
+    if data.startswith('kb_code_git:'):
+        kb_id = int(data.split(':')[1])
+        context.user_data['kb_id_for_code'] = kb_id
+        context.user_data['state'] = 'waiting_code_git'
+        await safe_edit_message_text(
+            query,
+            "Введите URL git-репозитория для индексирования кода.",
+        )
+        return
+
     if data.startswith('kb_upload:'):
         kb_id = int(data.split(':')[1])
         context.user_data['kb_id'] = kb_id

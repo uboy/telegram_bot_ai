@@ -68,6 +68,7 @@ def crawl_wiki_to_kb(
     base_url: str,
     knowledge_base_id: int,
     max_pages: int = 200,
+    loader_options: dict | None = None,
 ) -> Dict[str, int]:
     """
     Рекурсивно обойти wiki-раздел сайта и загрузить страницы в базу знаний.
@@ -147,7 +148,7 @@ def crawl_wiki_to_kb(
 
         # Загрузить содержимое страницы как web-документ через существующий загрузчик
         try:
-            chunks = document_loader_manager.load_document(url, "web")
+            chunks = document_loader_manager.load_document(url, "web", options=loader_options)
         except Exception as e:
             logger.warning("[wiki] ошибка загрузки содержимого %s: %s", url, e)
             chunks = []
@@ -219,6 +220,7 @@ async def crawl_wiki_to_kb_async(
     base_url: str,
     knowledge_base_id: int,
     max_pages: int = 200,
+    loader_options: dict | None = None,
 ) -> Dict[str, int]:
     """
     Асинхронная обёртка для использования из Telegram-хэндлеров.
@@ -231,6 +233,7 @@ async def crawl_wiki_to_kb_async(
         base_url,
         knowledge_base_id,
         max_pages,
+        loader_options,
     )
 
 

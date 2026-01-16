@@ -49,7 +49,12 @@ class DocumentLoaderManager:
         """Получить загрузчик по типу файла"""
         return self.loaders.get(file_type.lower())
     
-    def load_document(self, source: str, file_type: Optional[str] = None) -> List[Dict[str, str]]:
+    def load_document(
+        self,
+        source: str,
+        file_type: Optional[str] = None,
+        options: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, str]]:
         """
         Загрузить документ
         
@@ -70,11 +75,11 @@ class DocumentLoaderManager:
         
         loader = self.get_loader(file_type)
         if loader:
-            return loader.load(source)
+            return loader.load(source, options=options)
         else:
             # Попытка загрузить как текстовый файл (fallback)
             text_loader = TextLoader()
-            return text_loader.load(source)
+            return text_loader.load(source, options=options)
 
 
 # Глобальный менеджер загрузчиков

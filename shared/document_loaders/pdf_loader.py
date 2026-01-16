@@ -9,7 +9,7 @@ from .chunking import split_text_structurally
 class PDFLoader(DocumentLoader):
     """Загрузчик для PDF файлов"""
     
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить PDF файл с учетом структуры страниц (абзацы, списки)"""
         try:
             import PyPDF2

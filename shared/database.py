@@ -46,6 +46,7 @@ class KnowledgeBase(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True)
     description = Column(Text)
+    settings = Column(Text)  # JSON строка с настройками БЗ
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -283,6 +284,23 @@ def migrate_database():
                     """))
                     session.commit()
                     logger.info("✅ Миграция: добавлена колонка 'full_name'")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Проверить и добавить колонку settings в knowledge_bases
+        try:
+            if 'knowledge_bases' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('knowledge_bases')]
+                if 'settings' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE knowledge_bases
+                        ADD COLUMN settings TEXT
+                    """))
+                    session.commit()
+                    logger.info("? Миграция: добавлена колонка 'settings' в knowledge_bases")
         except Exception:
             try:
                 session.rollback()

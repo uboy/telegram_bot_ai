@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any, Dict
 
 
 class BaseResponse(BaseModel):
@@ -16,6 +16,10 @@ class KnowledgeBaseInfo(BaseModel):
 class KnowledgeBaseCreate(BaseModel):
     name: str
     description: Optional[str] = None
+
+
+class KnowledgeBaseSettings(BaseModel):
+    settings: Dict[str, Any]
 
 
 class KnowledgeSourceInfo(BaseModel):

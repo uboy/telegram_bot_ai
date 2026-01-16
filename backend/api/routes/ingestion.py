@@ -48,6 +48,30 @@ class ImageIngestionResponse(BaseModel):
     chunks_added: int
 
 
+class CodePathIngestionRequest(BaseModel):
+    knowledge_base_id: int
+    path: str
+    repo_label: str | None = None
+    telegram_id: str | None = None
+    username: str | None = None
+
+
+class CodeGitIngestionRequest(BaseModel):
+    knowledge_base_id: int
+    git_url: str
+    telegram_id: str | None = None
+    username: str | None = None
+
+
+class CodeIngestionResponse(BaseModel):
+    kb_id: int
+    root: str
+    files_processed: int
+    files_skipped: int
+    files_updated: int
+    chunks_added: int
+
+
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
 
 
@@ -269,5 +293,46 @@ def ingest_image(
         source_updated_at=result["source_updated_at"],
         chunks_added=result["chunks_added"],
     )
+
+
+@router.post(
+    "/code-path",
+    response_model=CodeIngestionResponse,
+    summary="Индексировать локальную кодовую базу",
+    dependencies=[Depends(require_api_key)],
+)
+def ingest_codebase_path(
+    payload: CodePathIngestionRequest,
+    db: Session = Depends(get_db_dep),
+) -> CodeIngestionResponse:
+    service = IngestionService(db)
+    result = service.ingest_codebase_path(
+        kb_id=payload.knowledge_base_id,
+        code_path=payload.path,
+        telegram_id=payload.telegram_id,
+        username=payload.username,
+        repo_label=payload.repo_label,
+    )
+    return CodeIngestionResponse(**result)
+
+
+@router.post(
+    "/code-git",
+    response_model=CodeIngestionResponse,
+    summary="Индексировать кодовую базу из git",
+    dependencies=[Depends(require_api_key)],
+)
+def ingest_codebase_git(
+    payload: CodeGitIngestionRequest,
+    db: Session = Depends(get_db_dep),
+) -> CodeIngestionResponse:
+    service = IngestionService(db)
+    result = service.ingest_codebase_git(
+        kb_id=payload.knowledge_base_id,
+        git_url=payload.git_url,
+        telegram_id=payload.telegram_id,
+        username=payload.username,
+    )
+    return CodeIngestionResponse(**result)
 
 

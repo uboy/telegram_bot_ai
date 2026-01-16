@@ -4,13 +4,13 @@
 import re
 from typing import List, Dict
 from .base import DocumentLoader
-from .chunking import split_markdown_section_into_chunks
+from .chunking import split_markdown_section_into_chunks, split_text_into_chunks
 
 
 class MarkdownLoader(DocumentLoader):
     """Загрузчик для Markdown файлов"""
     
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить markdown файл"""
         import os
         try:
@@ -63,60 +63,79 @@ class MarkdownLoader(DocumentLoader):
                 text = re.sub(r"\n{3,}", "\n\n", text)
                 return text.strip()
 
-            # Разбиение по заголовкам с построением section_path (стек заголовков)
+            chunking_mode = (options or {}).get("chunking_mode") or "section"
+            max_chars = (options or {}).get("max_chars")
+            overlap = (options or {}).get("overlap")
+            try:
+                max_chars = int(max_chars) if max_chars is not None else None
+            except (ValueError, TypeError):
+                max_chars = None
+            try:
+                overlap = int(overlap) if overlap is not None else None
+            except (ValueError, TypeError):
+                overlap = None
+
             sections: List[Dict[str, str]] = []
-            current_section_lines = []
-            header_stack = []  # Стек заголовков: (level: int, header_text: str) для построения section_path
-            
-            for line in content.split("\n"):
-                header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
-                if header_match:
-                    header_level = len(header_match.group(1))
-                    header_text = header_match.group(2).strip()
-                    
-                    # Сохранить предыдущую секцию ПЕРЕД обновлением стека (исправление бага)
-                    if current_section_lines:
-                        section_content = "\n".join(current_section_lines).strip()
-                        if section_content:
-                            # Использовать текущий header_stack (до обновления) для правильного title/path
-                            prev_section_title = header_stack[-1][1] if header_stack else ""
-                            prev_section_path = " > ".join([h[1] for h in header_stack]) if header_stack else ""
-                            # Для секций без заголовков (до первого заголовка) подставляем doc_title
-                            if not prev_section_path:
-                                prev_section_path = doc_title if doc_title else "ROOT"
-                            sections.append({
-                                "content": section_content,
-                                "section_title": prev_section_title,  # Заголовок секции
-                                "section_path": prev_section_path,
-                            })
-                    
-                    # Обновить стек заголовков: убрать заголовки того же или более глубокого уровня
-                    # Используем level:int вместо len(header_stack[-1][0]) для ясности
-                    while header_stack and header_stack[-1][0] >= header_level:
-                        header_stack.pop()
-                    header_stack.append((header_level, header_text))
-                    
-                    # Начать новую секцию (не включаем заголовок в content)
-                    current_section_lines = []
-                else:
-                    current_section_lines.append(line)
-            
-            # Сохранить последнюю секцию
-            if current_section_lines:
-                section_content = "\n".join(current_section_lines).strip()
-                if section_content:
-                    section_path = " > ".join([h[1] for h in header_stack]) if header_stack else ""
-                    # Для секций без заголовков (до первого заголовка) подставляем doc_title
-                    if not section_path:
-                        section_path = doc_title if doc_title else "ROOT"
-                    sections.append({
-                        "content": section_content,
-                        "section_title": header_stack[-1][1] if header_stack else "",
-                        "section_path": section_path,
-                    })
-            
-            if not sections:
-                sections = [{"content": content, "title": "", "section_path": ""}]
+            if chunking_mode in ("full", "fixed"):
+                sections = [{
+                    "content": content,
+                    "section_title": doc_title,
+                    "section_path": doc_title or "ROOT",
+                }]
+            else:
+                # Разбиение по заголовкам с построением section_path (стек заголовков)
+                current_section_lines = []
+                header_stack = []  # Стек заголовков: (level: int, header_text: str) для построения section_path
+
+                for line in content.split("\n"):
+                    header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+                    if header_match:
+                        header_level = len(header_match.group(1))
+                        header_text = header_match.group(2).strip()
+
+                        # Сохранить предыдущую секцию ПЕРЕД обновлением стека (исправление бага)
+                        if current_section_lines:
+                            section_content = "\n".join(current_section_lines).strip()
+                            if section_content:
+                                # Использовать текущий header_stack (до обновления) для правильного title/path
+                                prev_section_title = header_stack[-1][1] if header_stack else ""
+                                prev_section_path = " > ".join([h[1] for h in header_stack]) if header_stack else ""
+                                # Для секций без заголовков (до первого заголовка) подставляем doc_title
+                                if not prev_section_path:
+                                    prev_section_path = doc_title if doc_title else "ROOT"
+                                sections.append({
+                                    "content": section_content,
+                                    "section_title": prev_section_title,  # Заголовок секции
+                                    "section_path": prev_section_path,
+                                })
+
+                        # Обновить стек заголовков: убрать заголовки того же или более глубокого уровня
+                        # Используем level:int вместо len(header_stack[-1][0]) для ясности
+                        while header_stack and header_stack[-1][0] >= header_level:
+                            header_stack.pop()
+                        header_stack.append((header_level, header_text))
+
+                        # Начать новую секцию (не включаем заголовок в content)
+                        current_section_lines = []
+                    else:
+                        current_section_lines.append(line)
+
+                # Сохранить последнюю секцию
+                if current_section_lines:
+                    section_content = "\n".join(current_section_lines).strip()
+                    if section_content:
+                        section_path = " > ".join([h[1] for h in header_stack]) if header_stack else ""
+                        # Для секций без заголовков (до первого заголовка) подставляем doc_title
+                        if not section_path:
+                            section_path = doc_title if doc_title else "ROOT"
+                        sections.append({
+                            "content": section_content,
+                            "section_title": header_stack[-1][1] if header_stack else "",
+                            "section_path": section_path,
+                        })
+
+                if not sections:
+                    sections = [{"content": content, "title": "", "section_path": ""}]
 
             # Чанкинг внутри каждой секции
             chunks: List[Dict[str, str]] = []
@@ -138,7 +157,12 @@ class MarkdownLoader(DocumentLoader):
                     restored_code = f"\n__CODE_BLOCK_START__\n{code_content}\n__CODE_BLOCK_END__\n"
                     sec_text_plain = sec_text_plain.replace(code_block['placeholder'], restored_code)
                 
-                sec_chunks = split_markdown_section_into_chunks(sec_text_plain)
+                if chunking_mode == "full":
+                    sec_chunks = [sec_text_plain]
+                elif chunking_mode == "fixed":
+                    sec_chunks = split_text_into_chunks(sec_text_plain, max_chars=max_chars, overlap=overlap)
+                else:
+                    sec_chunks = split_markdown_section_into_chunks(sec_text_plain, max_chars=max_chars, overlap=overlap)
                 for idx, part in enumerate(sec_chunks, start=1):
                     # title = doc_title (для поиска по документу, а не по секции)
                     # section_title = заголовок секции (для навигации)
@@ -148,7 +172,9 @@ class MarkdownLoader(DocumentLoader):
                     # Определить chunk_kind по маркерам и найти language для code чанков
                     chunk_kind = "text"
                     code_lang = None
-                    if "__CODE_BLOCK_START__" in part:
+                    if chunking_mode == "full":
+                        chunk_kind = "full_page"
+                    elif "__CODE_BLOCK_START__" in part:
                         chunk_kind = "code"
                         # Найти соответствующий code_block: извлечь код из чанка и найти в code_blocks
                         code_in_chunk = part.split("__CODE_BLOCK_START__")[1].split("__CODE_BLOCK_END__")[0].strip() if "__CODE_BLOCK_START__" in part else ""

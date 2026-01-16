@@ -9,7 +9,7 @@ class DocumentLoader(ABC):
     """Базовый класс для загрузчиков документов"""
     
     @abstractmethod
-    def load(self, source: str) -> List[Dict[str, str]]:
+    def load(self, source: str, options: dict | None = None) -> List[Dict[str, str]]:
         """
         Загрузить документ и вернуть список фрагментов в едином формате.
         
@@ -22,6 +22,7 @@ class DocumentLoader(ABC):
         
         Args:
             source: Путь к файлу или URL
+            options: Дополнительные параметры загрузки/чанкинга
             
         Returns:
             Список словарей с фрагментами документа

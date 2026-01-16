@@ -29,3 +29,14 @@
 
 Если нужно восстановить `config.py`, просто скопируйте его из репозитория - он не содержит секретов.
 
+
+## KB Settings
+
+- KB chunking and RAG behavior are stored in the database per knowledge base.
+- Manage via admin panel -> KB Settings, or API `GET/PUT /knowledge-bases/{id}/settings`.
+- Recommended for wiki: `chunking.wiki.mode=full` (one page per chunk).
+
+## Code Indexing
+
+- Local code paths must be available inside the container.
+- Recommended: mount read-only and set `CODEBASE_ROOT`.
