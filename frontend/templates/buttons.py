@@ -65,8 +65,6 @@ def ai_providers_menu(providers: list, current_provider: str):
             callback_data=f"provider:{provider}"
         )])
     buttons.append([InlineKeyboardButton("🔙 Настройки", callback_data='settings')])
-    buttons.insert(2, [InlineKeyboardButton("?? Настройки KB", callback_data=f"kb_settings:{kb_id}")])
-    buttons.insert(3, [InlineKeyboardButton("?? Индексировать код", callback_data=f"kb_code:{kb_id}")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -218,6 +216,8 @@ def kb_actions_menu(kb_id: int, show_sources: bool = False):
     buttons = [
         [InlineKeyboardButton("📤 Загрузить документы", callback_data=f"kb_upload:{kb_id}")],
         [InlineKeyboardButton("🌐 Собрать вики по URL", callback_data=f"kb_wiki_crawl:{kb_id}")],
+        [InlineKeyboardButton("?? Настройки KB", callback_data=f"kb_settings:{kb_id}")],
+        [InlineKeyboardButton("?? Индексировать код", callback_data=f"kb_code:{kb_id}")],
         [InlineKeyboardButton("📜 Журнал загрузок", callback_data=f"kb_import_log:{kb_id}")],
         [InlineKeyboardButton("📋 Список источников", callback_data=f"kb_sources:{kb_id}")],
         [InlineKeyboardButton("🗑️ Очистить базу", callback_data=f"kb_clear:{kb_id}")],

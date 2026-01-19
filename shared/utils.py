@@ -383,19 +383,6 @@ def format_markdown_to_html(text: str) -> str:
     # Экранируем HTML символы в остальном тексте
     text = html_escape(text)
     
-    # Восстанавливаем inline код (содержимое уже экранировано)
-    for idx, code in enumerate(inline_code_blocks):
-        code_escaped = html_escape(code)
-        text = text.replace(f'__INLINE_CODE_{idx}__', f'<code>{code_escaped}</code>')
-    
-    # Восстанавливаем блоки кода (содержимое уже экранировано)
-    for idx, (lang, code) in enumerate(code_blocks):
-        code_escaped = html_escape(code)
-        text = text.replace(
-            f'__CODE_BLOCK_{idx}__',
-            f'<pre><code>{code_escaped}</code></pre>'
-        )
-    
     # Обрабатываем заголовки (после escape, чтобы не экранировать дважды)
     # Заголовки ### -> <b> (с новой строки)
     text = re.sub(r'###\s+(.+?)(?=\n|$)', r'<b>\1</b>', text, flags=re.MULTILINE)
@@ -422,6 +409,19 @@ def format_markdown_to_html(text: str) -> str:
     
     # Убираем множественные переносы строк (более 2 подряд -> 2)
     text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # Восстанавливаем inline код (содержимое уже экранировано)
+    for idx, code in enumerate(inline_code_blocks):
+        code_escaped = html_escape(code)
+        text = text.replace(f'__INLINE_CODE_{idx}__', f'<code>{code_escaped}</code>')
+
+    # Восстанавливаем блоки кода (содержимое уже экранировано)
+    for idx, (lang, code) in enumerate(code_blocks):
+        code_escaped = html_escape(code)
+        text = text.replace(
+            f'__CODE_BLOCK_{idx}__',
+            f'<pre><code>{code_escaped}</code></pre>'
+        )
     
     return text.strip()
 

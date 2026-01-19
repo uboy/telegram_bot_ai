@@ -721,9 +721,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb_name = update.message.text
         created = backend_client.create_knowledge_base(kb_name)
         if created and created.get("id"):
+            kb_id = int(created.get("id"))
             await update.message.reply_text(
                 f"✅ База знаний '{kb_name}' создана!",
-                reply_markup=admin_menu(),
+                reply_markup=kb_actions_menu(kb_id),
             )
         else:
             await update.message.reply_text(
