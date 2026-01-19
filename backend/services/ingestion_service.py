@@ -396,6 +396,13 @@ class IngestionService:
                         base_meta["doc_hash"] = doc_hash
                         base_meta["doc_version"] = doc_version
                         base_meta["source_updated_at"] = source_updated_at
+                        if inner_ext_clean in ("md", "markdown"):
+                            original_title = base_meta.get("doc_title") or base_meta.get("title") or ""
+                            base_meta["doc_title"] = source_path
+                            if not base_meta.get("section_path") or base_meta.get("section_path") == original_title:
+                                base_meta["section_path"] = source_path
+                            if base_meta.get("title") == original_title or not base_meta.get("title"):
+                                base_meta["title"] = source_path
                         if self._is_code_ext(inner_ext):
                             base_meta["chunk_kind"] = "code_file"
                             base_meta["code_lang"] = self._code_lang_from_ext(inner_ext)
@@ -508,6 +515,13 @@ class IngestionService:
             base_meta["doc_hash"] = doc_hash
             base_meta["doc_version"] = doc_version
             base_meta["source_updated_at"] = source_updated_at
+            if file_type in ("md", "markdown"):
+                original_title = base_meta.get("doc_title") or base_meta.get("title") or ""
+                base_meta["doc_title"] = source_path
+                if not base_meta.get("section_path") or base_meta.get("section_path") == original_title:
+                    base_meta["section_path"] = source_path
+                if base_meta.get("title") == original_title or not base_meta.get("title"):
+                    base_meta["title"] = source_path
             if self._is_code_ext(ext):
                 base_meta["chunk_kind"] = "code_file"
                 base_meta["code_lang"] = self._code_lang_from_ext(ext)

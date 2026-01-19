@@ -28,6 +28,31 @@ def strip_unknown_citations(answer: str, context: str) -> str:
     return answer
 
 
+def strip_untrusted_urls(answer: str, context: str) -> str:
+    if not answer or not context:
+        return answer
+
+    context_norm = re.sub(r"\s+", " ", context).lower()
+
+    def url_in_context(url: str) -> bool:
+        return url.lower() in context_norm
+
+    def replace_markdown_link(match: re.Match) -> str:
+        text = match.group(1) or ""
+        url = match.group(2) or ""
+        return match.group(0) if url_in_context(url) else text
+
+    answer = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", replace_markdown_link, answer)
+
+    def replace_bare_url(match: re.Match) -> str:
+        url = match.group(1)
+        return url if url_in_context(url) else ""
+
+    answer = re.sub(r"(https?://\S+)", replace_bare_url, answer)
+    answer = re.sub(r"\s{2,}", " ", answer).strip()
+    return answer
+
+
 def sanitize_commands_in_answer(answer: str, context: str) -> str:
     if not answer or not context:
         return answer
@@ -71,8 +96,7 @@ def sanitize_commands_in_answer(answer: str, context: str) -> str:
     def contains_wiki_url(line: str) -> bool:
         return "/wikis/" in line or "#sync" in line or "#build" in line
 
-    code_pattern = r"```([a-zA-Z0-9+_-]*)
-(.*?)```"
+    code_pattern = r"```([a-zA-Z0-9+_-]*)\n(.*?)```"
     removed_any = False
 
     def replace_code(match: re.Match) -> str:
@@ -89,10 +113,7 @@ def sanitize_commands_in_answer(answer: str, context: str) -> str:
             kept.append(ln)
         if not kept:
             return "Команда отсутствует в базе знаний."
-        return f"```{lang}
-" + "
-".join(kept) + "
-```"
+        return f"```{lang}\n" + "\n".join(kept) + "\n```"
 
     answer = re.sub(code_pattern, replace_code, answer, flags=re.DOTALL)
 

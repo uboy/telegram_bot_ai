@@ -16,7 +16,10 @@ from .markdown_loader import MarkdownLoader
 from .pdf_loader import PDFLoader
 from .word_loader import WordLoader
 from .excel_loader import ExcelLoader
-from .web_loader import WebLoader
+try:
+    from .web_loader import WebLoader
+except ImportError:  # pragma: no cover - optional dependency for web loading
+    WebLoader = None
 from .text_loader import TextLoader
 from .image_loader import ImageLoader
 
@@ -36,14 +39,15 @@ class DocumentLoaderManager:
             'xls': ExcelLoader(),
             'txt': text_loader,
             'text': text_loader,
-            'web': WebLoader(),
-            'url': WebLoader(),
             'image': ImageLoader(),
             'jpg': ImageLoader(),
             'jpeg': ImageLoader(),
             'png': ImageLoader(),
             'gif': ImageLoader(),
         }
+        if WebLoader is not None:
+            self.loaders['web'] = WebLoader()
+            self.loaders['url'] = WebLoader()
     
     def get_loader(self, file_type: str) -> Optional[DocumentLoader]:
         """Получить загрузчик по типу файла"""

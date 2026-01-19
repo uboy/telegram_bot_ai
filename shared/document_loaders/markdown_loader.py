@@ -31,8 +31,8 @@ class MarkdownLoader(DocumentLoader):
                 
                 def replace_code_block(match):
                     nonlocal code_counter
-                    language = (match.group(1) or "").strip()  # Разрешаем язык с пробелами, убираем пробелы
-                    code_content = match.group(2)
+                    language = (match.group(2) or "").strip()  # Разрешаем язык с пробелами, убираем пробелы
+                    code_content = match.group(3)
                     code_counter += 1
                     placeholder = f"__CODE_BLOCK_{code_counter}__"
                     code_blocks.append({
@@ -42,9 +42,9 @@ class MarkdownLoader(DocumentLoader):
                     })
                     return placeholder
                 
-                # Улучшенный pattern: разрешает \r?\n (Windows), язык как "всё до конца строки", закрытие на отдельной строке
-                pattern = r"```([^\n\r`]*)\r?\n(.*?)\r?\n```"
-                text_with_placeholders = re.sub(pattern, replace_code_block, text, flags=re.DOTALL)
+                # Улучшенный pattern: поддерживает отступы у fenced code blocks (например, внутри списков)
+                pattern = r"(?m)^(?P<indent>[ \t]*)```([^\n\r`]*)\r?\n(.*?)\r?\n(?P=indent)```"
+                text_with_placeholders = re.sub(pattern, replace_code_block, text, flags=re.DOTALL | re.MULTILINE)
                 return text_with_placeholders, code_blocks
             
             def _markdown_to_plain(text: str) -> str:
@@ -52,8 +52,9 @@ class MarkdownLoader(DocumentLoader):
                 text = re.sub(r"`([^`]+)`", r"\1", text)
                 text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"\1 (\2)", text)
                 text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
-                text = re.sub(r"(\*\*|__)(.*?)\1", r"\2", text)
-                text = re.sub(r"(\*|_)(.*?)\1", r"\2", text)
+                # Очищаем только звездочки, чтобы не ломать идентификаторы с underscore.
+                text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+                text = re.sub(r"(?<!\w)\*(\S[^*]*?)\*(?!\w)", r"\1", text)
                 text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
                 # Удаляем только blockquote (>), сохраняем маркеры списков (-, *, +) для корректного определения chunk_kind
                 text = re.sub(r"^>\s+", "", text, flags=re.MULTILINE)
@@ -163,6 +164,15 @@ class MarkdownLoader(DocumentLoader):
                     sec_chunks = split_text_into_chunks(sec_text_plain, max_chars=max_chars, overlap=overlap)
                 else:
                     sec_chunks = split_markdown_section_into_chunks(sec_text_plain, max_chars=max_chars, overlap=overlap)
+
+                def _restore_code_fences(chunk_text: str) -> str:
+                    if "__CODE_BLOCK_START__" not in chunk_text:
+                        return chunk_text
+                    text_out = chunk_text
+                    text_out = text_out.replace("__CODE_BLOCK_START__\n", "```\n")
+                    text_out = text_out.replace("\n__CODE_BLOCK_END__", "\n```")
+                    return text_out
+
                 for idx, part in enumerate(sec_chunks, start=1):
                     # title = doc_title (для поиска по документу, а не по секции)
                     # section_title = заголовок секции (для навигации)
@@ -202,7 +212,7 @@ class MarkdownLoader(DocumentLoader):
                         metadata["code_lang"] = code_lang
                     
                     chunks.append({
-                        "content": part,
+                        "content": _restore_code_fences(part),
                         "title": title,  # Название документа для поиска
                         "metadata": metadata,
                     })

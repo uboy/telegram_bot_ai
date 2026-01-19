@@ -25,6 +25,8 @@ class BackendClient:
         # Общий префикс API
         self.api_prefix = os.getenv("BACKEND_API_PREFIX", "/api/v1")
         self.timeout = timeout
+        # Таймаут для RAG-запросов (может быть дольше из-за эмбеддингов/LLM)
+        self.rag_timeout = float(os.getenv("BACKEND_RAG_TIMEOUT", "60.0"))
         # Таймаут для длительных операций (ingestion) - по умолчанию 5 минут
         self.ingestion_timeout = float(os.getenv("BACKEND_INGESTION_TIMEOUT", "300.0"))
         # API-ключ для авторизации запросов к backend (опционально)
@@ -74,7 +76,7 @@ class BackendClient:
         logger.debug("Backend RAG query: url=%s, payload=%r", url, payload)
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with httpx.Client(timeout=self.rag_timeout, headers=headers) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()

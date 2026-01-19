@@ -4,8 +4,11 @@
 import os
 import requests
 import json
+import logging
 from typing import Optional, Dict, List
 from shared.config import OLLAMA_BASE_URL, OLLAMA_MODEL
+
+logger = logging.getLogger(__name__)
 
 
 class AIProvider:
@@ -34,6 +37,9 @@ class OllamaProvider(AIProvider):
     def query(self, prompt: str, **kwargs) -> str:
         """Запрос к Ollama"""
         try:
+            if os.getenv("OLLAMA_DEBUG_PROMPT", "false").lower() == "true":
+                preview = (prompt or "")[:800]
+                logger.debug("Ollama prompt preview (len=%d): %s", len(prompt or ""), preview)
             # Получить настройку фильтрации thinking tokens из конфига
             try:
                 from shared.config import OLLAMA_FILTER_THINKING

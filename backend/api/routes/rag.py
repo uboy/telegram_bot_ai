@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
 import json
+import logging
+import os
 
 from backend.api.deps import get_db_dep, require_api_key
 from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource
@@ -10,7 +12,11 @@ from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource
 from shared.rag_system import rag_system  # type: ignore
 from shared.ai_providers import ai_manager  # type: ignore
 from shared.utils import create_prompt_with_language  # type: ignore
-from shared.rag_safety import strip_unknown_citations, sanitize_commands_in_answer  # type: ignore
+from shared.rag_safety import (  # type: ignore
+    strip_unknown_citations,
+    strip_untrusted_urls,
+    sanitize_commands_in_answer,
+)
 from shared.logging_config import logger  # type: ignore
 from shared.database import KnowledgeBase, KnowledgeChunk  # type: ignore
 from shared.kb_settings import normalize_kb_settings  # type: ignore
@@ -77,6 +83,21 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             top_k=top_k_search,
         ) or []
         logger.debug("RAG search returned %d results", len(results))
+        if logger.isEnabledFor(logging.DEBUG):
+            top_preview = []
+            for r in results[:5]:
+                meta = r.get("metadata") or {}
+                top_preview.append(
+                    {
+                        "source_path": r.get("source_path"),
+                        "doc_title": meta.get("doc_title") or meta.get("title"),
+                        "section_path": meta.get("section_path"),
+                        "chunk_kind": meta.get("chunk_kind"),
+                        "distance": r.get("distance"),
+                        "rerank_score": r.get("rerank_score"),
+                    }
+                )
+            logger.debug("RAG top results preview: %s", top_preview)
 
         if not results:
             # Нет релевантных фрагментов в БЗ – честно говорим, что ответа нет
@@ -144,6 +165,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             section_title = (meta.get("section_title") or "").lower()
             text = (result.get("content") or "").lower()
             q = (query or "").lower()
+            source_path = (result.get("source_path") or "").lower()
 
             if "unit test" in q or "unittest" in q or "tests" in q:
                 if any(t in section_title for t in ("unit test", "unittest", "test")):
@@ -158,6 +180,16 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     score += 1.0
                 if any(t in section_title for t in ("overview", "introduction")):
                     score -= 1.0
+                # Prefer explicit Sync&Build docs for sync/build queries.
+                if "sync" in q and "build" in q:
+                    if "sync&build" in source_path or "sync&build" in doc_title or "sync&build" in section_title:
+                        score += 4.0
+                if "sync" in q:
+                    if "sync" in source_path or "sync" in doc_title or "sync" in section_title:
+                        score += 1.5
+                if "build" in q:
+                    if "build" in source_path or "build" in doc_title or "build" in section_title:
+                        score += 0.5
 
             return score
 
@@ -340,6 +372,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         selected_docs = select_docs(intent, ranked_results)
         filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("RAG intent=%s selected_docs=%s", intent, selected_docs)
+            logger.debug("RAG filtered_results=%d", len(filtered_results))
 
         # Формируем контекст для LLM
         context_parts: list[str] = []
@@ -369,6 +404,24 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             return RAGAnswer(answer="", sources=[])
 
         context_text = "\n\n".join(context_parts)
+        if logger.isEnabledFor(logging.DEBUG):
+            source_ids = []
+            for block in context_parts:
+                for line in block.splitlines():
+                    if line.startswith("SOURCE_ID:"):
+                        source_ids.append(line.split(":", 1)[1].strip())
+                        break
+            logger.debug(
+                "RAG context parts=%d, chars=%d, source_ids=%s",
+                len(context_parts),
+                len(context_text),
+                source_ids,
+            )
+            if os.getenv("RAG_DEBUG_LOG_CONTEXT", "false").lower() == "true":
+                preview_blocks = []
+                for block in context_parts:
+                    preview_blocks.append(block[:500])
+                logger.debug("RAG context preview: %s", preview_blocks)
 
         # Вызываем LLM через общий ai_manager
         logger.debug("Creating prompt for LLM query")
@@ -378,11 +431,13 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             task="answer",
             enable_citations=enable_citations,
         )
-
+        if os.getenv("RAG_DEBUG_LOG_PROMPT", "false").lower() == "true":
+            logger.debug("RAG prompt preview: %s", prompt[:800])
 
         logger.debug("Calling AI manager with prompt length %d", len(prompt))
         ai_answer = ai_manager.query(prompt)
         ai_answer = strip_unknown_citations(ai_answer, context_text)
+        ai_answer = strip_untrusted_urls(ai_answer, context_text)
         ai_answer = sanitize_commands_in_answer(ai_answer, context_text)
         logger.debug("AI manager returned answer length %d", len(ai_answer) if ai_answer else 0)
         

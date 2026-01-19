@@ -168,26 +168,18 @@ def format_commands_in_text(text: str) -> str:
         line_stripped = line.strip()
         if not line_stripped:
             return False
-        
+
+        if line_stripped.startswith("$ "):
+            return True
+
         # Проверяем начало строки на команды
         for prefix_pattern in command_prefixes:
             if re.match(prefix_pattern, line_stripped, re.IGNORECASE):
                 return True
-        
-        # Флаги (--) считаем признаком CLI только если строка выглядит как команда
-        # (например начинается с '$', или с кандидата на бинарник)
-        if '--' in line_stripped:
-            if line_stripped.startswith('$ '):
-                return True
-            if re.match(r'^[a-zA-Z0-9._-]+(\s+|$)', line_stripped):
-                return True
-        
-        # Проверяем наличие путей типа /data/... или ~/proj и команды рядом
-        if re.search(r'[/~][\w/]+', line_stripped):
-            # Если есть путь и похоже на команду (содержит пробелы и не похоже на обычный текст)
-            if re.search(r'\s+', line_stripped) and not re.match(r'^[А-Яа-яЁё]', line_stripped):
-                return True
-        
+
+        if line_stripped.startswith("./"):
+            return True
+
         return False
     
     # Разбиваем текст на строки и ищем последовательности командных строк
@@ -537,6 +529,14 @@ def format_for_telegram_answer(text: str, enable_citations: bool = True) -> str:
     
     # Шаг 0: Удаление служебных тегов и блоков (страховка от утечек)
     text = strip_service_markup(text)
+
+    # Нормализуем заголовки разделов для читаемого форматирования
+    text = re.sub(r'(?m)^\s*(Main Answer)\s*:\s*', r'## \1\n', text)
+    text = re.sub(r'(?m)^\s*(Additionally Found|Additional Information)\s*:\s*', r'## \1\n', text)
+    text = re.sub(r'(?m)^\s*(Основной ответ)\s*:\s*', r'## \1\n', text)
+    text = re.sub(r'(?m)^\s*(Дополнительно(?: найдено)?)\s*:\s*', r'## \1\n', text)
+    text = re.sub(r'\b(Main Answer|Additionally Found|Additional Information)\s*:\s*', r'## \1\n', text)
+    text = re.sub(r'\b(Основной ответ|Дополнительно(?: найдено)?)\s*:\s*', r'## \1\n', text)
     
     # Шаг 1: Очистка citations (защищает содержимое code blocks)
     if enable_citations:
@@ -733,6 +733,12 @@ Provide a structured response: first the main answer with citations (if present 
 {query}
 
 </user_query>"""
+            else:
+                prompt = f"""You are a helpful assistant. Answer the user's question in English.
+
+Question: {query}
+
+Answer in detail and accurately in English:"""
         elif task == "search_summary":
             prompt = f"""Analyze the web search results and provide a structured, readable answer in English to the question: {query}
 

@@ -1,6 +1,6 @@
 import unittest
 
-from shared.rag_safety import strip_unknown_citations, sanitize_commands_in_answer
+from shared.rag_safety import strip_unknown_citations, strip_untrusted_urls, sanitize_commands_in_answer
 
 
 class TestRagSafety(unittest.TestCase):
@@ -11,6 +11,13 @@ CONTENT: test"
         cleaned = strip_unknown_citations(answer, context)
         self.assertIn("[source_id]doc1]", cleaned)
         self.assertNotIn("doc2", cleaned)
+
+    def test_strip_untrusted_urls(self):
+        context = "repo sync -c -j 8"
+        answer = "See [guide](https://example.com/guide) and https://example.com/raw"
+        cleaned = strip_untrusted_urls(answer, context)
+        self.assertNotIn("https://example.com/guide", cleaned)
+        self.assertNotIn("https://example.com/raw", cleaned)
 
     def test_sanitize_commands_in_answer_filters_unknown(self):
         context = "repo sync -c -j 8

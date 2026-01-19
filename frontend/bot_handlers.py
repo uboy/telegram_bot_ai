@@ -187,69 +187,70 @@ def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) 
     
     # Формируем HTML-ответ на основе markdown от backend
     ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
-    
-    # Формируем список источников из backend_sources (убираем дубликаты)
-    sources_html_list: list[str] = []
-    seen_sources = set()  # Ключ: (source_type, source_path)
-    source_counter = 1
-    
-    for s in backend_sources:
-        source_path = s.get("source_path") or ""
-        source_type = s.get("source_type") or "unknown"
-        
-        if not source_path or ".keep" in source_path.lower():
-            continue
-        
-        # Проверяем дубликаты по (source_type, source_path)
-        source_key = (source_type, source_path)
-        if source_key in seen_sources:
-            continue
-        seen_sources.add(source_key)
-        
+
+    def _format_source_html(source_path: str, source_type: str, index: int) -> str:
         is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
-        
         if is_url:
             url_for_link = source_path
-            # Для красоты: если это export-URL вики, покажем "нормальный" путь (но ссылка остаётся исходной)
             display_url = normalize_wiki_url_for_display(source_path) or source_path
-            
-            # Извлекаем читаемый заголовок из URL
             if "/" in url_for_link:
                 parts = [p for p in url_for_link.split("/") if p]
-                if parts:
-                    title = parts[-1]
-                else:
-                    title = url_for_link
+                title = parts[-1] if parts else url_for_link
             else:
                 title = url_for_link
-            
             title = unquote(title)
             if not title or len(title) < 2:
                 parts = [p for p in url_for_link.split("/") if p]
-                if len(parts) > 1:
-                    title = unquote(parts[-2])
-                else:
-                    title = url_for_link
-            
-            title_escaped = escape(title)
+                title = unquote(parts[-2]) if len(parts) > 1 else url_for_link
             url_escaped = escape(url_for_link, quote=True)
-            # Можно показать display_url как title, если title выглядит мусорно
             nice_title = title if title and len(title) >= 2 else display_url
-            sources_html_list.append(f'{source_counter}. <a href="{url_escaped}">{escape(nice_title)}</a>')
+            return f'{index}. <a href="{url_escaped}">{escape(nice_title)}</a>'
+        if "::" in source_path:
+            file_name = source_path.split("::")[-1]
+        elif "/" in source_path:
+            file_name = source_path.split("/")[-1]
         else:
-            # Не-URL источники показываем как текст/имя файла
-            if "::" in source_path:
-                file_name = source_path.split("::")[-1]
-            elif "/" in source_path:
-                file_name = source_path.split("/")[-1]
-            else:
-                file_name = source_path
-            file_name = unquote(file_name) if "%" in file_name else file_name
-            file_name_escaped = escape(file_name or "неизвестный источник")
-            sources_html_list.append(f"{source_counter}. <code>{file_name_escaped}</code>")
-        
+            file_name = source_path
+        file_name = unquote(file_name) if "%" in file_name else file_name
+        file_name_escaped = escape(file_name or "неизвестный источник")
+        return f"{index}. <code>{file_name_escaped}</code>"
+
+    # Формируем список источников из backend_sources (убираем дубликаты)
+    sources_html_list: list[str] = []
+    seen_paths = set()
+    source_counter = 1
+
+    for s in backend_sources:
+        source_path = s.get("source_path") or ""
+        source_type = s.get("source_type") or "unknown"
+
+        if not source_path or ".keep" in source_path.lower():
+            continue
+
+        source_key = source_path.strip().lower()
+        if source_key in seen_paths:
+            continue
+        seen_paths.add(source_key)
+        sources_html_list.append(_format_source_html(source_path, source_type, source_counter))
         source_counter += 1
-    
+
+    # Дополнительные варианты из debug_chunks (если есть)
+    extra_sources_html_list: list[str] = []
+    debug_chunks = backend_result.get("debug_chunks") or []
+    extra_counter = 1
+    for chunk in debug_chunks:
+        source_path = chunk.get("source_path") or chunk.get("doc_title") or chunk.get("section_path") or ""
+        if not source_path or ".keep" in source_path.lower():
+            continue
+        source_key = source_path.strip().lower()
+        if source_key in seen_paths:
+            continue
+        seen_paths.add(source_key)
+        extra_sources_html_list.append(_format_source_html(source_path, "unknown", extra_counter))
+        extra_counter += 1
+        if extra_counter > 5:
+            break
+
     if sources_html_list:
         sources_html = "\n".join(f"• {s}" for s in sources_html_list)
         answer_html = (
@@ -258,7 +259,11 @@ def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) 
         )
     else:
         answer_html = f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}"
-    
+
+    if extra_sources_html_list:
+        extra_html = "\n".join(f"• {s}" for s in extra_sources_html_list)
+        answer_html += f"\n\n🔎 <b>Другие возможные источники:</b>\n{extra_html}"
+
     return answer_html, True
 
 
