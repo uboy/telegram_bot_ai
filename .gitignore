@@ -18,3 +18,5 @@ data/n8n/
 *.log
 # config.py может содержать секреты, если используется без .env
 # config.py
+open-harmony.zip
+open-harmony/*

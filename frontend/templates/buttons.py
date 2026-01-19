@@ -129,6 +129,7 @@ def kb_settings_menu(kb_id: int, settings: dict):
             f"?? Prompt ingest: {'on' if prompt_ingest else 'off'}",
             callback_data=f"kb_setting:{kb_id}:ui.prompt_on_ingest:{'false' if prompt_ingest else 'true'}",
         )],
+        [InlineKeyboardButton("?? Индексировать код", callback_data=f"kb_code:{kb_id}")],
         [InlineKeyboardButton("?? Назад", callback_data=f"kb_select:{kb_id}")],
     ]
     return InlineKeyboardMarkup(buttons)

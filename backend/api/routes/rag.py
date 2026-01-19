@@ -202,8 +202,83 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             enable_citations=enable_citations,
         )
 
+        def sanitize_commands_in_answer(answer: str, context: str) -> str:
+            import re
+
+            if not answer or not context:
+                return answer
+
+            context_norm = re.sub(r"\s+", " ", context).lower()
+            command_prefixes = (
+                "git ",
+                "repo ",
+                "./",
+                "bash ",
+                "python ",
+                "pip ",
+                "cmake ",
+                "make ",
+                "ninja ",
+                "docker ",
+                "kubectl ",
+                "sudo ",
+                "apt ",
+                "yum ",
+                "npm ",
+                "yarn ",
+            )
+
+            def is_command_line(line: str) -> bool:
+                s = line.strip()
+                if not s:
+                    return False
+                if s.startswith("$ "):
+                    s = s[2:].lstrip()
+                if s.startswith(command_prefixes):
+                    return True
+                if " && " in s or s.startswith("cd "):
+                    return True
+                return False
+
+            def line_in_context(line: str) -> bool:
+                s = re.sub(r"\s+", " ", line.strip()).lower()
+                return bool(s) and s in context_norm
+
+            def contains_wiki_url(line: str) -> bool:
+                return "/wikis/" in line or "#sync" in line or "#build" in line
+
+            # Sanitize fenced code blocks
+            code_pattern = r"```([a-zA-Z0-9+_-]*)\n(.*?)```"
+            def replace_code(match):
+                lang = match.group(1) or ""
+                body = match.group(2) or ""
+                lines = body.splitlines()
+                kept = []
+                for ln in lines:
+                    if is_command_line(ln):
+                        if contains_wiki_url(ln) or not line_in_context(ln):
+                            continue
+                    kept.append(ln)
+                if not kept:
+                    return "Команда отсутствует в базе знаний."
+                return f"```{lang}\n" + "\n".join(kept) + "\n```"
+
+            answer = re.sub(code_pattern, replace_code, answer, flags=re.DOTALL)
+
+            # Sanitize inline code
+            def replace_inline(match):
+                code = match.group(1) or ""
+                if is_command_line(code):
+                    if contains_wiki_url(code) or not line_in_context(code):
+                        return "команда отсутствует в базе знаний"
+                return match.group(0)
+
+            answer = re.sub(r"`([^`]+)`", replace_inline, answer)
+            return answer
+
         logger.debug("Calling AI manager with prompt length %d", len(prompt))
         ai_answer = ai_manager.query(prompt)
+        ai_answer = sanitize_commands_in_answer(ai_answer, context_text)
         logger.debug("AI manager returned answer length %d", len(ai_answer) if ai_answer else 0)
         
         # Возвращаем сырой markdown от LLM
