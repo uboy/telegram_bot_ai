@@ -598,13 +598,13 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
 - **Если информация неполная или отсутствует, НЕ выдумывай недостающие части - скажи, что информации нет.**
 - **Приоритет: сначала дай наиболее релевантный и полный ответ, затем кратко упомяни другие найденные темы.**
 
-### Format ответа:
+### Формат ответа:
 
 **Основной ответ:**
-[Детальный ответ на вопрос с citations [source_id] где необходимо]
+[Детальный ответ на вопрос с citations [source_id], если они есть в контексте]
 
-**Дополнительно найдено:**
-• [Краткое упоминание других релевантных тем] [source_id]
+**Дополнительно найдено:** (только если есть дополнительная релевантная информация)
+- [Краткое упоминание других релевантных тем с citations, если они есть в контексте]
 
 ### Важные правила форматирования:
 
@@ -612,36 +612,14 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
 - **Если команда длинная или многострочная, используй блок кода с языком (bash, sh, и т.д.)**
 - **Если команда короткая (одна строка), используй inline код: `команда`**
 - **НЕ повторяй одну и ту же информацию дважды в одном пункте**
-- **Если информация неполная (например, есть только для Windows, но нет для Mac), НЕ выдумывай недостающую информацию - явно укажи, что информации нет**
+- **Если информация неполная (например, есть только для Windows, но нет для Mac), НЕ выдумывай недостающие части - явно укажи, что информации нет**
 - **НЕ создавай пункты типа "Run X for Y: X" - это бессмысленное повторение. Если информации нет, просто скажи об этом.**
 - **Если в контексте указано только название команды без деталей, НЕ выдумывай детали - просто упомяни название команды.**
-
-### Example:
-
-**Основной ответ:**
-Для синхронизации репозитория выполните:
-
-```bash
-git clone https://example.com/repo.git
-cd repo
-git pull
-```
-
-Для сборки проекта:
-```bash
-./build.sh --product-name rk3568
-```
-
-[source_id]sync_build_guide]
-
-**Дополнительно найдено:**
-• Информация о настройке окружения [source_id]env_setup]
-
-Если SOURCE_ID: отсутствует в контексте, ответ должен пропустить citation.
+- **Не копируй шаблон ответа и не вставляй примерные источники/ссылки.**
 
 ### Output:
 
-Дай структурированный ответ: сначала основной ответ с citations, затем кратко дополнительная информация.
+Дай структурированный ответ: сначала основной ответ с citations (если есть в контексте), затем кратко дополнительная информация (если есть).
 
 <context>
 
@@ -728,8 +706,8 @@ Respond to the user query using the provided context. Structure your response as
 **Main Answer:**
 [Detailed answer to the question with citations [source_id] where necessary]
 
-**Additionally Found:**
-• [Brief mention of other relevant topics] [source_id]
+**Additionally Found:** (only if there is additional relevant information)
+- [Brief mention of other relevant topics with citations if present in context]
 
 ### Important formatting rules:
 
@@ -738,34 +716,11 @@ Respond to the user query using the provided context. Structure your response as
 - **If a command is short (single line), use inline code: `command`**
 - **DO NOT repeat the same information twice in one point**
 - **If information is incomplete (e.g., only for Windows but not for Mac), DO NOT make up missing information - explicitly state that the information is not available**
-
-### Example:
-
-**Main Answer:**
-To sync the repository, run:
-
-```bash
-git clone https://example.com/repo.git
-cd repo
-git pull
-```
-
-To build the project:
-```bash
-./build.sh --product-name rk3568
-```
-
-[source_id]sync_build_guide]
-
-**Additionally Found:**
-• Environment setup information [environment_setup]
-• API documentation [api_docs]
-
-If no SOURCE_ID: line is present in the context, the response should omit the citation.
+- **Do not copy the response template or insert example sources/links.**
 
 ### Output:
 
-Provide a structured response: first the main answer with citations, then briefly additional information.
+Provide a structured response: first the main answer with citations (if present in context), then briefly additional information (if any).
 
 <context>
 
@@ -778,12 +733,6 @@ Provide a structured response: first the main answer with citations, then briefl
 {query}
 
 </user_query>"""
-            else:
-                prompt = f"""You are a helpful assistant. Answer the user's question in English.
-
-Question: {query}
-
-Answer in detail and accurately in English:"""
         elif task == "search_summary":
             prompt = f"""Analyze the web search results and provide a structured, readable answer in English to the question: {query}
 

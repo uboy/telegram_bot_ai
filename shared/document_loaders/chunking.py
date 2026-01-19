@@ -143,27 +143,10 @@ def split_markdown_section_into_chunks(
             code_block_len = len(code_block)
             if current_chunk and current_len + code_block_len > max_chars:
                 chunks.append(current_chunk.strip())
-                current_chunk = code_block
-            elif code_block_len > max_chars:
-                if code_block_len <= max_chars * 1.5:
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    chunks.append(code_block.strip())
-                    current_chunk = ""
-                else:
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    # Для очень больших блоков кода разбиваем по строкам
-                    code_lines = code_block.split('\n')
-                    temp_code = ""
-                    for code_line in code_lines:
-                        if code_line.strip():
-                            if temp_code and len(temp_code) + len(code_line) + 1 > max_chars:
-                                chunks.append(temp_code.strip())
-                                temp_code = code_line + '\n'
-                            else:
-                                temp_code += code_line + '\n'
-                    current_chunk = temp_code
+                current_chunk = ""
+
+            if code_block_len > max_chars:
+                chunks.append(code_block.strip())
             else:
                 current_chunk += code_block
         
@@ -363,12 +346,10 @@ def split_text_structurally(
             code_block_len = len(code_block)
             if current_chunk and current_len + code_block_len > max_chars:
                 chunks.append(current_chunk.strip())
-                current_chunk = code_block if code_block_len <= max_chars * 1.5 else code_block[:max_chars]
-            elif code_block_len > max_chars * 1.5:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                chunks.append(code_block.strip())
                 current_chunk = ""
+
+            if code_block_len > max_chars:
+                chunks.append(code_block.strip())
             else:
                 current_chunk += code_block
         

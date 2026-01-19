@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+import json
 
 from backend.api.deps import get_db_dep, require_api_key
 from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource
@@ -9,8 +10,9 @@ from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource
 from shared.rag_system import rag_system  # type: ignore
 from shared.ai_providers import ai_manager  # type: ignore
 from shared.utils import create_prompt_with_language  # type: ignore
+from shared.rag_safety import strip_unknown_citations, sanitize_commands_in_answer  # type: ignore
 from shared.logging_config import logger  # type: ignore
-from shared.database import KnowledgeBase  # type: ignore
+from shared.database import KnowledgeBase, KnowledgeChunk  # type: ignore
 from shared.kb_settings import normalize_kb_settings  # type: ignore
 
 
@@ -90,102 +92,277 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             logger.warning("Error calculating best rerank score: %s", e, exc_info=True)
             # Продолжаем обработку, если не удалось вычислить best_score
 
-        # Формируем контекст для LLM на основе найденных фрагментов
-        context_parts: list[str] = []
-        for idx, r in enumerate(results[:top_k_for_context], start=1):
+        def detect_intent(query: str) -> str:
+            q = (query or "").lower()
+            howto_terms = [
+                "how to",
+                "build",
+                "run",
+                "install",
+                "setup",
+                "compile",
+                "unit test",
+                "unittest",
+                "tests",
+            ]
+            trouble_terms = [
+                "error",
+                "fail",
+                "failed",
+                "not working",
+                "issue",
+                "stacktrace",
+            ]
+            if any(term in q for term in howto_terms):
+                return "HOWTO"
+            if any(term in q for term in trouble_terms):
+                return "TROUBLE"
+            return "GENERAL"
+
+        def get_doc_id(result: dict) -> str:
+            source_path = result.get("source_path") or ""
+            if source_path:
+                return source_path
+            meta = result.get("metadata") or {}
+            return meta.get("doc_title") or meta.get("title") or "unknown"
+
+        def base_score(result: dict) -> float:
+            if "rerank_score" in result and result.get("rerank_score") is not None:
+                try:
+                    return float(result.get("rerank_score"))
+                except (TypeError, ValueError):
+                    return 0.0
+            try:
+                return -float(result.get("distance", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        def apply_boosts(query: str, result: dict, intent: str) -> float:
+            score = base_score(result)
+            meta = result.get("metadata") or {}
+            doc_title = (meta.get("doc_title") or meta.get("title") or "").lower()
+            section_title = (meta.get("section_title") or "").lower()
+            text = (result.get("content") or "").lower()
+            q = (query or "").lower()
+
+            if "unit test" in q or "unittest" in q or "tests" in q:
+                if any(t in section_title for t in ("unit test", "unittest", "test")):
+                    score += 2.0
+                if any(t in doc_title for t in ("unit test", "unittest", "test")):
+                    score += 1.0
+                if any(t in text for t in ("unit test", "unittest")):
+                    score += 1.0
+
+            if intent == "HOWTO":
+                if any(t in section_title for t in ("how to", "build", "run", "steps")):
+                    score += 1.0
+                if any(t in section_title for t in ("overview", "introduction")):
+                    score -= 1.0
+
+            return score
+
+        def select_docs(intent: str, ranked: List[dict]) -> List[str]:
+            doc_best: Dict[str, float] = {}
+            for r in ranked[:20]:
+                doc_id = r.get("doc_id") or get_doc_id(r)
+                doc_best[doc_id] = max(doc_best.get(doc_id, -1e9), float(r.get("rank_score", 0.0)))
+
+            if not doc_best:
+                return []
+
+            items = sorted(doc_best.items(), key=lambda x: x[1], reverse=True)
+            top_doc, top_score = items[0]
+            second_doc, second_score = (items[1] if len(items) > 1 else (None, None))
+
+            if intent != "HOWTO":
+                return [d for d, _ in items[:3]]
+
+            if second_doc and (top_score - float(second_score)) < 0.3:
+                return [top_doc, second_doc]
+            return [top_doc]
+
+        def load_doc_chunks(doc_id: str) -> List[dict]:
+            rows = (
+                db.query(KnowledgeChunk)
+                .filter(KnowledgeChunk.knowledge_base_id == kb_id)
+                .filter(KnowledgeChunk.source_path == doc_id)
+                .order_by(KnowledgeChunk.id.asc())
+                .all()
+            )
+            chunks: List[dict] = []
+            for row in rows:
+                try:
+                    meta = row.chunk_metadata
+                    meta_obj = json.loads(meta) if meta else {}
+                except Exception:
+                    meta_obj = {}
+                chunks.append(
+                    {
+                        "id": row.id,
+                        "content": row.content or "",
+                        "metadata": meta_obj,
+                        "source_type": row.source_type,
+                        "source_path": row.source_path,
+                    }
+                )
+            def sort_key(item: dict) -> int:
+                meta = item.get("metadata") or {}
+                try:
+                    return int(meta.get("chunk_no"))
+                except (TypeError, ValueError):
+                    return int(item.get("id") or 0)
+            return sorted(chunks, key=sort_key)
+
+        def build_context_block(
+            r: dict,
+            base_context_length: int,
+            full_multiplier: int,
+        ) -> Optional[str]:
             try:
                 source_path = r.get("source_path") or ""
                 meta = r.get("metadata") or {}
                 title = meta.get("title") or source_path or "Без названия"
-                
-                # Извлекаем метаданные
+
                 doc_title = meta.get("doc_title") or meta.get("title") or ""
                 section_path = meta.get("section_path") or ""
+                section_title = meta.get("section_title") or ""
                 chunk_kind = meta.get("chunk_kind") or "text"
                 code_lang = meta.get("code_lang") or ""
 
-                # Формируем source_id для inline-citations
                 if source_path and ".keep" not in source_path.lower():
                     if "::" in source_path:
-                        source_id = source_path.split("::")[-1]
+                        base_id = source_path.split("::")[-1]
                     elif "/" in source_path:
-                        source_id = source_path.split("/")[-1]
+                        base_id = source_path.split("/")[-1]
                     else:
-                        source_id = source_path
-                    source_id = source_id.rsplit(".", 1)[0] if "." in source_id else source_id
+                        base_id = source_path
+                    base_id = base_id.rsplit(".", 1)[0] if "." in base_id else base_id
+                    source_id = f"{base_id}_{r.get('id')}" if r.get("id") else base_id
                 else:
                     source_id = title.replace(" ", "_").lower()[:50]
 
                 content = r.get("content") or ""
-                
-                # Правило обрезки в зависимости от chunk_kind
+
                 if chunk_kind in ("code", "code_file"):
-                    # Для code-чанков не обрезаем или обрезаем очень мягко (context_length * 3)
-                    max_length = context_length * 3
+                    max_length = base_context_length * 3
                     if len(content) > max_length:
-                        # Обрезаем только если очень длинный, но стараемся не ломать команды
-                        # Ищем последний перенос строки перед max_length
                         cut_point = content.rfind("\n", 0, max_length)
-                        if cut_point > max_length * 0.8:  # Если нашли разумную точку обрезки
-                            content_preview = content[:cut_point]
-                        else:
-                            # Если не нашли, обрезаем по max_length, но не добавляем "..."
-                            content_preview = content[:max_length]
+                        content_preview = content[:cut_point] if cut_point > max_length * 0.8 else content[:max_length]
                     else:
                         content_preview = content
                 elif chunk_kind in ("full_page", "full_doc"):
-                    max_length = context_length * max(1, full_page_multiplier)
+                    max_length = base_context_length * max(1, full_multiplier)
                     if len(content) > max_length:
                         cut_point = content.rfind("\n", 0, max_length)
-                        if cut_point > max_length * 0.8:
-                            content_preview = content[:cut_point] + "..."
-                        else:
-                            content_preview = content[:max_length] + "..."
+                        content_preview = content[:cut_point] + "..." if cut_point > max_length * 0.8 else content[:max_length] + "..."
                     else:
                         content_preview = content
                 elif chunk_kind == "list":
-                    # Для списков обрезаем мягче (context_length * 2)
-                    max_length = context_length * 2
+                    max_length = base_context_length * 2
                     if len(content) > max_length:
                         cut_point = content.rfind("\n", 0, max_length)
-                        if cut_point > max_length * 0.8:
-                            content_preview = content[:cut_point] + "..."
-                        else:
-                            content_preview = content[:max_length] + "..."
+                        content_preview = content[:cut_point] + "..." if cut_point > max_length * 0.8 else content[:max_length] + "..."
                     else:
                         content_preview = content
                 else:
-                    # Для обычного текста обрезаем как обычно
-                    content_preview = content[:context_length]
-                    if len(content) > context_length:
+                    content_preview = content[:base_context_length]
+                    if len(content) > base_context_length:
                         content_preview += "..."
 
-                # Формируем блок контекста в плоском формате (без XML-тегов)
                 context_block_parts = []
-                
                 if enable_citations:
                     context_block_parts.append(f"SOURCE_ID: {source_id}")
-                
                 if doc_title:
                     context_block_parts.append(f"DOC: {doc_title}")
-                
                 if section_path:
                     context_block_parts.append(f"SECTION: {section_path}")
-                
+                if section_title and not section_path:
+                    context_block_parts.append(f"SECTION: {section_title}")
                 if chunk_kind:
                     context_block_parts.append(f"TYPE: {chunk_kind}")
-                
                 if code_lang:
                     context_block_parts.append(f"LANG: {code_lang}")
-                
                 context_block_parts.append("CONTENT:")
                 context_block_parts.append(content_preview)
                 context_block_parts.append("---")
-                
-                context_parts.append("\n".join(context_block_parts))
+                return "\n".join(context_block_parts)
             except Exception as e:  # noqa: BLE001
-                logger.warning("Error processing result %d: %s", idx, e, exc_info=True)
-                continue
+                logger.warning("Error building context block: %s", e, exc_info=True)
+                return None
+
+        def build_context_blocks(
+            top_chunk: dict,
+            doc_chunks: List[dict],
+            token_limit_chars: int,
+        ) -> List[str]:
+            if not doc_chunks:
+                return []
+            idx = 0
+            for i, c in enumerate(doc_chunks):
+                if c.get("id") == top_chunk.get("id"):
+                    idx = i
+                    break
+
+            selected = [doc_chunks[idx]]
+            if idx - 1 >= 0:
+                selected.insert(0, doc_chunks[idx - 1])
+            if idx + 1 < len(doc_chunks):
+                selected.append(doc_chunks[idx + 1])
+
+            for c in doc_chunks:
+                title = (c.get("metadata") or {}).get("section_title") or ""
+                title_lower = title.lower()
+                if any(t in title_lower for t in ("prereq", "prerequisite", "setup")):
+                    if c not in selected:
+                        selected.insert(0, c)
+                    break
+
+            context_parts: List[str] = []
+            total = 0
+            for c in selected:
+                block = build_context_block(c, context_length, full_page_multiplier)
+                if not block:
+                    continue
+                if total + len(block) > token_limit_chars:
+                    break
+                context_parts.append(block)
+                total += len(block)
+            return context_parts
+
+        intent = detect_intent(payload.query)
+        ranked_results: List[dict] = []
+        for r in results:
+            doc_id = get_doc_id(r)
+            r["doc_id"] = doc_id
+            r["rank_score"] = apply_boosts(payload.query, r, intent)
+            ranked_results.append(r)
+        ranked_results.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
+
+        selected_docs = select_docs(intent, ranked_results)
+        filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
+
+        # Формируем контекст для LLM
+        context_parts: list[str] = []
+        if intent == "HOWTO" and selected_docs:
+            token_limit_chars = max(3000, context_length * 5)
+            for doc_id in selected_docs:
+                doc_chunks = load_doc_chunks(doc_id)
+                if not doc_chunks:
+                    continue
+                top_chunk = next((r for r in filtered_results if r.get("doc_id") == doc_id), None)
+                if not top_chunk:
+                    continue
+                if not top_chunk.get("id"):
+                    for c in doc_chunks:
+                        if c.get("content") == top_chunk.get("content"):
+                            top_chunk["id"] = c.get("id")
+                            break
+                context_parts.extend(build_context_blocks(top_chunk, doc_chunks, token_limit_chars))
+        else:
+            for r in filtered_results[:top_k_for_context]:
+                block = build_context_block(r, context_length, full_page_multiplier)
+                if block:
+                    context_parts.append(block)
 
         if not context_parts:
             logger.warning("No valid context parts extracted from results")
@@ -202,82 +379,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             enable_citations=enable_citations,
         )
 
-        def sanitize_commands_in_answer(answer: str, context: str) -> str:
-            import re
-
-            if not answer or not context:
-                return answer
-
-            context_norm = re.sub(r"\s+", " ", context).lower()
-            command_prefixes = (
-                "git ",
-                "repo ",
-                "./",
-                "bash ",
-                "python ",
-                "pip ",
-                "cmake ",
-                "make ",
-                "ninja ",
-                "docker ",
-                "kubectl ",
-                "sudo ",
-                "apt ",
-                "yum ",
-                "npm ",
-                "yarn ",
-            )
-
-            def is_command_line(line: str) -> bool:
-                s = line.strip()
-                if not s:
-                    return False
-                if s.startswith("$ "):
-                    s = s[2:].lstrip()
-                if s.startswith(command_prefixes):
-                    return True
-                if " && " in s or s.startswith("cd "):
-                    return True
-                return False
-
-            def line_in_context(line: str) -> bool:
-                s = re.sub(r"\s+", " ", line.strip()).lower()
-                return bool(s) and s in context_norm
-
-            def contains_wiki_url(line: str) -> bool:
-                return "/wikis/" in line or "#sync" in line or "#build" in line
-
-            # Sanitize fenced code blocks
-            code_pattern = r"```([a-zA-Z0-9+_-]*)\n(.*?)```"
-            def replace_code(match):
-                lang = match.group(1) or ""
-                body = match.group(2) or ""
-                lines = body.splitlines()
-                kept = []
-                for ln in lines:
-                    if is_command_line(ln):
-                        if contains_wiki_url(ln) or not line_in_context(ln):
-                            continue
-                    kept.append(ln)
-                if not kept:
-                    return "Команда отсутствует в базе знаний."
-                return f"```{lang}\n" + "\n".join(kept) + "\n```"
-
-            answer = re.sub(code_pattern, replace_code, answer, flags=re.DOTALL)
-
-            # Sanitize inline code
-            def replace_inline(match):
-                code = match.group(1) or ""
-                if is_command_line(code):
-                    if contains_wiki_url(code) or not line_in_context(code):
-                        return "команда отсутствует в базе знаний"
-                return match.group(0)
-
-            answer = re.sub(r"`([^`]+)`", replace_inline, answer)
-            return answer
 
         logger.debug("Calling AI manager with prompt length %d", len(prompt))
         ai_answer = ai_manager.query(prompt)
+        ai_answer = strip_unknown_citations(ai_answer, context_text)
         ai_answer = sanitize_commands_in_answer(ai_answer, context_text)
         logger.debug("AI manager returned answer length %d", len(ai_answer) if ai_answer else 0)
         
@@ -287,7 +392,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         # Собираем список источников для ответа
         sources: list[RAGSource] = []
-        for chunk in results:
+        for chunk in filtered_results:
             try:
                 metadata = chunk.get("metadata") or {}
                 sources.append(
@@ -305,7 +410,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         debug_chunks = None
         if debug_return_chunks:
             debug_chunks = []
-            for chunk in results[:5]:  # Первые 5 чанков
+            for chunk in filtered_results[:5]:  # Первые 5 чанков
                 try:
                     metadata = chunk.get("metadata") or {}
                     debug_chunks.append({
