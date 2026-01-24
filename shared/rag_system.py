@@ -11,6 +11,10 @@ from collections import defaultdict
 import numpy as np
 from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog, engine, get_session
 from sqlalchemy import text, or_
+try:
+    from shared.rag_pipeline.embedder import embed_texts as pipeline_embed_texts
+except Exception:
+    pipeline_embed_texts = None
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +58,20 @@ class RAGSystem:
         # Индексы по базам знаний (для раздельного поиска)
         self.index_by_kb: Dict[int, faiss.Index] = {}
         self.chunks_by_kb: Dict[int, List[KnowledgeChunk]] = {}
+        # BM25 индексы (in-memory)
+        self.bm25_index_by_kb: Dict[int, Dict] = {}
+        self.bm25_index_all: Optional[Dict] = None
+        self.bm25_chunks_by_kb: Dict[int, List[KnowledgeChunk]] = {}
+        self.bm25_chunks_all: List[KnowledgeChunk] = []
         # Сессии создаются на каждую операцию, не храним глобальную сессию
         self.reranker = None
         # Количество кандидатов для векторного поиска перед rerank (минимальный апгрейд)
+        try:
+            from shared.config import RAG_ENABLE_RERANK
+            self.enable_rerank = RAG_ENABLE_RERANK
+        except ImportError:
+            self.enable_rerank = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
+
         # Увеличиваем до 100 для лучшей релевантности при больших базах знаний
         try:
             from shared.config import RAG_MAX_CANDIDATES
@@ -179,35 +194,40 @@ class RAGSystem:
                 self.dimension = self.encoder.get_sentence_embedding_dimension()
                 logger.info(f"✅ Модель эмбеддингов загружена успешно (размерность: {self.dimension}, устройство: {device})")
 
-                # Попробовать загрузить reranker (минимальный апгрейд качества поиска)
-                try:
-                    from shared.config import RAG_RERANK_MODEL
-                    rerank_model_name = RAG_RERANK_MODEL
-                except ImportError:
-                    rerank_model_name = os.getenv(
-                        "RAG_RERANK_MODEL",
-                        "cross-encoder/ms-marco-MiniLM-L-6-v2",
-                    )
-                
-                # Проверить кеш для reranker
-                rerank_cache_name = rerank_model_name.replace("/", "--")
-                rerank_cache_path = os.path.join(cache_dir, f"models--{rerank_cache_name}")
-                
-                if os.path.exists(rerank_cache_path):
-                    logger.info(f"📥 Загрузка reranker из кэша: {rerank_model_name}")
-                else:
-                    logger.info(f"📥 Загрузка reranker: {rerank_model_name}...")
-                
-                try:
-                    # Используем то же устройство что и для encoder
-                    self.reranker = CrossEncoder(rerank_model_name, cache_folder=cache_dir, device=device)
-                    HAS_RERANKER = True
-                    logger.info(f"✅ Reranker загружен успешно: {rerank_model_name} (устройство: {device})")
-                except Exception as rerank_error:
-                    logger.warning(f"⚠️ Не удалось загрузить reranker ({rerank_model_name}): {rerank_error}")
-                    logger.info("   Поиск будет работать без reranker'а (только векторный поиск)")
+                if not self.enable_rerank:
+                    logger.info("ℹ️ Reranker отключен (RAG_ENABLE_RERANK=false)")
                     self.reranker = None
                     HAS_RERANKER = False
+                else:
+                    # Попробовать загрузить reranker (минимальный апгрейд качества поиска)
+                    try:
+                        from shared.config import RAG_RERANK_MODEL
+                        rerank_model_name = RAG_RERANK_MODEL
+                    except ImportError:
+                        rerank_model_name = os.getenv(
+                            "RAG_RERANK_MODEL",
+                            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                        )
+
+                    # Проверить кеш для reranker
+                    rerank_cache_name = rerank_model_name.replace("/", "--")
+                    rerank_cache_path = os.path.join(cache_dir, f"models--{rerank_cache_name}")
+
+                    if os.path.exists(rerank_cache_path):
+                        logger.info(f"📥 Загрузка reranker из кэша: {rerank_model_name}")
+                    else:
+                        logger.info(f"📥 Загрузка reranker: {rerank_model_name}...")
+
+                    try:
+                        # Используем то же устройство что и для encoder
+                        self.reranker = CrossEncoder(rerank_model_name, cache_folder=cache_dir, device=device)
+                        HAS_RERANKER = True
+                        logger.info(f"✅ Reranker загружен успешно: {rerank_model_name} (устройство: {device})")
+                    except Exception as rerank_error:
+                        logger.warning(f"⚠️ Не удалось загрузить reranker ({rerank_model_name}): {rerank_error}")
+                        logger.info("   Поиск будет работать без reranker'а (только векторный поиск)")
+                        self.reranker = None
+                        HAS_RERANKER = False
 
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось загрузить модель эмбеддингов: {e}")
@@ -260,14 +280,18 @@ class RAGSystem:
             
             # Загружаем новые модели из конфига
             try:
-                from shared.config import RAG_MODEL_NAME, RAG_RERANK_MODEL, RAG_DEVICE
+                from shared.config import RAG_MODEL_NAME, RAG_RERANK_MODEL, RAG_DEVICE, RAG_ENABLE_RERANK
                 new_model_name = RAG_MODEL_NAME
                 new_rerank_model = RAG_RERANK_MODEL
                 device = RAG_DEVICE
+                enable_rerank = RAG_ENABLE_RERANK
+                self.enable_rerank = enable_rerank
             except ImportError:
                 new_model_name = os.getenv("RAG_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
                 new_rerank_model = os.getenv("RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
                 device = os.getenv("RAG_DEVICE", "cpu")
+                enable_rerank = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
+                self.enable_rerank = enable_rerank
             
             # Определить путь к кэшу
             cache_dir = os.getenv("HF_HOME") or os.path.join(os.getenv("BOT_DATA_DIR", "/app/data"), "cache", "huggingface")
@@ -309,23 +333,33 @@ class RAGSystem:
                 result['embedding'] = False
             
             # Загрузить новый reranker
-            try:
-                logger.info(f"🔄 Перезагрузка reranker: {new_rerank_model}")
-                self.reranker = CrossEncoder(new_rerank_model, cache_folder=cache_dir, device=device)
-                HAS_RERANKER = True
-                result['reranker'] = True
-                logger.info(f"✅ Reranker перезагружен (устройство: {device})")
-            except Exception as rerank_error:
-                logger.warning(f"⚠️ Не удалось перезагрузить reranker ({new_rerank_model}): {rerank_error}")
+            if not enable_rerank:
+                logger.info("ℹ️ Reranker отключен (RAG_ENABLE_RERANK=false)")
                 self.reranker = None
                 HAS_RERANKER = False
                 result['reranker'] = False
-            
+            else:
+                try:
+                    logger.info(f"🔄 Перезагрузка reranker: {new_rerank_model}")
+                    self.reranker = CrossEncoder(new_rerank_model, cache_folder=cache_dir, device=device)
+                    HAS_RERANKER = True
+                    result['reranker'] = True
+                    logger.info(f"✅ Reranker перезагружен (устройство: {device})")
+                except Exception as rerank_error:
+                    logger.warning(f"⚠️ Не удалось перезагрузить reranker ({new_rerank_model}): {rerank_error}")
+                    self.reranker = None
+                    HAS_RERANKER = False
+                    result['reranker'] = False
+
             # Пересоздать индекс при следующем поиске (он будет пересоздан автоматически)
             self.index = None
             self.chunks = []
             self.index_by_kb.clear()
             self.chunks_by_kb.clear()
+            self.bm25_index_by_kb.clear()
+            self.bm25_index_all = None
+            self.bm25_chunks_by_kb.clear()
+            self.bm25_chunks_all = []
             
         except Exception as e:
             logger.error(f"❌ Критическая ошибка при перезагрузке моделей RAG: {e}", exc_info=True)
@@ -337,6 +371,11 @@ class RAGSystem:
         if not HAS_EMBEDDINGS or not self.encoder:
             return None
         try:
+            if pipeline_embed_texts:
+                vectors = pipeline_embed_texts([text], encoder=self.encoder)
+                if not vectors or vectors[0] is None:
+                    return None
+                return np.array(vectors[0])
             return self.encoder.encode(text, convert_to_numpy=True)
         except Exception as e:
             logger.error(f"Ошибка создания эмбеддинга: {e}")
@@ -349,22 +388,36 @@ class RAGSystem:
         
         with get_session() as session:
             if knowledge_base_id is not None:
-                chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
-                total_chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).count()
+                chunks = (
+                    session.query(KnowledgeChunk)
+                    .filter_by(knowledge_base_id=knowledge_base_id, is_deleted=False)
+                    .all()
+                )
+                total_chunks = (
+                    session.query(KnowledgeChunk)
+                    .filter_by(knowledge_base_id=knowledge_base_id, is_deleted=False)
+                    .count()
+                )
             else:
-                chunks = session.query(KnowledgeChunk).all()
-                total_chunks = session.query(KnowledgeChunk).count()
+                chunks = session.query(KnowledgeChunk).filter_by(is_deleted=False).all()
+                total_chunks = session.query(KnowledgeChunk).filter_by(is_deleted=False).count()
             
             if not chunks:
                 return
-        
+
+        # BM25 для всех чанков (даже без эмбеддингов)
+        self.bm25_chunks_all = chunks
+        self.bm25_index_all = self._build_bm25_index(chunks)
+
         # Группировать чанки по knowledge_base_id и подсчитать coverage
         chunks_by_kb = defaultdict(list)
+        all_chunks_by_kb = defaultdict(list)
         chunks_with_embedding = 0
         expected_dim = None
         dim_mismatches = 0
         
         for chunk in chunks:
+            all_chunks_by_kb[chunk.knowledge_base_id].append(chunk)
             if chunk.embedding:
                 try:
                     embedding = np.array(json.loads(chunk.embedding))
@@ -422,7 +475,15 @@ class RAGSystem:
             
             self.index_by_kb[kb_id] = index
             self.chunks_by_kb[kb_id] = valid_chunks
+            self.bm25_chunks_by_kb[kb_id] = all_chunks_by_kb.get(kb_id, [])
+            self.bm25_index_by_kb[kb_id] = self._build_bm25_index(self.bm25_chunks_by_kb[kb_id])
         
+        # Построить BM25 индексы для KB без эмбеддингов
+        for kb_id, kb_chunks in all_chunks_by_kb.items():
+            if kb_id not in self.bm25_index_by_kb:
+                self.bm25_chunks_by_kb[kb_id] = kb_chunks
+                self.bm25_index_by_kb[kb_id] = self._build_bm25_index(kb_chunks)
+
         # Для обратной совместимости: если запрошен общий индекс
         if knowledge_base_id is None and chunks_by_kb:
             # Объединить все чанки для старого API
@@ -435,12 +496,79 @@ class RAGSystem:
             
             if all_embeddings:
                 self.chunks = all_chunks
+                self.bm25_chunks_all = chunks
                 all_embeddings = np.array(all_embeddings).astype('float32')
                 faiss.normalize_L2(all_embeddings)
                 self.dimension = all_embeddings.shape[1]
                 self.index = faiss.IndexFlatIP(self.dimension)
                 self.index.add(all_embeddings)
     
+
+    def _tokenize(self, text: str) -> List[str]:
+        import re
+        return re.findall(r"\w+", (text or "").lower())
+
+    def _build_bm25_index(self, chunks: List[KnowledgeChunk]) -> Dict:
+        df: Dict[str, int] = {}
+        docs_tokens: List[List[str]] = []
+        total_len = 0
+        for chunk in chunks:
+            tokens = self._tokenize(chunk.content)
+            docs_tokens.append(tokens)
+            total_len += len(tokens)
+            seen = set(tokens)
+            for tok in seen:
+                df[tok] = df.get(tok, 0) + 1
+        avgdl = (total_len / len(docs_tokens)) if docs_tokens else 0.0
+        return {
+            "df": df,
+            "docs_tokens": docs_tokens,
+            "avgdl": avgdl,
+            "doc_count": len(docs_tokens),
+        }
+
+    def _bm25_search(self, query: str, bm25_index: Dict, top_k: int) -> List[int]:
+        import math
+        q_tokens = self._tokenize(query)
+        if not q_tokens or not bm25_index:
+            return []
+        df = bm25_index["df"]
+        docs_tokens = bm25_index["docs_tokens"]
+        avgdl = bm25_index["avgdl"] or 1.0
+        doc_count = bm25_index["doc_count"] or 1
+
+        k1 = 1.5
+        b = 0.75
+
+        scores = []
+        for idx, tokens in enumerate(docs_tokens):
+            if not tokens:
+                continue
+            tf = {}
+            for tok in tokens:
+                tf[tok] = tf.get(tok, 0) + 1
+            dl = len(tokens)
+            score = 0.0
+            for tok in q_tokens:
+                if tok not in tf:
+                    continue
+                n = df.get(tok, 0)
+                idf = math.log(1 + (doc_count - n + 0.5) / (n + 0.5))
+                freq = tf[tok]
+                denom = freq + k1 * (1 - b + b * (dl / avgdl))
+                score += idf * (freq * (k1 + 1)) / (denom or 1.0)
+            if score > 0:
+                scores.append((idx, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return [idx for idx, _ in scores[:top_k]]
+
+    def _rrf_fuse(self, ranked_lists: List[List[object]], k: int = 60) -> List[object]:
+        scores: Dict[object, float] = {}
+        for ranked in ranked_lists:
+            for rank, idx in enumerate(ranked, start=1):
+                scores[idx] = scores.get(idx, 0.0) + 1.0 / (k + rank)
+        return [idx for idx, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
+
     def add_knowledge_base(self, name: str, description: str = "") -> KnowledgeBase:
         """Создать новую базу знаний"""
         with _db_write_lock:
@@ -465,7 +593,11 @@ class RAGSystem:
     
     def add_chunk(self, knowledge_base_id: int, content: str, 
                   source_type: str = "text", source_path: str = "",
-                  metadata: Optional[Dict] = None) -> KnowledgeChunk:
+                  metadata: Optional[Dict] = None,
+                  document_id: Optional[int] = None,
+                  version: Optional[int] = None,
+                  metadata_json: Optional[Dict] = None,
+                  is_deleted: bool = False) -> KnowledgeChunk:
         """Добавить фрагмент знания с retry логикой для обработки блокировок БД"""
         import time
         import random
@@ -482,11 +614,15 @@ class RAGSystem:
                     with get_session() as session:
                         chunk = KnowledgeChunk(
                             knowledge_base_id=knowledge_base_id,
+                            document_id=document_id,
+                            version=version or 1,
                             content=content,
                             chunk_metadata=json.dumps(metadata or {}),
+                            metadata_json=json.dumps(metadata_json or {}) if metadata_json is not None else None,
                             embedding=embedding_json,
                             source_type=source_type,
-                            source_path=source_path
+                            source_path=source_path,
+                            is_deleted=is_deleted,
                         )
                         session.add(chunk)
                         session.flush()  # Получить ID
@@ -575,11 +711,15 @@ class RAGSystem:
                             for chunk_data, embedding, embedding_json in batch_data:
                                 chunk = KnowledgeChunk(
                                     knowledge_base_id=chunk_data['knowledge_base_id'],
+                                    document_id=chunk_data.get('document_id'),
+                                    version=chunk_data.get('version') or 1,
                                     content=chunk_data.get('content', ''),
                                     chunk_metadata=json.dumps(chunk_data.get('metadata') or {}),
+                                    metadata_json=json.dumps(chunk_data.get('metadata_json') or {}) if chunk_data.get('metadata_json') is not None else None,
                                     embedding=None,  # Вставляем без embedding сначала
                                     source_type=chunk_data.get('source_type', 'text'),
-                                    source_path=chunk_data.get('source_path', '')
+                                    source_path=chunk_data.get('source_path', ''),
+                                    is_deleted=bool(chunk_data.get('is_deleted', False)),
                                 )
                                 chunks_to_add.append(chunk)
                                 if embedding_json:
@@ -668,6 +808,10 @@ class RAGSystem:
                 # Очистить индексы по KB
                 self.index_by_kb.clear()
                 self.chunks_by_kb.clear()
+                self.bm25_index_by_kb.clear()
+                self.bm25_index_all = None
+                self.bm25_chunks_by_kb.clear()
+                self.bm25_chunks_all = []
                 # Индекс будет пересобран при следующем поиске через _load_index()
         
         return all_chunks
@@ -747,27 +891,20 @@ class RAGSystem:
         scores, indices = index.search(query_embedding, candidate_k)
         
         dense_candidates: List[Dict] = []
+        dense_ranked: List[int] = []
         for i, idx in enumerate(indices[0]):
             if idx < len(chunks):
                 chunk = chunks[idx]
-                # KB уже отфильтрован через индекс, дополнительная проверка не нужна
                 metadata = json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {}
-                
-                # Для how-to запросов даем буст code/list чанкам
-                similarity = float(scores[0][i])  # Это уже cosine similarity (inner product, может быть от -1 до 1)
+                similarity = float(scores[0][i])
                 if is_howto_query:
                     chunk_kind = metadata.get("chunk_kind", "text")
                     if chunk_kind in ("code", "code_file", "list"):
-                        similarity *= 1.5  # Буст для code/list в how-to режиме
-                    
-                    # Буст за совпадение в section_path
+                        similarity *= 1.5
                     section_path = (metadata.get("section_path") or "").lower()
                     if section_path and any(word in section_path for word in query_words):
                         similarity *= 1.2
-                
-                # Для cosine similarity: distance = -similarity (сортировка по возрастанию distance = по убыванию similarity)
                 distance = -similarity
-                
                 dense_candidates.append(
                     {
                         "content": chunk.content,
@@ -775,25 +912,62 @@ class RAGSystem:
                         "source_type": chunk.source_type,
                         "source_path": chunk.source_path,
                         "distance": distance,
-                        "similarity": similarity,  # Сохраняем similarity для отладки
+                        "similarity": similarity,
                         "origin": "dense",
+                        "chunk_idx": idx,
+                    }
+                )
+                dense_ranked.append(idx)
+
+        # BM25 поиск как второй канал (на всех чанках)
+        bm25_chunks = self.bm25_chunks_by_kb.get(knowledge_base_id) if knowledge_base_id is not None else self.bm25_chunks_all
+        if not bm25_chunks:
+            bm25_chunks = chunks
+        bm25_index = self.bm25_index_by_kb.get(knowledge_base_id) if knowledge_base_id is not None else self.bm25_index_all
+        if bm25_index is None:
+            bm25_index = self._build_bm25_index(bm25_chunks)
+            if knowledge_base_id is not None:
+                self.bm25_index_by_kb[knowledge_base_id] = bm25_index
+            else:
+                self.bm25_index_all = bm25_index
+        bm25_ranked = self._bm25_search(query, bm25_index or {}, self.max_candidates)
+        bm25_candidates: List[Dict] = []
+        bm25_ranked_keys: List[tuple] = []
+        for rank, idx in enumerate(bm25_ranked, start=1):
+            if idx < len(bm25_chunks):
+                chunk = bm25_chunks[idx]
+                metadata = json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {}
+                key = (chunk.source_path or "", (chunk.content or "")[:200])
+                bm25_ranked_keys.append(key)
+                bm25_candidates.append(
+                    {
+                        "content": chunk.content,
+                        "metadata": metadata,
+                        "source_type": chunk.source_type,
+                        "source_path": chunk.source_path,
+                        "distance": 1.0 / (rank + 1),
+                        "origin": "bm25",
+                        "key": key,
                     }
                 )
 
-        # Keyword‑поиск (BM25‑подобный) как дополнительный источник кандидатов
-        keyword_candidates = self._simple_search(
-            query,
-            knowledge_base_id=knowledge_base_id,
-            top_k=self.max_candidates,
-        )
-        for kc in keyword_candidates:
-            kc.setdefault("origin", "bm25")
+        # RRF fusion on stable keys
+        ranked_lists = []
+        dense_ranked_keys = [(c.get("source_path") or "", (c.get("content") or "")[:200]) for c in dense_candidates]
+        if dense_ranked_keys:
+            ranked_lists.append(dense_ranked_keys)
+        if bm25_ranked_keys:
+            ranked_lists.append(bm25_ranked_keys)
+        fused_keys = self._rrf_fuse(ranked_lists) if ranked_lists else []
 
         # Объединяем кандидатов и убираем дубли по (source_path, content)
         merged: List[Dict] = []
         seen = set()
-        for cand in dense_candidates + keyword_candidates:
-            key = (cand.get("source_path") or "", (cand.get("content") or "")[:200])
+        candidate_map = { (c.get("source_path") or "", (c.get("content") or "")[:200]): c for c in dense_candidates + bm25_candidates }
+        for key in fused_keys:
+            cand = candidate_map.get(key)
+            if not cand:
+                continue
             if key in seen:
                 continue
             seen.add(key)
@@ -803,7 +977,7 @@ class RAGSystem:
             return []
 
         # Если есть reranker – пересчитываем релевантность и берём top_k по score
-        if HAS_RERANKER and self.reranker is not None:
+        if self.enable_rerank and HAS_RERANKER and self.reranker is not None:
             try:
                 pairs = [[query, c.get("content", "")] for c in merged]
                 scores = self.reranker.predict(pairs)
@@ -951,7 +1125,9 @@ class RAGSystem:
                     # Базовый запрос с фильтром по KB
                     query_obj = session.query(KnowledgeChunk)
                     if knowledge_base_id is not None:
-                        query_obj = query_obj.filter_by(knowledge_base_id=knowledge_base_id)
+                        query_obj = query_obj.filter_by(knowledge_base_id=knowledge_base_id, is_deleted=False)
+                    else:
+                        query_obj = query_obj.filter_by(is_deleted=False)
                     
                     # Применить SQL-фильтр по сильным токенам
                     chunks = query_obj.filter(or_(*filters)).all()
@@ -959,15 +1135,15 @@ class RAGSystem:
                 else:
                     # Нет сильных токенов - загружаем все (как раньше)
                     if knowledge_base_id is not None:
-                        chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                        chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id, is_deleted=False).all()
                     else:
-                        chunks = session.query(KnowledgeChunk).all()
+                        chunks = session.query(KnowledgeChunk).filter_by(is_deleted=False).all()
             else:
                 # Для обычных запросов - загружаем все (как раньше)
                 if knowledge_base_id is not None:
-                    chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id).all()
+                    chunks = session.query(KnowledgeChunk).filter_by(knowledge_base_id=knowledge_base_id, is_deleted=False).all()
                 else:
-                    chunks = session.query(KnowledgeChunk).all()
+                    chunks = session.query(KnowledgeChunk).filter_by(is_deleted=False).all()
         
         scored_chunks = []
         for chunk in chunks:
@@ -1081,6 +1257,10 @@ class RAGSystem:
             self.index = None
             self.index_by_kb.clear()
             self.chunks_by_kb.clear()
+            self.bm25_index_by_kb.clear()
+            self.bm25_index_all = None
+            self.bm25_chunks_by_kb.clear()
+            self.bm25_chunks_all = []
             self._load_index()
             return True
     
@@ -1104,6 +1284,10 @@ class RAGSystem:
             self.index = None
             self.index_by_kb.clear()
             self.chunks_by_kb.clear()
+            self.bm25_index_by_kb.clear()
+            self.bm25_index_all = None
+            self.bm25_chunks_by_kb.clear()
+            self.bm25_chunks_all = []
             self._load_index()
             return True
 
@@ -1112,6 +1296,7 @@ class RAGSystem:
         knowledge_base_id: int,
         source_type: str,
         source_path: str,
+        soft_delete: bool = True,
     ) -> int:
         """
         Удалить фрагменты знаний для конкретного источника в рамках БЗ.
@@ -1134,7 +1319,10 @@ class RAGSystem:
                 chunks = q.all()
                 deleted = 0
                 for chunk in chunks:
-                    session.delete(chunk)
+                    if soft_delete:
+                        chunk.is_deleted = True
+                    else:
+                        session.delete(chunk)
                     deleted += 1
                 session.flush()
 
@@ -1147,6 +1335,10 @@ class RAGSystem:
                     del self.index_by_kb[knowledge_base_id]
                 if knowledge_base_id in self.chunks_by_kb:
                     del self.chunks_by_kb[knowledge_base_id]
+                if knowledge_base_id in self.bm25_index_by_kb:
+                    del self.bm25_index_by_kb[knowledge_base_id]
+                if knowledge_base_id in self.bm25_chunks_by_kb:
+                    del self.bm25_chunks_by_kb[knowledge_base_id]
                 # Пересоздать индекс для этой KB
                 self._load_index(knowledge_base_id)
 
@@ -1157,6 +1349,7 @@ class RAGSystem:
         knowledge_base_id: int,
         source_type: str,
         source_prefix: str,
+        soft_delete: bool = True,
     ) -> int:
         """
         Удалить фрагменты знаний по префиксу источника (например, все страницы одной вики).
@@ -1178,7 +1371,10 @@ class RAGSystem:
 
                 for chunk in chunks:
                     if chunk.source_path and chunk.source_path.startswith(source_prefix):
-                        session.delete(chunk)
+                        if soft_delete:
+                            chunk.is_deleted = True
+                        else:
+                            session.delete(chunk)
                         deleted += 1
                 session.flush()
 
@@ -1191,6 +1387,10 @@ class RAGSystem:
                     del self.index_by_kb[knowledge_base_id]
                 if knowledge_base_id in self.chunks_by_kb:
                     del self.chunks_by_kb[knowledge_base_id]
+                if knowledge_base_id in self.bm25_index_by_kb:
+                    del self.bm25_index_by_kb[knowledge_base_id]
+                if knowledge_base_id in self.bm25_chunks_by_kb:
+                    del self.bm25_chunks_by_kb[knowledge_base_id]
                 # Пересоздать индекс для этой KB
                 self._load_index(knowledge_base_id)
 

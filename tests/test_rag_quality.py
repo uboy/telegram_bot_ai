@@ -1,7 +1,9 @@
 """
 Тесты для оценки качества RAG системы на основе тест-набора rag_eval.yaml
 """
-import yaml
+import pytest
+
+yaml = pytest.importorskip("yaml")
 import re
 from pathlib import Path
 from typing import List, Dict, Any

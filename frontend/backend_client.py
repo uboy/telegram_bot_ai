@@ -62,6 +62,11 @@ class BackendClient:
         query: str,
         knowledge_base_id: Optional[int] = None,
         top_k: int = 10,
+        source_types: Optional[List[str]] = None,
+        languages: Optional[List[str]] = None,
+        path_prefixes: Optional[List[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Синхронный вызов RAG-поиска.
@@ -72,6 +77,16 @@ class BackendClient:
             "top_k": top_k,
             "knowledge_base_id": knowledge_base_id,
         }
+        if source_types:
+            payload["source_types"] = source_types
+        if languages:
+            payload["languages"] = languages
+        if path_prefixes:
+            payload["path_prefixes"] = path_prefixes
+        if date_from:
+            payload["date_from"] = date_from
+        if date_to:
+            payload["date_to"] = date_to
         url = self._url("/rag/query")
         logger.debug("Backend RAG query: url=%s, payload=%r", url, payload)
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
@@ -85,6 +100,36 @@ class BackendClient:
         except Exception as e:  # noqa: BLE001
             logger.error("Ошибка при обращении к backend RAG: %s", e, exc_info=True)
             # Fallback: пустой ответ, чтобы бот мог корректно отреагировать
+            return {"answer": "", "sources": []}
+
+    def rag_summary(
+        self,
+        query: str,
+        knowledge_base_id: Optional[int] = None,
+        mode: str = "summary",
+        top_k: int = 8,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "query": query,
+            "knowledge_base_id": knowledge_base_id,
+            "mode": mode,
+            "top_k": top_k,
+        }
+        if date_from:
+            payload["date_from"] = date_from
+        if date_to:
+            payload["date_to"] = date_to
+        url = self._url("/rag/summary")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.rag_timeout, headers=headers) as client:
+                resp = client.post(url, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при обращении к backend RAG summary: %s", e, exc_info=True)
             return {"answer": "", "sources": []}
 
     # === Ingestion ===
@@ -284,6 +329,18 @@ class BackendClient:
                 return resp.json()
         except Exception as e:  # noqa: BLE001
             logger.error("Ошибка при image ingestion через backend: %s", e, exc_info=True)
+            return {}
+
+    def get_job_status(self, job_id: int) -> Dict[str, Any]:
+        url = self._url(f"/jobs/{job_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при получении статуса job %s: %s", job_id, e, exc_info=True)
             return {}
 
     def ingest_codebase_path(

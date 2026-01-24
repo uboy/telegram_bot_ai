@@ -50,17 +50,48 @@ class KnowledgeBase(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+
+class Document(Base):
+    """Документ в базе знаний (версионирование источников)"""
+    __tablename__ = 'documents'
+
+    id = Column(Integer, primary_key=True)
+    knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'))
+    source_type = Column(String(50))
+    source_path = Column(String(500))
+    content_hash = Column(String(128))
+    document_class = Column(String(50))
+    language = Column(String(20))
+    current_version = Column(Integer, default=1)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class DocumentVersion(Base):
+    """Версия документа"""
+    __tablename__ = 'document_versions'
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id'))
+    version = Column(Integer, default=1)
+    content_hash = Column(String(128))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 class KnowledgeChunk(Base):
     """Фрагмент знания"""
     __tablename__ = 'knowledge_chunks'
     
     id = Column(Integer, primary_key=True)
     knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'))
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=True)
+    version = Column(Integer, default=1)
     content = Column(Text)
     chunk_metadata = Column(Text)  # JSON строка с метаданными
+    metadata_json = Column(Text)  # JSON строка с метаданными (новый формат)
     embedding = Column(Text)  # JSON строка с вектором
     source_type = Column(String(50))  # markdown, pdf, word, excel, web, image
     source_path = Column(String(500))
+    is_deleted = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -76,6 +107,20 @@ class KnowledgeImportLog(Base):
     source_path = Column(String(500))  # Имя файла, URL или корень вики
     total_chunks = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Job(Base):
+    """Асинхронные задачи (ингест/индексация)"""
+    __tablename__ = 'jobs'
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=True)
+    status = Column(String(20), default='pending')
+    progress = Column(Integer, default=0)
+    stage = Column(String(50))
+    error_message = Column(Text)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 # Определить, какую базу данных использовать
 # Приоритет: MYSQL_URL > DB_PATH > SQLite по умолчанию
@@ -366,7 +411,68 @@ def migrate_database():
                 session.rollback()
             except:
                 pass
-        
+
+        # Create jobs table if missing
+        try:
+            if 'jobs' not in inspector.get_table_names():
+                session.execute(text("""
+                    CREATE TABLE jobs (
+                        id INTEGER PRIMARY KEY,
+                        document_id INTEGER,
+                        status VARCHAR(20) DEFAULT 'pending',
+                        progress INTEGER DEFAULT 0,
+                        stage VARCHAR(50),
+                        error_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                session.commit()
+                logger.info("✅ Migration: created table 'jobs'")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Add new columns for knowledge_chunks (versioning)
+        try:
+            if 'knowledge_chunks' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('knowledge_chunks')]
+                if 'document_id' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE knowledge_chunks
+                        ADD COLUMN document_id INTEGER
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'document_id' to knowledge_chunks")
+                if 'version' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE knowledge_chunks
+                        ADD COLUMN version INTEGER DEFAULT 1
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'version' to knowledge_chunks")
+                if 'metadata_json' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE knowledge_chunks
+                        ADD COLUMN metadata_json TEXT
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'metadata_json' to knowledge_chunks")
+                if 'is_deleted' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE knowledge_chunks
+                        ADD COLUMN is_deleted BOOLEAN DEFAULT 0
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'is_deleted' to knowledge_chunks")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
     except Exception as e:
         logger.warning(f"⚠️ Предупреждение при миграции: {e}")
         try:

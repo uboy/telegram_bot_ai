@@ -5,8 +5,7 @@ from shared.rag_safety import strip_unknown_citations, strip_untrusted_urls, san
 
 class TestRagSafety(unittest.TestCase):
     def test_strip_unknown_citations(self):
-        context = "SOURCE_ID: doc1
-CONTENT: test"
+        context = "SOURCE_ID: doc1\nCONTENT: test"
         answer = "A [source_id]doc1] B [source_id]doc2]"
         cleaned = strip_unknown_citations(answer, context)
         self.assertIn("[source_id]doc1]", cleaned)
@@ -20,17 +19,12 @@ CONTENT: test"
         self.assertNotIn("https://example.com/raw", cleaned)
 
     def test_sanitize_commands_in_answer_filters_unknown(self):
-        context = "repo sync -c -j 8
-./build.sh --product-name rk3568 --ccache"
+        context = "repo sync -c -j 8\n./build.sh --product-name rk3568 --ccache"
         answer = (
-            "```bash
-"
-            "repo sync -c -j 8
-"
-            "repo sync -c -j 99
-"
-            "./build.sh --product-name rk3568 --ccache
-"
+            "```bash\n"
+            "repo sync -c -j 8\n"
+            "repo sync -c -j 99\n"
+            "./build.sh --product-name rk3568 --ccache\n"
             "```"
         )
         cleaned = sanitize_commands_in_answer(answer, context)
@@ -40,10 +34,7 @@ CONTENT: test"
 
     def test_sanitize_commands_in_answer_filters_wiki_urls(self):
         context = "repo sync -c -j 8"
-        answer = "```bash
-repo sync -c -j 8
-https://example.com/wikis/Sync&Build
-```"
+        answer = "```bash\nrepo sync -c -j 8\nhttps://example.com/wikis/Sync&Build\n```"
         cleaned = sanitize_commands_in_answer(answer, context)
         self.assertNotIn("/wikis/", cleaned)
 

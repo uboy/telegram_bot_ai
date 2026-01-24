@@ -28,6 +28,9 @@ from frontend.templates.buttons import (
     n8n_menu,
     rag_settings_menu,
     kb_settings_menu,
+    search_options_menu,
+    search_filters_menu,
+    summary_mode_menu,
 )
 from frontend.backend_client import backend_client
 try:
@@ -791,6 +794,108 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = 'waiting_query'
         await safe_edit_message_text(query, "🔍 Введите запрос для поиска в базе знаний:")
         return
+
+    if data == 'search_options':
+        await safe_edit_message_text(query, "🔎 Выберите вариант поиска:", reply_markup=search_options_menu())
+        return
+
+    if data == 'search_summary':
+        await safe_edit_message_text(query, "📝 Выберите режим сводки:", reply_markup=summary_mode_menu())
+        return
+
+    if data == 'summary_date_range':
+        context.user_data["state"] = "waiting_summary_date_from"
+        await safe_edit_message_text(query, "Введите дату ОТ (YYYY-MM-DD) или '-' для пропуска:")
+        return
+
+    if data == 'summary_last_chat':
+        await safe_edit_message_text(query, "🕒 Ищу последний импорт чата...")
+        # Найти последнюю запись chat в журналах всех KB
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+        last_item = None
+        for kb in kbs or []:
+            kb_id = getattr(kb, "id", None) or kb.get("id")
+            try:
+                logs = await asyncio.to_thread(backend_client.get_import_log, kb_id)
+            except Exception:
+                logs = []
+            for item in logs or []:
+                if item.get("action_type") != "chat":
+                    continue
+                ts = item.get("created_at") or item.get("timestamp") or ""
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception:
+                    dt = None
+                last_dt = last_item.get("_dt") if last_item else None
+                if not last_item or (dt and (last_dt is None or dt > last_dt)):
+                    last_item = {**item, "kb_id": kb_id, "_dt": dt}
+        if not last_item:
+            await safe_edit_message_text(query, "❌ Не найден импорт чатов.")
+            return
+        kb_id = last_item.get("kb_id")
+        mode = context.user_data.get("summary_mode", "summary")
+        from frontend.bot_handlers import perform_rag_summary_and_render
+        answer_html, has_answer = await perform_rag_summary_and_render(
+            "Сделай сводку по последнему чату",
+            kb_id,
+            mode,
+            date_from=context.user_data.get("summary_filters", {}).get("date_from"),
+            date_to=context.user_data.get("summary_filters", {}).get("date_to"),
+        )
+        if has_answer:
+            await safe_edit_message_text(query, answer_html, parse_mode='HTML')
+        else:
+            await safe_edit_message_text(query, "❌ Не удалось сформировать сводку.")
+        return
+
+    if data.startswith("summary_mode:"):
+        mode = data.split(":", 1)[1]
+        context.user_data["summary_mode"] = mode
+        context.user_data["state"] = "waiting_summary_query"
+        await safe_edit_message_text(query, "Введите запрос для сводки/FAQ/инструкции:")
+        return
+
+    if data == 'search_filters':
+        await safe_edit_message_text(
+            query,
+            "⚙️ Настройка фильтров поиска в БЗ:",
+            reply_markup=search_filters_menu(context.user_data.get("rag_filters")),
+        )
+        return
+
+    if data.startswith("search_filter:"):
+        action = data.split(":", 1)[1]
+        filters = context.user_data.get("rag_filters") or {}
+        if action == "toggle_type":
+            current = filters.get("source_types") or []
+            if not current:
+                filters["source_types"] = ["markdown", "pdf", "word", "text", "web", "excel"]
+            elif "code" not in current:
+                filters["source_types"] = ["code"]
+            else:
+                filters["source_types"] = []
+        elif action == "toggle_lang":
+            current = (filters.get("languages") or [])
+            if not current:
+                filters["languages"] = ["ru"]
+            elif "ru" in current:
+                filters["languages"] = ["en"]
+            else:
+                filters["languages"] = []
+        elif action == "set_path":
+            context.user_data["state"] = "waiting_filter_path"
+            await safe_edit_message_text(query, "Введите префикс пути (например: src/ или docs/). Для очистки отправьте '-'")
+            return
+        elif action == "clear":
+            filters = {}
+        context.user_data["rag_filters"] = filters
+        await safe_edit_message_text(
+            query,
+            "⚙️ Настройка фильтров поиска в БЗ:",
+            reply_markup=search_filters_menu(filters),
+        )
+        return
     
     # Поиск в интернете
     if data == 'search_web':
@@ -1216,6 +1321,36 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
                 )
                 
                 menu = main_menu(is_admin=(user_for_rag.role == 'admin') if user_for_rag else False)
+                try:
+                    await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
+                except Exception as e:
+                    logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
+                    answer_plain = strip_html_tags(answer_html)
+                    await safe_edit_message_text(query, answer_plain, reply_markup=menu, parse_mode=None)
+                return
+
+            if context.user_data.get('state') == 'waiting_kb_for_query' and 'pending_summary_query' in context.user_data:
+                context.user_data['kb_id'] = kb_id
+                pending_query = context.user_data.pop('pending_summary_query')
+                context.user_data['state'] = None
+                mode = context.user_data.get("summary_mode", "summary")
+
+                await safe_edit_message_text(query, f"📝 Формирую сводку по базе '{name}'...")
+
+                from shared.utils import strip_html_tags
+                from frontend.templates.buttons import main_menu
+                from frontend.bot_handlers import perform_rag_summary_and_render
+
+                summary_filters = context.user_data.get("summary_filters") or {}
+                answer_html, has_answer = await perform_rag_summary_and_render(
+                    pending_query,
+                    kb_id,
+                    mode,
+                    date_from=summary_filters.get("date_from"),
+                    date_to=summary_filters.get("date_to"),
+                )
+
+                menu = main_menu(is_admin=(user.get("role") == 'admin'))
                 try:
                     await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
                 except Exception as e:

@@ -66,6 +66,80 @@ def split_text_into_chunks(
     return [c for c in chunks if c]
 
 
+def split_code_into_chunks(
+    text: str,
+    max_chars: int = None,
+    overlap: int = None,
+) -> List[str]:
+    """
+    Простое разбиение кода по функциям/классам с fallback на fixed chunks.
+    """
+    if max_chars is None:
+        try:
+            from shared.config import RAG_CHUNK_SIZE
+            max_chars = RAG_CHUNK_SIZE
+        except ImportError:
+            max_chars = 2000
+
+    if overlap is None:
+        try:
+            from shared.config import RAG_CHUNK_OVERLAP
+            overlap = RAG_CHUNK_OVERLAP
+        except ImportError:
+            overlap = 400
+
+    text = text or ""
+    if not text:
+        return []
+
+    if len(text) <= max_chars:
+        return [text]
+
+    # Basic regex for common function/class markers
+    pattern = r"(?m)^(class\s+\w+|def\s+\w+|function\s+\w+|async\s+def\s+\w+)"
+    parts = re.split(pattern, text)
+
+    chunks: List[str] = []
+    current = ""
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        if re.match(pattern, part or ""):
+            section = part + (parts[i + 1] if i + 1 < len(parts) else "")
+            i += 2
+        else:
+            section = part
+            i += 1
+
+        if not section.strip():
+            continue
+
+        if len(current) + len(section) > max_chars:
+            if current.strip():
+                chunks.append(current.strip())
+            current = section
+        else:
+            current += "\n" + section if current else section
+
+    if current.strip():
+        chunks.append(current.strip())
+
+    if not chunks:
+        return split_text_into_chunks(text, max_chars=max_chars, overlap=overlap)
+
+    if overlap > 0 and len(chunks) > 1:
+        overlapped = []
+        for idx, chunk in enumerate(chunks):
+            if idx > 0:
+                prev = chunks[idx - 1]
+                overlap_text = prev[-overlap:] if len(prev) > overlap else prev
+                chunk = overlap_text + "\n\n" + chunk
+            overlapped.append(chunk)
+        return overlapped
+
+    return [c for c in chunks if c]
+
+
 def split_markdown_section_into_chunks(
     text: str,
     max_chars: int = None,

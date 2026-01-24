@@ -4,7 +4,7 @@
 import os
 from typing import List, Dict
 from .base import DocumentLoader
-from .chunking import split_text_into_chunks
+from .chunking import split_text_into_chunks, split_code_into_chunks
 
 
 class TextLoader(DocumentLoader):
@@ -56,22 +56,43 @@ class TextLoader(DocumentLoader):
                     "metadata": {"type": "text", "chunk_kind": "full_doc"},
                 }]
 
+            ext = os.path.splitext(source)[1].lower()
+            is_code = ext in {".py", ".js", ".ts", ".java", ".go", ".rs", ".cpp", ".c", ".cs"}
+            splitter = split_code_into_chunks if is_code else split_text_into_chunks
+
             if len(content) > 5000:
                 chunks: List[Dict[str, str]] = []
                 for idx, part in enumerate(
-                    split_text_into_chunks(content, max_chars=max_chars, overlap=overlap),
+                    splitter(content, max_chars=max_chars, overlap=overlap),
                     start=1,
                 ):
                     chunks.append({
                         "content": part,
                         "title": f"Фрагмент {idx}",
-                        "metadata": {"type": "text", "chunk_kind": "text"},
+                        "metadata": {
+                            "type": "code" if is_code else "text",
+                            "chunk_kind": "code" if is_code else "text",
+                        },
                     })
                 return chunks if chunks else [
-                    {"content": content, "title": "", "metadata": {"type": "text", "chunk_kind": "text"}}
+                    {
+                        "content": content,
+                        "title": "",
+                        "metadata": {
+                            "type": "code" if is_code else "text",
+                            "chunk_kind": "code" if is_code else "text",
+                        },
+                    }
                 ]
             else:
-                return [{"content": content, "title": "", "metadata": {"type": "text", "chunk_kind": "text"}}]
+                return [{
+                    "content": content,
+                    "title": "",
+                    "metadata": {
+                        "type": "code" if is_code else "text",
+                        "chunk_kind": "code" if is_code else "text",
+                    },
+                }]
         except Exception as e:
             return [{'content': f"Ошибка загрузки текстового файла: {str(e)}", 'title': '', 'metadata': {}}]
 

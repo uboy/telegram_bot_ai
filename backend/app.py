@@ -9,6 +9,7 @@ from backend.api.routes.users import router as users_router
 from backend.api.routes.knowledge import router as knowledge_router
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.ingestion import router as ingestion_router
+from backend.api.routes.jobs import router as jobs_router
 from backend.core.settings import settings
 from shared.logging_config import logger  # type: ignore
 
@@ -24,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_router, prefix=prefix)
     app.include_router(auth_router, prefix=prefix)
     app.include_router(ingestion_router, prefix=prefix)
+    app.include_router(jobs_router, prefix=prefix)
 
     # Глобальный обработчик исключений
     @app.exception_handler(Exception)

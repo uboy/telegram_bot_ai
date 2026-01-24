@@ -16,6 +16,8 @@ from .markdown_loader import MarkdownLoader
 from .pdf_loader import PDFLoader
 from .word_loader import WordLoader
 from .excel_loader import ExcelLoader
+from .code_loader import CodeLoader
+from .chat_loader import ChatLoader
 try:
     from .web_loader import WebLoader
 except ImportError:  # pragma: no cover - optional dependency for web loading
@@ -37,6 +39,7 @@ class DocumentLoaderManager:
             'doc': WordLoader(),
             'xlsx': ExcelLoader(),
             'xls': ExcelLoader(),
+            'code': CodeLoader(),
             'txt': text_loader,
             'text': text_loader,
             'image': ImageLoader(),
@@ -44,6 +47,26 @@ class DocumentLoaderManager:
             'jpeg': ImageLoader(),
             'png': ImageLoader(),
             'gif': ImageLoader(),
+            'chat': ChatLoader(),
+            'json': ChatLoader(),
+            'txtchat': ChatLoader(),
+            'py': CodeLoader(),
+            'js': CodeLoader(),
+            'ts': CodeLoader(),
+            'jsx': CodeLoader(),
+            'tsx': CodeLoader(),
+            'java': CodeLoader(),
+            'go': CodeLoader(),
+            'rs': CodeLoader(),
+            'cpp': CodeLoader(),
+            'c': CodeLoader(),
+            'hpp': CodeLoader(),
+            'h': CodeLoader(),
+            'cs': CodeLoader(),
+            'rb': CodeLoader(),
+            'php': CodeLoader(),
+            'kt': CodeLoader(),
+            'swift': CodeLoader(),
         }
         if WebLoader is not None:
             self.loaders['web'] = WebLoader()
@@ -97,6 +120,8 @@ __all__ = [
     'PDFLoader',
     'WordLoader',
     'ExcelLoader',
+    'CodeLoader',
+    'ChatLoader',
     'WebLoader',
     'TextLoader',
     'ImageLoader',

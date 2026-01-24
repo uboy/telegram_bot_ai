@@ -16,9 +16,10 @@ import zipfile
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
-from shared.database import KnowledgeImportLog, KnowledgeBase, KnowledgeChunk, get_session  # type: ignore
+from shared.database import KnowledgeImportLog, KnowledgeBase, KnowledgeChunk, Document, DocumentVersion, get_session  # type: ignore
 from shared.rag_system import rag_system  # type: ignore
 from shared.document_loaders import document_loader_manager  # type: ignore
+from shared.rag_pipeline.classifier import classify_document  # type: ignore
 from shared.utils import detect_language  # type: ignore
 from shared.kb_settings import normalize_kb_settings, get_chunking_settings  # type: ignore
 from shared.wiki_scraper import crawl_wiki_to_kb  # type: ignore
@@ -47,7 +48,7 @@ class IngestionService:
         }
 
     def _is_code_ext(self, ext: str) -> bool:
-        code_exts = {".py", ".cpp", ".c", ".hpp", ".h", ".ts", ".tsx", ".js", ".jsx"}
+        code_exts = {".py", ".cpp", ".c", ".hpp", ".h", ".ts", ".tsx", ".js", ".jsx", ".java", ".go", ".rs", ".cs", ".rb", ".php", ".kt", ".swift"}
         return ext.lower() in code_exts
 
     def _code_lang_from_ext(self, ext: str) -> str:
@@ -61,6 +62,14 @@ class IngestionService:
             ".tsx": "typescript",
             ".js": "javascript",
             ".jsx": "javascript",
+            ".java": "java",
+            ".go": "go",
+            ".rs": "rust",
+            ".cs": "csharp",
+            ".rb": "ruby",
+            ".php": "php",
+            ".kt": "kotlin",
+            ".swift": "swift",
         }
         return mapping.get(ext.lower(), "")
 
@@ -82,6 +91,17 @@ class IngestionService:
         return ""
 
     def _get_existing_doc_hash(self, kb_id: int, source_path: str, source_type: str) -> str | None:
+        doc = (
+            self.db.query(Document)
+            .filter_by(
+                knowledge_base_id=kb_id,
+                source_type=source_type,
+                source_path=source_path,
+            )
+            .first()
+        )
+        if doc and getattr(doc, "content_hash", None):
+            return doc.content_hash
         existing = (
             self.db.query(KnowledgeChunk)
             .filter_by(
@@ -98,6 +118,67 @@ class IngestionService:
         except Exception:
             return None
         return meta.get("doc_hash")
+
+    def _classify_from_chunks(self, chunks: List[Dict[str, str]], source_path: str | None) -> str:
+        for chunk in chunks:
+            content = (chunk.get("content") or "").strip()
+            if content:
+                return classify_document(content[:2000], source_path)
+        return classify_document("", source_path)
+
+    def _infer_language_from_chunks(self, chunks: List[Dict[str, str]]) -> str:
+        for chunk in chunks:
+            content = (chunk.get("content") or "").strip()
+            if content:
+                return detect_language(content) or "ru"
+        return "ru"
+
+    def _upsert_document(
+        self,
+        kb_id: int,
+        source_type: str,
+        source_path: str,
+        doc_hash: str,
+        doc_class: str,
+        language: str,
+    ) -> tuple[int, int]:
+        doc = (
+            self.db.query(Document)
+            .filter_by(
+                knowledge_base_id=kb_id,
+                source_type=source_type,
+                source_path=source_path,
+            )
+            .first()
+        )
+        if not doc:
+            doc = Document(
+                knowledge_base_id=kb_id,
+                source_type=source_type,
+                source_path=source_path,
+                content_hash=doc_hash,
+                document_class=doc_class,
+                language=language,
+                current_version=1,
+            )
+            self.db.add(doc)
+            self.db.flush()
+            version = 1
+            self.db.add(DocumentVersion(document_id=doc.id, version=version, content_hash=doc_hash))
+            self.db.commit()
+            return doc.id, version
+
+        if doc.content_hash != doc_hash:
+            doc.current_version = (doc.current_version or 0) + 1
+            doc.content_hash = doc_hash
+            doc.document_class = doc_class
+            doc.language = language
+            version = doc.current_version
+            self.db.add(DocumentVersion(document_id=doc.id, version=version, content_hash=doc_hash))
+            self.db.commit()
+            return doc.id, version
+
+        return doc.id, doc.current_version or 1
     
     def _write_import_log(self, log_obj: KnowledgeImportLog) -> None:
         """Записать лог импорта через отдельную короткую сессию"""
@@ -110,6 +191,18 @@ class IngestionService:
         settings = self._get_kb_settings(kb_id)
         options = self._build_loader_options(settings, "web")
         chunks = document_loader_manager.load_document(url, "web", options=options)
+        doc_class = self._classify_from_chunks(chunks, url)
+        doc_language = self._infer_language_from_chunks(chunks)
+        combined = "".join([(chunk.get("content") or "") for chunk in chunks])
+        doc_hash = hashlib.sha256(combined.encode("utf-8", errors="ignore")).hexdigest()
+        document_id, doc_version = self._upsert_document(
+            kb_id=kb_id,
+            source_type="web",
+            source_path=url,
+            doc_hash=doc_hash,
+            doc_class=doc_class,
+            language=doc_language,
+        )
 
         # Удалить старые фрагменты этой страницы (обновление версии)
         rag_system.delete_chunks_by_source_exact(
@@ -118,12 +211,6 @@ class IngestionService:
             source_path=url,
         )
 
-        existing_logs = (
-            self.db.query(KnowledgeImportLog)
-            .filter_by(knowledge_base_id=kb_id, source_path=url)
-            .count()
-        )
-        doc_version = existing_logs + 1
         source_updated_at = datetime.now(timezone.utc).isoformat()
 
         # Использовать batch insert для лучшей производительности
@@ -132,13 +219,16 @@ class IngestionService:
             content = chunk.get("content", "")
             base_meta = dict(chunk.get("metadata") or {})
             base_meta.setdefault("title", chunk.get("title") or url)
-            base_meta["language"] = detect_language(content) if content else "ru"
+            base_meta.setdefault("document_class", doc_class)
+            base_meta["language"] = detect_language(content) if content else doc_language
             base_meta["doc_version"] = doc_version
             base_meta["source_updated_at"] = source_updated_at
 
             chunks_data.append({
                 'knowledge_base_id': kb_id,
                 'content': content,
+                'document_id': document_id,
+                'version': doc_version,
                 'source_type': "web",
                 'source_path': url,
                 'metadata': base_meta,
@@ -376,14 +466,17 @@ class IngestionService:
                         ]
                     except Exception:  # noqa: BLE001
                         chunks = []
+                    doc_class = self._classify_from_chunks(chunks, source_path)
                     added = 0
-                    # Версия документа — порядковый номер загрузки этого источника
-                    existing_logs = (
-                        self.db.query(KnowledgeImportLog)
-                        .filter_by(knowledge_base_id=kb_id, source_path=source_path)
-                        .count()
+                    doc_language = self._infer_language_from_chunks(chunks)
+                    document_id, doc_version = self._upsert_document(
+                        kb_id=kb_id,
+                        source_type=inner_ext_clean or "unknown",
+                        source_path=source_path,
+                        doc_hash=doc_hash,
+                        doc_class=doc_class,
+                        language=doc_language,
                     )
-                    doc_version = existing_logs + 1
                     source_updated_at = datetime.now(timezone.utc).isoformat()
 
                     # Использовать batch insert для лучшей производительности
@@ -392,7 +485,8 @@ class IngestionService:
                         content = chunk.get("content", "")
                         base_meta = dict(chunk.get("metadata") or {})
                         base_meta.setdefault("title", chunk.get("title") or name)
-                        base_meta["language"] = detect_language(content) if content else "ru"
+                        base_meta.setdefault("document_class", doc_class)
+                        base_meta["language"] = detect_language(content) if content else doc_language
                         base_meta["doc_hash"] = doc_hash
                         base_meta["doc_version"] = doc_version
                         base_meta["source_updated_at"] = source_updated_at
@@ -410,6 +504,8 @@ class IngestionService:
                         chunks_data.append({
                             'knowledge_base_id': kb_id,
                             'content': content,
+                            'document_id': document_id,
+                            'version': doc_version,
                             'source_type': inner_ext_clean or "unknown",
                             'source_path': source_path,
                             'metadata': base_meta,
@@ -477,6 +573,74 @@ class IngestionService:
                 "files": per_file_stats,
             }
 
+        # Поддержка чата по расширению
+        if file_type in ("chat", "json", "txtchat"):
+            chunks = document_loader_manager.load_document(file_path, "chat", options={})
+            doc_class = self._classify_from_chunks(chunks, file_name)
+            doc_language = self._infer_language_from_chunks(chunks)
+            with open(file_path, "rb") as f:
+                data = f.read()
+            doc_hash = hashlib.sha256(data).hexdigest()
+            source_path = file_name or ""
+
+            rag_system.delete_chunks_by_source_exact(
+                knowledge_base_id=kb_id,
+                source_type="chat",
+                source_path=source_path,
+            )
+
+            document_id, doc_version = self._upsert_document(
+                kb_id=kb_id,
+                source_type="chat",
+                source_path=source_path,
+                doc_hash=doc_hash,
+                doc_class=doc_class,
+                language=doc_language,
+            )
+            source_updated_at = datetime.now(timezone.utc).isoformat()
+            chunks_data = []
+            for chunk in chunks:
+                content = chunk.get("content", "")
+                base_meta = dict(chunk.get("metadata") or {})
+                base_meta.setdefault("title", chunk.get("title") or source_path)
+                base_meta.setdefault("document_class", doc_class)
+                base_meta["language"] = detect_language(content) if content else doc_language
+                base_meta["doc_hash"] = doc_hash
+                base_meta["doc_version"] = doc_version
+                base_meta["source_updated_at"] = source_updated_at
+                chunks_data.append({
+                    "knowledge_base_id": kb_id,
+                    "content": content,
+                    "document_id": document_id,
+                    "version": doc_version,
+                    "source_type": "chat",
+                    "source_path": source_path,
+                    "metadata": base_meta,
+                })
+            if chunks_data:
+                rag_system.add_chunks_batch(chunks_data)
+                added = len(chunks_data)
+            else:
+                added = 0
+            log = KnowledgeImportLog(
+                knowledge_base_id=kb_id,
+                user_telegram_id=telegram_id or "",
+                username=username or telegram_id or "",
+                action_type="chat",
+                source_path=source_path,
+                total_chunks=added,
+            )
+            self.db.add(log)
+            self.db.commit()
+            return {
+                "mode": "chat",
+                "kb_id": kb_id,
+                "file_name": file_name,
+                "total_chunks": added,
+                "doc_version": doc_version,
+                "source_updated_at": source_updated_at,
+            }
+
         # Обычный одиночный документ
         with open(file_path, "rb") as f:
             data = f.read()
@@ -496,13 +660,17 @@ class IngestionService:
             source_kind = "code"
         options = self._build_loader_options(settings, source_kind)
         chunks = document_loader_manager.load_document(file_path, file_type or None, options=options)
-
-        existing_logs = (
-            self.db.query(KnowledgeImportLog)
-            .filter_by(knowledge_base_id=kb_id, source_path=source_path)
-            .count()
+        doc_class = self._classify_from_chunks(chunks, source_path)
+        doc_language = self._infer_language_from_chunks(chunks)
+        document_id, doc_version = self._upsert_document(
+            kb_id=kb_id,
+            source_type=file_type or "unknown",
+            source_path=source_path,
+            doc_hash=doc_hash,
+            doc_class=doc_class,
+            language=doc_language,
         )
-        doc_version = existing_logs + 1
+
         source_updated_at = datetime.now(timezone.utc).isoformat()
 
         # Использовать batch insert для лучшей производительности
@@ -511,7 +679,8 @@ class IngestionService:
             content = chunk.get("content", "")
             base_meta = dict(chunk.get("metadata") or {})
             base_meta.setdefault("title", chunk.get("title") or source_path)
-            base_meta["language"] = detect_language(content) if content else "ru"
+            base_meta.setdefault("document_class", doc_class)
+            base_meta["language"] = detect_language(content) if content else doc_language
             base_meta["doc_hash"] = doc_hash
             base_meta["doc_version"] = doc_version
             base_meta["source_updated_at"] = source_updated_at
@@ -529,6 +698,8 @@ class IngestionService:
             chunks_data.append({
                 'knowledge_base_id': kb_id,
                 'content': content,
+                'document_id': document_id,
+                'version': doc_version,
                 'source_type': file_type or "unknown",
                 'source_path': source_path,
                 'metadata': base_meta,
@@ -667,14 +838,26 @@ class IngestionService:
                     if chunk.get("content", "").strip()
                     and len(chunk.get("content", "").strip()) > 10
                 ]
+                doc_class = self._classify_from_chunks(chunks, source_path)
+                doc_language = self._infer_language_from_chunks(chunks)
+                document_id, doc_version = self._upsert_document(
+                    kb_id=kb_id,
+                    source_type="code",
+                    source_path=source_path,
+                    doc_hash=doc_hash,
+                    doc_class=doc_class,
+                    language=doc_language,
+                )
 
                 chunks_data = []
                 for chunk in chunks:
                     content = chunk.get("content", "")
                     base_meta = dict(chunk.get("metadata") or {})
                     base_meta.setdefault("title", rel_path)
-                    base_meta["language"] = detect_language(content) if content else "ru"
+                    base_meta.setdefault("document_class", doc_class)
+                    base_meta["language"] = detect_language(content) if content else doc_language
                     base_meta["doc_hash"] = doc_hash
+                    base_meta["doc_version"] = doc_version
                     base_meta["source_updated_at"] = source_updated_at
                     base_meta["chunk_kind"] = "code_file"
                     base_meta["code_lang"] = self._code_lang_from_ext(ext)
@@ -684,6 +867,8 @@ class IngestionService:
                     chunks_data.append({
                         "knowledge_base_id": kb_id,
                         "content": content,
+                        "document_id": document_id,
+                        "version": doc_version,
                         "source_type": "code",
                         "source_path": source_path,
                         "metadata": base_meta,
@@ -771,6 +956,17 @@ class IngestionService:
         )
         source_updated_at = datetime.now(timezone.utc).isoformat()
         source_path = f"photo_{file_id}.jpg"
+        doc_class = classify_document(processed_text[:2000], source_path)
+        doc_language = detect_language(processed_text) if processed_text else "ru"
+        doc_hash = hashlib.sha256((processed_text or "").encode("utf-8", errors="ignore")).hexdigest()
+        document_id, doc_version = self._upsert_document(
+            kb_id=kb_id,
+            source_type="image",
+            source_path=source_path,
+            doc_hash=doc_hash,
+            doc_class=doc_class,
+            language=doc_language,
+        )
 
         # Удалить старый фрагмент для этого изображения (если был)
         rag_system.delete_chunks_by_source_exact(
@@ -787,8 +983,14 @@ class IngestionService:
             metadata={
                 "type": "image",
                 "file_id": file_id,
+                "document_class": doc_class,
+                "language": doc_language,
+                "doc_hash": doc_hash,
+                "doc_version": doc_version,
                 "source_updated_at": source_updated_at,
             },
+            document_id=document_id,
+            version=doc_version,
         )
 
         # Записать в журнал загрузок

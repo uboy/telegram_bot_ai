@@ -106,8 +106,11 @@ def sanitize_commands_in_answer(answer: str, context: str) -> str:
         lines = body.splitlines()
         kept = []
         for ln in lines:
+            if contains_wiki_url(ln):
+                removed_any = True
+                continue
             if is_command_line(ln):
-                if contains_wiki_url(ln) or not line_in_context(ln):
+                if not line_in_context(ln):
                     removed_any = True
                     continue
             kept.append(ln)
@@ -128,6 +131,8 @@ def sanitize_commands_in_answer(answer: str, context: str) -> str:
 
     answer = re.sub(r"`([^`]+)`", replace_inline, answer)
     if removed_any and len(answer.strip()) < 80:
+        if "```" in answer or re.search(r"\b(?:git|repo|\./|bash|python|pip|cmake|make|ninja|docker|kubectl|sudo|apt|yum|npm|yarn)\b", answer):
+            return answer
         return (
             "В найденных источниках нет точных команд для сборки/запуска по вашему запросу. "
             "Уточните компонент или платформу (например, C-API, XTS, e2e)."

@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 import json
 import logging
 import os
 
 from backend.api.deps import get_db_dep, require_api_key
-from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource
+from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource, RAGSummaryQuery, RAGSummaryAnswer
 
 # Используем существующую RAG-систему и AI-менеджер из основного проекта.
 from shared.rag_system import rag_system  # type: ignore
@@ -83,6 +84,45 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             top_k=top_k_search,
         ) or []
         logger.debug("RAG search returned %d results", len(results))
+        def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(value)
+            except Exception:
+                return None
+
+        date_from = _parse_dt(payload.date_from)
+        date_to = _parse_dt(payload.date_to)
+        source_types = [s.lower() for s in (payload.source_types or [])]
+        languages = [s.lower() for s in (payload.languages or [])]
+        path_prefixes = [p.lower() for p in (payload.path_prefixes or [])]
+
+        def _passes_filters(item: dict) -> bool:
+            if source_types:
+                if (item.get("source_type") or "").lower() not in source_types:
+                    return False
+            meta = item.get("metadata") or {}
+            if languages:
+                lang = (meta.get("language") or "").lower()
+                if lang and lang not in languages:
+                    return False
+            if path_prefixes:
+                sp = (item.get("source_path") or "").lower()
+                if not any(sp.startswith(p) for p in path_prefixes):
+                    return False
+            if date_from or date_to:
+                updated = meta.get("source_updated_at") or meta.get("updated_at")
+                updated_dt = _parse_dt(updated if isinstance(updated, str) else None)
+                if updated_dt:
+                    if date_from and updated_dt < date_from:
+                        return False
+                    if date_to and updated_dt > date_to:
+                        return False
+            return True
+
+        if payload.source_types or payload.languages or payload.path_prefixes or payload.date_from or payload.date_to:
+            results = [r for r in results if _passes_filters(r)]
         if logger.isEnabledFor(logging.DEBUG):
             top_preview = []
             for r in results[:5]:
@@ -218,6 +258,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 db.query(KnowledgeChunk)
                 .filter(KnowledgeChunk.knowledge_base_id == kb_id)
                 .filter(KnowledgeChunk.source_path == doc_id)
+                .filter(KnowledgeChunk.is_deleted == False)
                 .order_by(KnowledgeChunk.id.asc())
                 .all()
             )
@@ -485,7 +526,6 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         return RAGAnswer(answer=ai_answer, sources=sources, debug_chunks=debug_chunks)
 
     except HTTPException:
-        # Пробрасываем HTTP исключения как есть
         raise
     except Exception as e:  # noqa: BLE001
         logger.error(
@@ -495,9 +535,94 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             e,
             exc_info=True,
         )
-        # Возвращаем пустой ответ вместо 500, чтобы бот мог корректно обработать ситуацию
         return RAGAnswer(answer="", sources=[])
 
+@router.post(
+    "/summary",
+    response_model=RAGSummaryAnswer,
+    summary="Сводка/FAQ/инструкция по материалам БЗ",
+    dependencies=[Depends(require_api_key)],
+)
+def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> RAGSummaryAnswer:  # noqa: ARG001
+    if not payload.query or not payload.query.strip():
+        raise HTTPException(status_code=400, detail="query is required")
+
+    kb_id = payload.knowledge_base_id
+    top_k = payload.top_k or 8
+    mode = (payload.mode or "summary").lower()
+
+    results = rag_system.search(
+        query=payload.query,
+        knowledge_base_id=kb_id,
+        top_k=top_k,
+    ) or []
+
+    def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except Exception:
+            return None
+
+    date_from = _parse_dt(payload.date_from)
+    date_to = _parse_dt(payload.date_to)
+
+    def _passes_date(item: dict) -> bool:
+        if not (date_from or date_to):
+            return True
+        meta = item.get("metadata") or {}
+        updated = meta.get("source_updated_at") or meta.get("updated_at")
+        updated_dt = _parse_dt(updated if isinstance(updated, str) else None)
+        if updated_dt:
+            if date_from and updated_dt < date_from:
+                return False
+            if date_to and updated_dt > date_to:
+                return False
+        return True
+
+    if date_from or date_to:
+        results = [r for r in results if _passes_date(r)]
+
+    if not results:
+        return RAGSummaryAnswer(answer="", sources=[])
+
+    context_parts = []
+    sources: List[RAGSource] = []
+    seen = set()
+    for r in results[:top_k]:
+        content = r.get("content") or ""
+        if not content:
+            continue
+        context_parts.append(content[:1500])
+        sp = r.get("source_path") or ""
+        st = r.get("source_type") or "unknown"
+        key = (sp, st)
+        if sp and key not in seen:
+            seen.add(key)
+            sources.append(RAGSource(source_path=sp, source_type=st, score=float(r.get("rerank_score") or 0.0)))
+
+    context_text = "\n\n".join(context_parts)
+
+    if mode == "faq":
+        system_task = "Составь FAQ: 5-10 вопросов и краткие ответы. Опирайся только на контекст."
+    elif mode == "instructions":
+        system_task = "Составь пошаговую инструкцию из 5-10 шагов. Опирайся только на контекст."
+    else:
+        system_task = "Сделай краткую сводку (5-10 пунктов) по контексту."
+
+    prompt = (
+        f"{system_task}\n\n"
+        f"Вопрос: {payload.query}\n\n"
+        f"Контекст:\n{context_text}\n"
+    )
+
+    answer = ai_manager.query(prompt)
+    answer = strip_unknown_citations(answer, context_text)
+    answer = strip_untrusted_urls(answer, context_text)
+    answer = sanitize_commands_in_answer(answer, context_text)
+
+    return RAGSummaryAnswer(answer=answer, sources=sources)
 
 @router.post(
     "/reload-models",

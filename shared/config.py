@@ -61,7 +61,8 @@ else:
 RAG_MODEL_NAME = os.getenv("RAG_MODEL_NAME", "intfloat/multilingual-e5-base")
 RAG_ENABLE = os.getenv("RAG_ENABLE", "true").lower() == "true"
 RAG_MAX_CANDIDATES = int(os.getenv("RAG_MAX_CANDIDATES", "80"))  # Количество кандидатов для векторного поиска перед rerank
-RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "BAAI/bge-reranker-base")  # Мультиязычный reranker
+RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "BAAI/bge-reranker-base")
+RAG_ENABLE_RERANK = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"  # Мультиязычный reranker
 # Устройство для моделей RAG: 'cpu', 'cuda' (автоматически выберет GPU), 'cuda:0', 'cuda:1' и т.д.
 RAG_DEVICE = os.getenv("RAG_DEVICE", "cuda")
 

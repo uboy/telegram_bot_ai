@@ -267,11 +267,42 @@ def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) 
     return answer_html, True
 
 
+async def perform_rag_summary_and_render(
+    query: str,
+    kb_id: int,
+    mode: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> tuple[str, bool]:
+    try:
+        from shared.config import RAG_ENABLE_CITATIONS
+        enable_citations = RAG_ENABLE_CITATIONS
+    except ImportError:
+        enable_citations = True
+
+    backend_result = await asyncio.to_thread(
+        backend_client.rag_summary,
+        query=query,
+        knowledge_base_id=kb_id,
+        mode=mode,
+        top_k=8,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    answer = (backend_result.get("answer") or "").strip()
+    if not answer:
+        return "", False
+    answer_html = format_for_telegram_answer(answer, enable_citations=enable_citations)
+    title = "Сводка" if mode == "summary" else ("FAQ" if mode == "faq" else "Инструкция")
+    return f"📝 <b>{title}:</b>\n\n{answer_html}", True
+
+
 async def perform_rag_query_and_render(
     query: str,
     kb_id: int,
     user: UserContext,
-    fallback_to_ai: bool = True
+    fallback_to_ai: bool = True,
+    filters: Optional[dict] = None,
 ) -> tuple[str, bool]:
     """
     Выполняет RAG-запрос и формирует HTML-ответ.
@@ -300,6 +331,11 @@ async def perform_rag_query_and_render(
         query=query,
         knowledge_base_id=kb_id,
         top_k=top_k_search,
+        source_types=(filters or {}).get("source_types"),
+        languages=(filters or {}).get("languages"),
+        path_prefixes=(filters or {}).get("path_prefixes"),
+        date_from=(filters or {}).get("date_from"),
+        date_to=(filters or {}).get("date_to"),
     )
     backend_answer = (backend_result.get("answer") or "").strip()
     backend_sources = backend_result.get("sources") or []
@@ -427,7 +463,96 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👨‍💼 Админ-панель:", reply_markup=admin_menu())
         logger.info("Администратор %s открыл админ-панель", user.telegram_id)
         return
+
+    if text_input.startswith("/job "):
+        parts = text_input.split()
+        if len(parts) > 1 and parts[1].isdigit():
+            job_id = int(parts[1])
+            result = await asyncio.to_thread(backend_client.get_job_status, job_id)
+            status = result.get("status") or "unknown"
+            progress = result.get("progress", 0)
+            stage = result.get("stage") or "-"
+            error = result.get("error")
+            message = f"🧩 Job {job_id}: {status} ({progress}%)\nStage: {stage}"
+            if error:
+                message += f"\nError: {error}"
+            await update.message.reply_text(message)
+        else:
+            await update.message.reply_text("Использование: /job <id>")
+        return
     
+    if state == 'waiting_filter_path':
+        path_prefix = (update.message.text or "").strip()
+        if path_prefix == "-":
+            context.user_data["rag_filters"] = {
+                **(context.user_data.get("rag_filters") or {}),
+                "path_prefixes": [],
+            }
+            await update.message.reply_text("✅ Префикс пути очищен.")
+        else:
+            context.user_data["rag_filters"] = {
+                **(context.user_data.get("rag_filters") or {}),
+                "path_prefixes": [path_prefix],
+            }
+            await update.message.reply_text(f"✅ Установлен префикс пути: {path_prefix}")
+        context.user_data['state'] = None
+        return
+
+    if state == 'waiting_summary_date_from':
+        value = (update.message.text or "").strip()
+        summary_filters = context.user_data.get("summary_filters") or {}
+        if value != "-":
+            summary_filters["date_from"] = value
+        else:
+            summary_filters.pop("date_from", None)
+        context.user_data["summary_filters"] = summary_filters
+        context.user_data["state"] = "waiting_summary_date_to"
+        await update.message.reply_text("Введите дату ДО (YYYY-MM-DD) или '-' для пропуска:")
+        return
+
+    if state == 'waiting_summary_date_to':
+        value = (update.message.text or "").strip()
+        summary_filters = context.user_data.get("summary_filters") or {}
+        if value != "-":
+            summary_filters["date_to"] = value
+        else:
+            summary_filters.pop("date_to", None)
+        context.user_data["summary_filters"] = summary_filters
+        context.user_data["state"] = None
+        await update.message.reply_text("✅ Диапазон дат сохранен.")
+        return
+
+    if state == 'waiting_summary_query':
+        query = update.message.text
+        kb_id = context.user_data.get('kb_id')
+        if not kb_id:
+            kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+            if not kbs:
+                await update.message.reply_text("❌ Нет доступных баз знаний.")
+                return
+            context.user_data['pending_summary_query'] = query
+            context.user_data['state'] = 'waiting_kb_for_query'
+            await update.message.reply_text(
+                "Выберите базу знаний для сводки:",
+                reply_markup=knowledge_base_menu(kbs),
+            )
+            return
+        mode = context.user_data.get("summary_mode", "summary")
+        summary_filters = context.user_data.get("summary_filters") or {}
+        answer_html, has_answer = await perform_rag_summary_and_render(
+            query,
+            kb_id,
+            mode,
+            date_from=summary_filters.get("date_from"),
+            date_to=summary_filters.get("date_to"),
+        )
+        if has_answer:
+            await update.message.reply_text(answer_html, parse_mode='HTML')
+        else:
+            await update.message.reply_text("❌ Не удалось сформировать сводку.")
+        context.user_data['state'] = None
+        return
+
     if state == 'waiting_query':
         # Поиск в базе знаний через backend (RAG API)
         query = update.message.text
@@ -436,7 +561,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Выполняем RAG-запрос и формируем HTML-ответ
-        answer_html, has_answer = await perform_rag_query_and_render(query, kb_id, user)
+        answer_html, has_answer = await perform_rag_query_and_render(
+            query,
+            kb_id,
+            user,
+            filters=context.user_data.get("rag_filters"),
+        )
         
         menu = main_menu(is_admin=(user.role == 'admin'))
         # Используем HTML для форматирования, но с безопасной обработкой ошибок
@@ -839,7 +969,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Выполняем RAG-запрос и формируем HTML-ответ
-        answer_html, has_answer = await perform_rag_query_and_render(query, kb_id, user)
+        answer_html, has_answer = await perform_rag_query_and_render(
+            query,
+            kb_id,
+            user,
+            filters=context.user_data.get("rag_filters"),
+        )
         
         menu = main_menu(is_admin=(user.role == 'admin'))
         # Используем HTML для форматирования, но с безопасной обработкой ошибок
@@ -899,12 +1034,15 @@ async def load_document_to_kb(query_or_update, context, document_info, kb_id):
 
         total_chunks = int(result.get("total_chunks", 0)) if result else 0
         mode = result.get("mode", "document") if result else "document"
+        job_id = result.get("job_id") if result else None
 
         if total_chunks > 0:
             if mode == "archive":
                 response_text = f"✅ Архив обработан, загружено {total_chunks} фрагментов в базу знаний!"
             else:
                 response_text = f"✅ Документ загружен, фрагментов: {total_chunks}!"
+        elif job_id:
+            response_text = f"⏳ Задача запущена. Job ID: {job_id}. Статус можно проверить в /jobs/{job_id}."
         else:
             response_text = "⚠️ Backend не вернул добавленные фрагменты для этого файла."
 
@@ -1118,9 +1256,15 @@ async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url:
             username=username or None,
         )
         chunks_added = int(result.get("chunks_added", 0)) if result else 0
+        job_id = result.get("job_id") if result else None
         if chunks_added > 0:
             await update.message.reply_text(
                 f"✅ Загружено {chunks_added} фрагментов с веб-страницы!",
+                reply_markup=admin_menu(),
+            )
+        elif job_id:
+            await update.message.reply_text(
+                f"⏳ Задача запущена. Job ID: {job_id}. Статус можно проверить в /jobs/{job_id}.",
                 reply_markup=admin_menu(),
             )
         else:

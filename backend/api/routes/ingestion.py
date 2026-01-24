@@ -6,6 +6,7 @@ import os
 
 from backend.api.deps import get_db_dep, require_api_key
 from backend.services.ingestion_service import IngestionService
+from backend.services.indexing_service import IndexingService
 
 
 class WebIngestionRequest(BaseModel):
@@ -21,6 +22,7 @@ class WebIngestionResponse(BaseModel):
     chunks_added: int
     doc_version: int
     source_updated_at: str
+    job_id: int | None = None
 
 
 class WikiIngestionResponse(BaseModel):
@@ -38,6 +40,8 @@ class DocumentIngestionResponse(BaseModel):
     total_chunks: int
     doc_version: int | None = None
     source_updated_at: str | None = None
+    job_id: int | None = None
+    summary: str | None = None
 
 
 class ImageIngestionResponse(BaseModel):
@@ -46,6 +50,7 @@ class ImageIngestionResponse(BaseModel):
     source_path: str
     source_updated_at: str
     chunks_added: int
+    job_id: int | None = None
 
 
 class CodePathIngestionRequest(BaseModel):
@@ -70,6 +75,7 @@ class CodeIngestionResponse(BaseModel):
     files_skipped: int
     files_updated: int
     chunks_added: int
+    job_id: int | None = None
 
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
@@ -88,15 +94,26 @@ def ingest_web_page_endpoint(
     if not payload.knowledge_base_id:
         raise HTTPException(status_code=400, detail="knowledge_base_id is required")
 
-    service = IngestionService(db)
-    result = service.ingest_web_page(
+    indexing = IndexingService(db)
+    job = indexing.create_job(stage="web")
+    indexing.run_async(
+        indexing.run_web_job,
+        job.id,
+        {
+            "kb_id": payload.knowledge_base_id,
+            "url": str(payload.url),
+            "telegram_id": payload.telegram_id,
+            "username": payload.username,
+        },
+    )
+    return WebIngestionResponse(
         kb_id=payload.knowledge_base_id,
         url=str(payload.url),
-        telegram_id=payload.telegram_id,
-        username=payload.username,
+        chunks_added=0,
+        doc_version=0,
+        source_updated_at="",
+        job_id=job.id,
     )
-
-    return WebIngestionResponse(**result)
 
 
 @router.post(
@@ -217,35 +234,35 @@ def ingest_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db_dep),
 ) -> DocumentIngestionResponse:
-    service = IngestionService(db)
-
+    indexing = IndexingService(db)
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         content = file.file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
-    try:
-        result = service.ingest_document_or_archive(
-            kb_id=knowledge_base_id,
-            file_path=tmp_path,
-            file_name=file_name,
-            file_type=file_type,
-            telegram_id=telegram_id,
-            username=username,
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    job = indexing.create_job(stage="document")
+    indexing.run_async(
+        indexing.run_document_job,
+        job.id,
+        {
+            "kb_id": knowledge_base_id,
+            "file_path": tmp_path,
+            "file_name": file_name,
+            "file_type": file_type,
+            "telegram_id": telegram_id,
+            "username": username,
+        },
+    )
 
     return DocumentIngestionResponse(
-        mode=result.get("mode", "document"),
-        kb_id=result.get("kb_id", knowledge_base_id),
-        file_name=result.get("file_name", file_name),
-        total_chunks=result.get("total_chunks", 0),
-        doc_version=result.get("doc_version"),
-        source_updated_at=result.get("source_updated_at"),
+        mode="document",
+        kb_id=knowledge_base_id,
+        file_name=file_name,
+        total_chunks=0,
+        doc_version=None,
+        source_updated_at=None,
+        job_id=job.id,
+        summary="Задача запущена, используйте /jobs/{id} для статуса",
     )
 
 
@@ -264,34 +281,34 @@ def ingest_image(
     file: UploadFile = File(...),
     db: Session = Depends(get_db_dep),
 ) -> ImageIngestionResponse:
-    service = IngestionService(db)
+    indexing = IndexingService(db)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
         content = file.file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
-    try:
-        result = service.ingest_image(
-            kb_id=knowledge_base_id,
-            file_path=tmp_path,
-            file_id=file_id,
-            telegram_id=telegram_id,
-            username=username,
-            model=model,
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    job = indexing.create_job(stage="image")
+    indexing.run_async(
+        indexing.run_image_job,
+        job.id,
+        {
+            "kb_id": knowledge_base_id,
+            "file_path": tmp_path,
+            "file_id": file_id,
+            "telegram_id": telegram_id,
+            "username": username,
+            "model": model,
+        },
+    )
 
     return ImageIngestionResponse(
-        kb_id=result["kb_id"],
-        file_id=result["file_id"],
-        source_path=result["source_path"],
-        source_updated_at=result["source_updated_at"],
-        chunks_added=result["chunks_added"],
+        kb_id=knowledge_base_id,
+        file_id=file_id,
+        source_path="",
+        source_updated_at="",
+        chunks_added=0,
+        job_id=job.id,
     )
 
 
@@ -305,15 +322,28 @@ def ingest_codebase_path(
     payload: CodePathIngestionRequest,
     db: Session = Depends(get_db_dep),
 ) -> CodeIngestionResponse:
-    service = IngestionService(db)
-    result = service.ingest_codebase_path(
-        kb_id=payload.knowledge_base_id,
-        code_path=payload.path,
-        telegram_id=payload.telegram_id,
-        username=payload.username,
-        repo_label=payload.repo_label,
+    indexing = IndexingService(db)
+    job = indexing.create_job(stage="code_path")
+    indexing.run_async(
+        lambda job_id, pl: indexing.run_code_job(job_id, pl, mode="path"),
+        job.id,
+        {
+            "kb_id": payload.knowledge_base_id,
+            "code_path": payload.path,
+            "telegram_id": payload.telegram_id,
+            "username": payload.username,
+            "repo_label": payload.repo_label,
+        },
     )
-    return CodeIngestionResponse(**result)
+    return CodeIngestionResponse(
+        kb_id=payload.knowledge_base_id,
+        root=payload.path,
+        files_processed=0,
+        files_skipped=0,
+        files_updated=0,
+        chunks_added=0,
+        job_id=job.id,
+    )
 
 
 @router.post(
@@ -326,13 +356,26 @@ def ingest_codebase_git(
     payload: CodeGitIngestionRequest,
     db: Session = Depends(get_db_dep),
 ) -> CodeIngestionResponse:
-    service = IngestionService(db)
-    result = service.ingest_codebase_git(
-        kb_id=payload.knowledge_base_id,
-        git_url=payload.git_url,
-        telegram_id=payload.telegram_id,
-        username=payload.username,
+    indexing = IndexingService(db)
+    job = indexing.create_job(stage="code_git")
+    indexing.run_async(
+        lambda job_id, pl: indexing.run_code_job(job_id, pl, mode="git"),
+        job.id,
+        {
+            "kb_id": payload.knowledge_base_id,
+            "git_url": payload.git_url,
+            "telegram_id": payload.telegram_id,
+            "username": payload.username,
+        },
     )
-    return CodeIngestionResponse(**result)
+    return CodeIngestionResponse(
+        kb_id=payload.knowledge_base_id,
+        root=payload.git_url,
+        files_processed=0,
+        files_skipped=0,
+        files_updated=0,
+        chunks_added=0,
+        job_id=job.id,
+    )
 
 

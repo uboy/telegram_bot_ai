@@ -237,6 +237,7 @@ def document_type_menu():
         [InlineKeyboardButton("📊 Excel", callback_data='upload_type:xlsx')],
         [InlineKeyboardButton("📕 PDF", callback_data='upload_type:pdf')],
         [InlineKeyboardButton("📦 ZIP архив", callback_data='upload_type:zip')],
+        [InlineKeyboardButton("💬 Экспорт чата (JSON)", callback_data='upload_type:chat')],
         [InlineKeyboardButton("🌐 Веб-страница", callback_data='upload_type:web')],
         [InlineKeyboardButton("🖼️ Изображение", callback_data='upload_type:image')],
         [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
@@ -257,7 +258,41 @@ def search_options_menu():
         [InlineKeyboardButton("📚 В базе знаний", callback_data='search_kb')],
         [InlineKeyboardButton("🌐 В интернете", callback_data='search_web')],
         [InlineKeyboardButton("🤖 Спросить ИИ", callback_data='ask_ai')],
+        [InlineKeyboardButton("⚙️ Фильтры поиска", callback_data='search_filters')],
+        [InlineKeyboardButton("📝 Сводка/FAQ", callback_data='search_summary')],
         [InlineKeyboardButton("🔙 Главное меню", callback_data='main_menu')],
+    ])
+
+
+def summary_mode_menu():
+    """Меню выбора режима сводки"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📌 Сводка", callback_data='summary_mode:summary')],
+        [InlineKeyboardButton("❓ FAQ", callback_data='summary_mode:faq')],
+        [InlineKeyboardButton("🧭 Инструкция", callback_data='summary_mode:instructions')],
+        [InlineKeyboardButton("📅 Диапазон дат", callback_data='summary_date_range')],
+        [InlineKeyboardButton("💬 Последний чат (сводка)", callback_data='summary_last_chat')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='search_options')],
+    ])
+
+
+def search_filters_menu(filters: dict | None = None):
+    """Меню фильтров поиска в БЗ."""
+    filters = filters or {}
+    source_types = filters.get("source_types") or []
+    languages = filters.get("languages") or []
+    path_prefixes = filters.get("path_prefixes") or []
+
+    type_label = "все" if not source_types else ",".join(source_types)
+    lang_label = "любая" if not languages else ",".join(languages)
+    path_label = path_prefixes[0] if path_prefixes else "не задан"
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Тип: {type_label}", callback_data="search_filter:toggle_type")],
+        [InlineKeyboardButton(f"Язык: {lang_label}", callback_data="search_filter:toggle_lang")],
+        [InlineKeyboardButton(f"Путь: {path_label}", callback_data="search_filter:set_path")],
+        [InlineKeyboardButton("Сбросить фильтры", callback_data="search_filter:clear")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="search_options")],
     ])
 
 
