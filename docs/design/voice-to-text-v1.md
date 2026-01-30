@@ -32,6 +32,7 @@
 - Bot uses backend API for business logic; bot should not access DB directly.
 - Current architecture includes `ai_providers.py` for model/provider selection and admin model selection for text/image.
 - GPU availability may be zero; system must gracefully fall back to CPU.
+- Audio decoding requires `ffmpeg` to be installed and available in PATH.
 
 ## 4) Architecture
 **High-level components**
@@ -88,6 +89,7 @@
 - No GPU devices available: worker count falls back to 1 CPU worker.
 - Multiple GPUs: worker pool size equals number of GPUs unless capped by config.
 - Large audio files or unsupported formats: return error with guidance.
+- Missing `ffmpeg`: fail fast with a clear error and admin-facing guidance to install it.
 - Backend restart: queued in-memory jobs are lost unless persisted.
 - Admin changes model while jobs are queued: new jobs use new model; in-flight jobs continue.
 
@@ -104,9 +106,9 @@
 - Target average transcription latency < 30s for short voice notes.
 
 ## 10) Observability
-- Logs: job enqueue, start, completion, error (include job_id, duration, model).
-- Metrics: queue length, job latency, error rate, per-model usage.
-- Alerts: sustained high queue length, repeated model load failures.
+- Logs (required for v1): job enqueue, start, completion, error (include job_id, duration, model, queue size at event time).
+- Metrics (optional for v1): basic counters in memory (queue length, latency, error rate, per-model usage) exposed via a simple `/metrics` endpoint only if a metrics pattern already exists in the repo.
+- Alerts (defer): sustained high queue length, repeated model load failures, per-model usage dashboards, metrics retention.
 
 ## 11) Test plan
 - Unit tests: queue behavior, worker count selection, model selection logic.
@@ -127,9 +129,10 @@
 - Admin can select ASR model in admin panel; config is persisted.
 - System uses configured model; if unavailable, falls back with logged warning.
 - Errors are handled gracefully with user-friendly messages.
+- Structured logs exist for enqueue/start/finish/error with job_id, duration, model, and queue size.
 
 ---
 
 **Approval**
 
-APPROVED:v1
+REVIEW REQUIRED - Reply "APPROVED:v1" or "CHANGES:<bullets>"

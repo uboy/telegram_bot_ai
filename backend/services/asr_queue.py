@@ -107,3 +107,7 @@ def reset_queue(maxsize: Optional[int] = None) -> None:
     with _status_lock:
         _job_statuses.clear()
     _job_queue = Queue(maxsize=maxsize or _queue_max)
+
+
+def get_queue_size() -> int:
+    return _job_queue.qsize()

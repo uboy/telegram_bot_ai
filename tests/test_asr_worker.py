@@ -45,3 +45,15 @@ def test_worker_fallback_model(monkeypatch):
         asr_worker._worker_loop(1, "cpu")
 
     assert ("done", "ok", None) in statuses
+
+
+def test_get_worker_devices_limits():
+    assert asr_worker._get_worker_devices(0, None) == ["cpu"]
+    assert asr_worker._get_worker_devices(2, None) == ["cuda:0", "cuda:1"]
+    assert asr_worker._get_worker_devices(4, 2) == ["cuda:0", "cuda:1"]
+
+
+def test_ensure_ffmpeg_missing_for_ogg(monkeypatch):
+    monkeypatch.setattr(asr_worker.shutil, "which", lambda _: None)
+    with pytest.raises(RuntimeError):
+        asr_worker._ensure_ffmpeg_available("voice.ogg")

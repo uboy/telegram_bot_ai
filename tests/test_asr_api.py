@@ -63,3 +63,18 @@ async def test_transcribe_voice_enqueues(monkeypatch):
         language=None,
     )
     assert resp.job_id == "job-123"
+
+
+@pytest.mark.anyio
+async def test_transcribe_voice_ffmpeg_missing(monkeypatch):
+    file = UploadFile(filename="voice.ogg", file=io.BytesIO(b"hello"), content_type="audio/ogg")
+    monkeypatch.setattr(asr_routes.shutil, "which", lambda _: None)
+
+    with pytest.raises(Exception) as excinfo:
+        await asr_routes.transcribe_voice(
+            file=file,
+            telegram_id="1",
+            message_id="2",
+            language=None,
+        )
+    assert "ffmpeg not found in PATH" in str(excinfo.value)

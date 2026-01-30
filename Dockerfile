@@ -11,6 +11,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
         git \
+        ffmpeg \
         tesseract-ocr \
         libtesseract-dev \
         poppler-utils \

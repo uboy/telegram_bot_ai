@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +12,7 @@ from backend.api.deps import require_api_key
 from backend.schemas.asr import AsrJobQueued, AsrJobStatus, AsrSettings, AsrSettingsUpdate
 from backend.services.asr_queue import enqueue_asr_job, get_job_status
 from shared.database import Session, AppSettings  # type: ignore
+from shared.logging_config import logger
 
 
 router = APIRouter(prefix="/asr", tags=["asr"])
@@ -32,6 +34,13 @@ async def transcribe_voice(
         raise HTTPException(status_code=400, detail="audio file is required")
 
     content_type = (file.content_type or "").lower()
+    suffix = Path(file.filename or "").suffix.lower()
+    logger.info(
+        "ASR upload: filename=%s content_type=%s suffix=%s",
+        file.filename,
+        content_type or None,
+        suffix or None,
+    )
     allowed_types = {
         "audio/ogg",
         "audio/opus",
@@ -45,9 +54,16 @@ async def transcribe_voice(
     if content_type and content_type not in allowed_types:
         raise HTTPException(status_code=400, detail=f"unsupported audio type: {content_type}")
 
+    if suffix != ".wav" and not shutil.which("ffmpeg"):
+        raise HTTPException(
+            status_code=503,
+            detail="ffmpeg not found in PATH. Install ffmpeg and restart the backend "
+                   "or upload WAV audio.",
+        )
+
     max_mb = int(os.getenv("ASR_MAX_FILE_MB", "25"))
     max_bytes = max_mb * 1024 * 1024
-    suffix = Path(file.filename or "").suffix or ".ogg"
+    suffix = suffix or ".ogg"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
         temp_path = tmp_file.name
