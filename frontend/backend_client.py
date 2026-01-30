@@ -343,6 +343,72 @@ class BackendClient:
             logger.error("Ошибка при получении статуса job %s: %s", job_id, e, exc_info=True)
             return {}
 
+    # === ASR (Voice to Text) ===
+
+    def asr_transcribe(
+        self,
+        file_name: str,
+        file_bytes: bytes,
+        telegram_id: str,
+        message_id: str,
+        language: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        url_api = self._url("/asr/transcribe")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        files = {
+            "file": (file_name, file_bytes, "audio/ogg"),
+        }
+        data: Dict[str, Any] = {
+            "telegram_id": telegram_id,
+            "message_id": message_id,
+        }
+        if language:
+            data["language"] = language
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.post(url_api, data=data, files=files)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при ASR transcribe через backend: %s", e, exc_info=True)
+            return {}
+
+    def asr_job_status(self, job_id: str) -> Dict[str, Any]:
+        url = self._url(f"/asr/jobs/{job_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при получении статуса ASR job %s: %s", job_id, e, exc_info=True)
+            return {}
+
+    def get_asr_settings(self) -> Dict[str, Any]:
+        url = self._url("/asr/settings")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при получении ASR настроек через backend: %s", e, exc_info=True)
+            return {}
+
+    def update_asr_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = self._url("/asr/settings")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.put(url, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при обновлении ASR настроек через backend: %s", e, exc_info=True)
+            return {}
+
     def ingest_codebase_path(
         self,
         kb_id: int,

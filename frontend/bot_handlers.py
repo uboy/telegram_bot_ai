@@ -867,6 +867,34 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=admin_menu(),
             )
         context.user_data['state'] = None
+
+    elif state == 'waiting_asr_model':
+        if user.role != 'admin':
+            await update.message.reply_text("Только администраторы могут менять ASR модель.")
+            context.user_data['state'] = None
+            return
+
+        model_name = (update.message.text or "").strip()
+        if not model_name:
+            await update.message.reply_text("Введите непустое имя модели ASR.", reply_markup=admin_menu())
+            context.user_data['state'] = None
+            return
+
+        result = await asyncio.to_thread(
+            backend_client.update_asr_settings,
+            {"asr_model_name": model_name},
+        )
+        if result and result.get("asr_model_name"):
+            await update.message.reply_text(
+                f"✅ ASR модель изменена на: {result.get('asr_model_name')}",
+                reply_markup=admin_menu(),
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ Не удалось обновить ASR модель через backend.",
+                reply_markup=admin_menu(),
+            )
+        context.user_data['state'] = None
         
     elif state == 'waiting_user_delete':
         # Удаление пользователя
@@ -1240,6 +1268,76 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик голосовых сообщений (ASR)."""
+    user = await check_user(update)
+    if not user:
+        return
+
+    voice = update.message.voice if update.message else None
+    if not voice:
+        return
+
+    status_message = await update.message.reply_text(
+        "🎙️ Получено голосовое сообщение. Ставлю в очередь на распознавание..."
+    )
+    try:
+        file = await context.bot.get_file(voice.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        tg_id = str(update.effective_user.id) if update.effective_user else ""
+        msg_id = str(update.message.message_id) if update.message else ""
+
+        result = await asyncio.to_thread(
+            backend_client.asr_transcribe,
+            file_name=f"{voice.file_id}.ogg",
+            file_bytes=bytes(file_bytes),
+            telegram_id=tg_id,
+            message_id=msg_id,
+            language=None,
+        )
+        job_id = result.get("job_id")
+        if not job_id:
+            await status_message.edit_text("❌ Не удалось создать задачу распознавания. Попробуйте позже.")
+            return
+
+        queue_position = result.get("queue_position")
+        await status_message.edit_text(
+            f"⏳ В очереди на распознавание. Позиция: {queue_position or '?'}.\nJob ID: {job_id}"
+        )
+
+        last_status = "queued"
+        for _ in range(30):
+            await asyncio.sleep(2)
+            job = await asyncio.to_thread(backend_client.asr_job_status, job_id)
+            status = job.get("status")
+            if not status:
+                continue
+            if status != last_status and status == "processing":
+                try:
+                    await status_message.edit_text(f"🛠️ Распознаю сообщение...\nJob ID: {job_id}")
+                except Exception:
+                    pass
+                last_status = status
+            if status == "done":
+                text = (job.get("text") or "").strip()
+                if text:
+                    await update.message.reply_text(f"📝 Транскрипция:\n\n{text}")
+                else:
+                    await update.message.reply_text("⚠️ Распознавание завершилось без текста.")
+                return
+            if status == "error":
+                error = job.get("error") or "Неизвестная ошибка"
+                await update.message.reply_text(f"❌ Ошибка распознавания: {error}")
+                return
+
+        await update.message.reply_text(
+            f"⏳ Распознавание продолжается. Попробуйте позже. Job ID: {job_id}"
+        )
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"❌ Ошибка обработки голосового сообщения: {str(e)}")
 
 
 async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, kb_id: int):

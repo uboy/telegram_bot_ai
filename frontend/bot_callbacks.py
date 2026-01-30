@@ -1907,6 +1907,37 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         await safe_edit_message_text(query, text, reply_markup=ai_providers_menu(providers, current))
         return
 
+    if data == 'admin_asr':
+        settings = await asyncio.to_thread(backend_client.get_asr_settings)
+        provider = settings.get("asr_provider", "transformers")
+        model = settings.get("asr_model_name", "openai/whisper-small")
+        device = settings.get("asr_device") or "auto"
+        text = (
+            "🎙️ Настройки распознавания речи\n\n"
+            f"Провайдер: {provider}\n"
+            f"Модель: {model}\n"
+            f"Устройство: {device}\n\n"
+            "Чтобы изменить модель, нажмите кнопку ниже."
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Изменить модель", callback_data='asr_set_model')],
+            [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
+        ])
+        await safe_edit_message_text(query, text, reply_markup=keyboard)
+        return
+
+    if data == 'asr_set_model':
+        context.user_data['state'] = 'waiting_asr_model'
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Назад", callback_data='admin_asr')],
+        ])
+        await safe_edit_message_text(
+            query,
+            "Введите имя модели ASR (например, openai/whisper-small):",
+            reply_markup=keyboard,
+        )
+        return
+
     if data == 'admin_n8n':
         await safe_edit_message_text(query, _n8n_status_text(), reply_markup=n8n_menu(N8N_PUBLIC_URL or None))
         return

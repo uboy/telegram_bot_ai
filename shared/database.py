@@ -39,6 +39,14 @@ class User(Base):
     preferred_model = Column(String(100), default='')  # Предпочитаемая модель (для Ollama)
     preferred_image_model = Column(String(100), default='')  # Предпочитаемая модель для изображений
 
+
+class AppSettings(Base):
+    __tablename__ = 'app_settings'
+    id = Column(Integer, primary_key=True)
+    asr_provider = Column(String(50), default='transformers')
+    asr_model_name = Column(String(200), default='openai/whisper-small')
+    asr_device = Column(String(50), default='')
+
 class KnowledgeBase(Base):
     """База знаний"""
     __tablename__ = 'knowledge_bases'
@@ -467,6 +475,23 @@ def migrate_database():
                     """))
                     session.commit()
                     logger.info("✅ Migration: added 'is_deleted' to knowledge_chunks")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Ensure app_settings has a default row
+        try:
+            if 'app_settings' in inspector.get_table_names():
+                count = session.execute(text("SELECT COUNT(*) FROM app_settings")).scalar()
+                if not count:
+                    session.execute(text("""
+                        INSERT INTO app_settings (asr_provider, asr_model_name, asr_device)
+                        VALUES ('transformers', 'openai/whisper-small', '')
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: created default row in app_settings")
         except Exception:
             try:
                 session.rollback()
