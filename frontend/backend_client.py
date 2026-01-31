@@ -352,6 +352,7 @@ class BackendClient:
         telegram_id: str,
         message_id: str,
         language: Optional[str] = None,
+        message_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         url_api = self._url("/asr/transcribe")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
@@ -364,6 +365,8 @@ class BackendClient:
         }
         if language:
             data["language"] = language
+        if message_date:
+            data["message_date"] = message_date
         try:
             with httpx.Client(timeout=self.timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)

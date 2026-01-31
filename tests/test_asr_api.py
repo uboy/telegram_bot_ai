@@ -49,7 +49,7 @@ async def test_transcribe_voice_queue_full(monkeypatch):
 async def test_transcribe_voice_enqueues(monkeypatch):
     file = UploadFile(filename="voice.ogg", file=io.BytesIO(b"hello"), content_type="audio/ogg")
 
-    def _enqueue(file_path, telegram_id, message_id, language=None):
+    def _enqueue(file_path, telegram_id, message_id, language=None, audio_meta=None):
         if os.path.exists(file_path):
             os.remove(file_path)
         return "job-123"

@@ -14,6 +14,8 @@ class AsrJobStatus(BaseModel):
     status: str
     text: Optional[str] = None
     error: Optional[str] = None
+    audio_meta: Optional[dict] = None
+    timing_meta: Optional[dict] = None
 
 
 class AsrSettings(BaseModel):

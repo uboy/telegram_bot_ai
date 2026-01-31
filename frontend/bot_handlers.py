@@ -1289,6 +1289,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         tg_id = str(update.effective_user.id) if update.effective_user else ""
         msg_id = str(update.message.message_id) if update.message else ""
+        message_date = None
+        if update.message and update.message.date:
+            try:
+                message_date = update.message.date.isoformat()
+            except Exception:
+                message_date = None
 
         result = await asyncio.to_thread(
             backend_client.asr_transcribe,
@@ -1297,6 +1303,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             telegram_id=tg_id,
             message_id=msg_id,
             language=None,
+            message_date=message_date,
         )
         job_id = result.get("job_id")
         if not job_id:
@@ -1323,8 +1330,32 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 last_status = status
             if status == "done":
                 text = (job.get("text") or "").strip()
+                audio_meta = job.get("audio_meta") or {}
+                meta_lines = []
+                original_name = audio_meta.get("original_name") or voice.file_id
+                duration_s = audio_meta.get("duration_s")
+                size_bytes = audio_meta.get("size_bytes")
+                sample_rate = audio_meta.get("sample_rate")
+                channels = audio_meta.get("channels")
+                sent_at = audio_meta.get("sent_at")
+                if original_name:
+                    meta_lines.append(f"Файл: {original_name}")
+                if duration_s:
+                    meta_lines.append(f"Длительность: {duration_s:.1f}с")
+                if size_bytes:
+                    meta_lines.append(f"Размер: {size_bytes} байт")
+                if sample_rate:
+                    meta_lines.append(f"Частота: {sample_rate} Гц")
+                if channels:
+                    meta_lines.append(f"Каналы: {channels}")
+                if sent_at:
+                    meta_lines.append(f"Отправлено: {sent_at}")
                 if text:
-                    await update.message.reply_text(f"📝 Транскрипция:\n\n{text}")
+                    meta_block = "\n".join(meta_lines)
+                    prefix = "📝 Транскрипция"
+                    if meta_block:
+                        prefix = f"📝 Транскрипция\n{meta_block}"
+                    await update.message.reply_text(f"{prefix}\n\n{text}")
                 else:
                     await update.message.reply_text("⚠️ Распознавание завершилось без текста.")
                 return

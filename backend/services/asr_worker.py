@@ -217,7 +217,7 @@ def _convert_audio_if_needed(audio_path: str) -> str:
 
 
 def _transcribe_with_model(
-    audio: dict,
+    audio_path: str,
     language: Optional[str],
     model_name: str,
     device_index: int,
@@ -241,22 +241,20 @@ def _transcribe_with_model(
     else:
         processor, model, device = cache[key]
 
-    inputs = processor(
-        audio["raw"],
-        sampling_rate=audio["sampling_rate"],
-        return_tensors="pt",
-    )
+    feature_extractor = getattr(processor, "feature_extractor", None)
+    if feature_extractor and hasattr(feature_extractor, "return_attention_mask"):
+        if not getattr(feature_extractor, "return_attention_mask", False):
+            feature_extractor.return_attention_mask = True
+
+    audio_inputs = _load_audio(audio_path, processor)
+    inputs = {"input_features": audio_inputs["input_features"]}
+    if audio_inputs.get("attention_mask") is not None:
+        inputs["attention_mask"] = audio_inputs["attention_mask"]
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
-    generate_kwargs = {}
-    if language and hasattr(processor, "get_decoder_prompt_ids"):
-        try:
-            generate_kwargs["forced_decoder_ids"] = processor.get_decoder_prompt_ids(
-                language=language,
-                task="transcribe",
-            )
-        except Exception:
-            pass
+    generate_kwargs = {"task": "transcribe"}
+    if language:
+        generate_kwargs["language"] = language
 
     with torch.no_grad():
         generated_ids = model.generate(**inputs, **generate_kwargs)
@@ -272,7 +270,6 @@ def _transcribe_audio(
 ) -> str:
     try:
         import torch
-        from transformers import pipeline
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"ASR dependencies are not available: {exc}") from exc
 
@@ -285,59 +282,32 @@ def _transcribe_audio(
     else:
         device_index = -1
 
-    cache = getattr(_thread_local, "pipelines", {})
-    key = (model_name, device_index)
-    if key not in cache:
-        cache[key] = pipeline(
-            task="automatic-speech-recognition",
-            model=model_name,
-            device=device_index,
-        )
-        _thread_local.pipelines = cache
-    asr_pipeline = cache[key]
-    if getattr(asr_pipeline, "type", None) == "seq2seq_whisper":
-        feature_extractor = getattr(asr_pipeline, "feature_extractor", None)
-        if feature_extractor and hasattr(feature_extractor, "return_attention_mask"):
-            if not getattr(feature_extractor, "return_attention_mask", False):
-                feature_extractor.return_attention_mask = True
-
-    generate_kwargs = {"language": language} if language else None
-    audio = _load_audio(audio_path)
-    try:
-        if generate_kwargs:
-            result = asr_pipeline(
-                audio["raw"],
-                sampling_rate=audio["sampling_rate"],
-                generate_kwargs=generate_kwargs,
-                return_timestamps=False,
-            )
-        else:
-            result = asr_pipeline(
-                audio["raw"],
-                sampling_rate=audio["sampling_rate"],
-                return_timestamps=False,
-            )
-    except KeyError as exc:
-        if str(exc) == "'num_frames'" or getattr(exc, "args", [None])[0] == "num_frames":
-            logger.warning("ASR pipeline missing num_frames; retrying with file path input")
-            try:
-                if generate_kwargs:
-                    result = asr_pipeline(audio_path, generate_kwargs=generate_kwargs, return_timestamps=False)
-                else:
-                    result = asr_pipeline(audio_path, return_timestamps=False)
-            except KeyError as exc2:
-                if str(exc2) == "'num_frames'" or getattr(exc2, "args", [None])[0] == "num_frames":
-                    logger.warning("ASR pipeline still missing num_frames; falling back to direct model")
-                    return _transcribe_with_model(audio, language, model_name, device_index)
-                raise
-        else:
-            raise
-    if isinstance(result, dict) and "text" in result:
-        return (result.get("text") or "").strip()
-    return str(result).strip()
+    return _transcribe_with_model(audio_path, language, model_name, device_index)
 
 
-def _load_audio(audio_path: str) -> dict:
+def _load_audio(audio_path: str, processor) -> dict:
+    raw_audio = _read_wav(audio_path)
+    inputs = processor(
+        raw_audio["raw"],
+        sampling_rate=raw_audio["sampling_rate"],
+        return_tensors="pt",
+        return_attention_mask=True,
+    )
+    input_features = inputs.get("input_features")
+    attention_mask = inputs.get("attention_mask")
+    num_frames = input_features.shape[-1] if input_features is not None else None
+    return {
+        "input_features": input_features,
+        "attention_mask": attention_mask,
+        "num_frames": num_frames,
+        "meta": {
+            "sampling_rate": raw_audio["sampling_rate"],
+            "channels": raw_audio["channels"],
+        },
+    }
+
+
+def _read_wav(audio_path: str) -> dict:
     try:
         with wave.open(audio_path, "rb") as wav:
             channels = wav.getnchannels()
@@ -360,7 +330,11 @@ def _load_audio(audio_path: str) -> dict:
     if channels > 1:
         audio = audio.reshape(-1, channels).mean(axis=1)
     audio = audio.astype(np.float32) / 32768.0
-    return {"raw": audio, "sampling_rate": sample_rate}
+    return {
+        "raw": audio,
+        "sampling_rate": sample_rate,
+        "channels": channels,
+    }
 
 
 _thread_local = threading.local()
@@ -379,6 +353,7 @@ def _worker_loop(worker_id: int, worker_device: Optional[str]) -> None:
                 logger.info("ASR job %s dequeued after %.2fs", job.job_id, wait_seconds)
             except Exception:
                 pass
+            started_at_dt = datetime.now(timezone.utc)
             provider, model_name, settings_device = _get_settings()
             if provider != "transformers":
                 logger.warning("ASR provider %s not supported, falling back to transformers", provider)
@@ -390,6 +365,23 @@ def _worker_loop(worker_id: int, worker_device: Optional[str]) -> None:
             audio_path = _convert_audio_if_needed(job.file_path)
             if audio_path != job.file_path:
                 _log_audio_metadata(audio_path, "converted")
+            audio_probe = _probe_audio_metadata(audio_path)
+            audio_meta = dict(job.audio_meta or {})
+            audio_meta.update(
+                {
+                    "duration_s": audio_probe.get("duration_s"),
+                    "size_bytes": audio_probe.get("size_bytes"),
+                    "codec": audio_probe.get("codec") or audio_probe.get("format"),
+                    "sample_rate": audio_probe.get("sample_rate"),
+                    "channels": audio_probe.get("channels"),
+                }
+            )
+            timing_meta = {
+                "queued_at": job.created_at.isoformat(),
+                "started_at": started_at_dt.isoformat(),
+                "queue_wait_s": wait_seconds if "wait_seconds" in locals() else None,
+            }
+            set_job_status(job.job_id, "processing", audio_meta=audio_meta, timing_meta=timing_meta)
             model_in_use = model_name
             logger.info(
                 "ASR job %s started model=%s queue_size=%s",
@@ -411,8 +403,11 @@ def _worker_loop(worker_id: int, worker_device: Optional[str]) -> None:
                 text = _transcribe_audio(audio_path, job.language, fallback_model, resolved_device)
             if not text:
                 raise RuntimeError("Empty transcription result")
-            set_job_status(job.job_id, "done", text=text)
             duration = time.monotonic() - started_at
+            finished_at = datetime.now(timezone.utc)
+            timing_meta["finished_at"] = finished_at.isoformat()
+            timing_meta["processing_s"] = duration
+            set_job_status(job.job_id, "done", text=text, audio_meta=audio_meta, timing_meta=timing_meta)
             logger.info(
                 "ASR job %s completed in %.2fs model=%s queue_size=%s",
                 job.job_id,
@@ -422,6 +417,12 @@ def _worker_loop(worker_id: int, worker_device: Optional[str]) -> None:
             )
         except Exception as exc:  # noqa: BLE001
             duration = time.monotonic() - started_at
+            finished_at = datetime.now(timezone.utc)
+            timing_meta = {
+                "queued_at": job.created_at.isoformat(),
+                "finished_at": finished_at.isoformat(),
+                "processing_s": duration,
+            }
             logger.error(
                 "ASR job %s failed in %.2fs model=%s queue_size=%s: %s",
                 job.job_id,
@@ -431,7 +432,7 @@ def _worker_loop(worker_id: int, worker_device: Optional[str]) -> None:
                 exc,
                 exc_info=True,
             )
-            set_job_status(job.job_id, "error", error=str(exc))
+            set_job_status(job.job_id, "error", error=str(exc), audio_meta=job.audio_meta, timing_meta=timing_meta)
         finally:
             for path in {job.file_path, f"{job.file_path}.wav"}:
                 try:

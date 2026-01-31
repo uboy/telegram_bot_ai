@@ -18,6 +18,7 @@ class AsrJob:
     message_id: int
     language: Optional[str]
     created_at: datetime
+    audio_meta: dict
 
 
 @dataclass
@@ -27,6 +28,8 @@ class AsrJobStatus:
     text: Optional[str] = None
     error: Optional[str] = None
     queue_position: Optional[int] = None
+    audio_meta: Optional[dict] = None
+    timing_meta: Optional[dict] = None
 
 
 _queue_max = int(os.getenv("ASR_QUEUE_MAX", "100"))
@@ -40,8 +43,10 @@ def enqueue_asr_job(
     telegram_id: int,
     message_id: int,
     language: Optional[str] = None,
+    audio_meta: Optional[dict] = None,
 ) -> str:
     job_id = str(uuid4())
+    audio_meta = audio_meta or {}
     job = AsrJob(
         job_id=job_id,
         file_path=file_path,
@@ -49,6 +54,7 @@ def enqueue_asr_job(
         message_id=message_id,
         language=language,
         created_at=datetime.now(timezone.utc),
+        audio_meta=audio_meta,
     )
     try:
         _job_queue.put_nowait(job)
@@ -60,6 +66,10 @@ def enqueue_asr_job(
             job_id=job_id,
             status="queued",
             queue_position=_job_queue.qsize(),
+            audio_meta=audio_meta,
+            timing_meta={
+                "queued_at": job.created_at.isoformat(),
+            },
         )
     logger.info("ASR queued job=%s queue_size=%s", job_id, _job_queue.qsize())
     return job_id
@@ -76,6 +86,8 @@ def set_job_status(
     text: Optional[str] = None,
     error: Optional[str] = None,
     queue_position: Optional[int] = None,
+    audio_meta: Optional[dict] = None,
+    timing_meta: Optional[dict] = None,
 ) -> None:
     with _status_lock:
         current = _job_statuses.get(job_id)
@@ -86,12 +98,18 @@ def set_job_status(
                 text=text,
                 error=error,
                 queue_position=queue_position,
+                audio_meta=audio_meta,
+                timing_meta=timing_meta,
             )
             return
         current.status = status
         current.text = text if text is not None else current.text
         current.error = error if error is not None else current.error
         current.queue_position = queue_position
+        if audio_meta is not None:
+            current.audio_meta = audio_meta
+        if timing_meta is not None:
+            current.timing_meta = timing_meta
 
 
 def next_job() -> AsrJob:

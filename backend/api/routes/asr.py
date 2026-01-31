@@ -29,6 +29,7 @@ async def transcribe_voice(
     telegram_id: str = Form(...),
     message_id: str = Form(...),
     language: Optional[str] = Form(None),
+    message_date: Optional[str] = Form(None),
 ) -> AsrJobQueued:
     if not file:
         raise HTTPException(status_code=400, detail="audio file is required")
@@ -65,9 +66,9 @@ async def transcribe_voice(
     max_bytes = max_mb * 1024 * 1024
     suffix = suffix or ".ogg"
 
+    total = 0
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
         temp_path = tmp_file.name
-        total = 0
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:
@@ -82,12 +83,18 @@ async def transcribe_voice(
                 raise HTTPException(status_code=413, detail="audio file is too large")
             tmp_file.write(chunk)
 
+    audio_meta = {
+        "original_name": file.filename or "",
+        "size_bytes": total,
+        "sent_at": message_date,
+    }
     try:
         job_id = enqueue_asr_job(
             file_path=temp_path,
             telegram_id=int(telegram_id),
             message_id=int(message_id),
             language=language,
+            audio_meta=audio_meta,
         )
     except RuntimeError as exc:
         try:
@@ -127,6 +134,8 @@ def get_asr_job(job_id: str) -> AsrJobStatus:
         status=status_obj.status,
         text=status_obj.text,
         error=status_obj.error,
+        audio_meta=status_obj.audio_meta,
+        timing_meta=status_obj.timing_meta,
     )
 
 

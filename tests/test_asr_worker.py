@@ -16,11 +16,12 @@ def test_worker_fallback_model(monkeypatch):
         message_id=2,
         language=None,
         created_at=datetime.now(timezone.utc),
+        audio_meta={},
     )
 
     statuses = []
 
-    def _set_status(job_id, status, text=None, error=None, queue_position=None):
+    def _set_status(job_id, status, text=None, error=None, queue_position=None, audio_meta=None, timing_meta=None):
         statuses.append((status, text, error))
 
     def _next_job():
@@ -38,6 +39,9 @@ def test_worker_fallback_model(monkeypatch):
     monkeypatch.setattr(asr_worker, "next_job", _next_job)
     monkeypatch.setattr(asr_worker, "mark_done", lambda _job: None)
     monkeypatch.setattr(asr_worker, "_get_settings", lambda: ("transformers", "bad-model", None))
+    monkeypatch.setattr(asr_worker, "_ensure_ffmpeg_available", lambda _path: None)
+    monkeypatch.setattr(asr_worker, "_log_audio_metadata", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(asr_worker, "_probe_audio_metadata", lambda _path: {})
     monkeypatch.setattr(asr_worker, "_convert_audio_if_needed", lambda path: path)
     monkeypatch.setattr(asr_worker, "_transcribe_audio", _transcribe)
 
