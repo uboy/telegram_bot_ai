@@ -20,6 +20,7 @@ from shared.utils import (
     format_text_safe, create_prompt_with_language, detect_language, 
     format_for_telegram_answer, strip_html_tags, normalize_wiki_url_for_display
 )
+from shared.asr_limits import get_asr_max_file_bytes, get_telegram_file_max_bytes
 from shared.types import UserContext
 from urllib.parse import unquote
 from html import escape
@@ -1283,7 +1284,30 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_message = await update.message.reply_text(
         "🎙️ Получено голосовое сообщение. Ставлю в очередь на распознавание..."
     )
+    def _size_limit_message(file_size: int, limit_bytes: int, is_telegram_limit: bool) -> str:
+        header = "❌ Аудио слишком большое для распознавания.\n"
+        if is_telegram_limit:
+            header = (
+                "❌ Бот не может скачать файл больше 20MB из Telegram.\n"
+                "Пожалуйста, отправьте файл меньше 20MB.\n"
+            )
+        return (
+            f"{header}"
+            f"Лимит: {limit_bytes} байт\n"
+            f"Размер файла: {file_size} байт"
+        )
+
     try:
+        backend_limit = get_asr_max_file_bytes()
+        telegram_limit = get_telegram_file_max_bytes()
+        effective_limit = min(backend_limit, telegram_limit)
+        is_telegram_limit = effective_limit == telegram_limit
+        if voice.file_size and voice.file_size > effective_limit:
+            await update.message.reply_text(
+                _size_limit_message(voice.file_size, effective_limit, is_telegram_limit)
+            )
+            return
+
         file = await context.bot.get_file(voice.file_id)
         file_bytes = await file.download_as_bytearray()
 
@@ -1295,6 +1319,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_date = update.message.date.isoformat()
             except Exception:
                 message_date = None
+        content_type = getattr(voice, "mime_type", None) or "audio/ogg"
+
+        logger.info("ASR voice upload: file_id=%s mime_type=%s", voice.file_id, content_type)
 
         result = await asyncio.to_thread(
             backend_client.asr_transcribe,
@@ -1304,10 +1331,27 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_id=msg_id,
             language=None,
             message_date=message_date,
+            content_type=content_type,
         )
         job_id = result.get("job_id")
         if not job_id:
-            await status_message.edit_text("❌ Не удалось создать задачу распознавания. Попробуйте позже.")
+            error_payload = result.get("error_payload") or {}
+            error_detail = error_payload.get("error") if isinstance(error_payload, dict) else None
+            if isinstance(error_detail, dict):
+                message = error_detail.get("message") or "Не удалось создать задачу распознавания."
+                limit_bytes = error_detail.get("limit_bytes")
+                size_bytes = error_detail.get("size_bytes")
+                if limit_bytes and size_bytes:
+                    message = (
+                        f"❌ {message}\n"
+                        f"Лимит: {limit_bytes} байт\n"
+                        f"Размер файла: {size_bytes} байт"
+                    )
+                else:
+                    message = f"❌ {message}"
+            else:
+                message = "❌ Не удалось создать задачу распознавания. Попробуйте позже."
+            await status_message.edit_text(message)
             return
 
         queue_position = result.get("queue_position")
@@ -1368,7 +1412,179 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏳ Распознавание продолжается. Попробуйте позже. Job ID: {job_id}"
         )
     except Exception as e:  # noqa: BLE001
-        await update.message.reply_text(f"❌ Ошибка обработки голосового сообщения: {str(e)}")
+        if "File is too big" in str(e) and voice.file_size:
+            backend_limit = get_asr_max_file_bytes()
+            telegram_limit = get_telegram_file_max_bytes()
+            effective_limit = min(backend_limit, telegram_limit)
+            is_telegram_limit = effective_limit == telegram_limit
+            await update.message.reply_text(
+                _size_limit_message(voice.file_size, effective_limit, is_telegram_limit)
+            )
+        else:
+            await update.message.reply_text(f"❌ Ошибка обработки голосового сообщения: {str(e)}")
+
+
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик аудиофайлов (ASR)."""
+    user = await check_user(update)
+    if not user:
+        return
+
+    audio = update.message.audio if update.message else None
+    document = update.message.document if update.message else None
+    file_info = audio or document
+    if not file_info:
+        return
+
+    status_message = await update.message.reply_text(
+        "🎵 Получен аудиофайл. Ставлю в очередь на распознавание..."
+    )
+    def _size_limit_message(file_size: int, limit_bytes: int, is_telegram_limit: bool) -> str:
+        header = "❌ Аудио слишком большое для распознавания.\n"
+        if is_telegram_limit:
+            header = (
+                "❌ Бот не может скачать файл больше 20MB из Telegram.\n"
+                "Пожалуйста, отправьте файл меньше 20MB.\n"
+            )
+        return (
+            f"{header}"
+            f"Лимит: {limit_bytes} байт\n"
+            f"Размер файла: {file_size} байт"
+        )
+
+    try:
+        backend_limit = get_asr_max_file_bytes()
+        telegram_limit = get_telegram_file_max_bytes()
+        effective_limit = min(backend_limit, telegram_limit)
+        is_telegram_limit = effective_limit == telegram_limit
+        file_size = getattr(file_info, "file_size", None)
+        if file_size and file_size > effective_limit:
+            await update.message.reply_text(
+                _size_limit_message(file_size, effective_limit, is_telegram_limit)
+            )
+            return
+
+        file = await context.bot.get_file(file_info.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        tg_id = str(update.effective_user.id) if update.effective_user else ""
+        msg_id = str(update.message.message_id) if update.message else ""
+        message_date = None
+        if update.message and update.message.date:
+            try:
+                message_date = update.message.date.isoformat()
+            except Exception:
+                message_date = None
+        file_name = getattr(file_info, "file_name", None) or f"{file_info.file_id}.mp3"
+        content_type = getattr(file_info, "mime_type", None) or "application/octet-stream"
+
+        logger.info(
+            "ASR audio upload: file_id=%s filename=%s mime_type=%s",
+            file_info.file_id,
+            file_name,
+            content_type,
+        )
+
+        result = await asyncio.to_thread(
+            backend_client.asr_transcribe,
+            file_name=file_name,
+            file_bytes=bytes(file_bytes),
+            telegram_id=tg_id,
+            message_id=msg_id,
+            language=None,
+            message_date=message_date,
+            content_type=content_type,
+        )
+        job_id = result.get("job_id")
+        if not job_id:
+            error_payload = result.get("error_payload") or {}
+            error_detail = error_payload.get("error") if isinstance(error_payload, dict) else None
+            if isinstance(error_detail, dict):
+                message = error_detail.get("message") or "Не удалось создать задачу распознавания."
+                limit_bytes = error_detail.get("limit_bytes")
+                size_bytes = error_detail.get("size_bytes")
+                if limit_bytes and size_bytes:
+                    message = (
+                        f"❌ {message}\n"
+                        f"Лимит: {limit_bytes} байт\n"
+                        f"Размер файла: {size_bytes} байт"
+                    )
+                else:
+                    message = f"❌ {message}"
+            else:
+                message = "❌ Не удалось создать задачу распознавания. Попробуйте позже."
+            await status_message.edit_text(message)
+            return
+
+        queue_position = result.get("queue_position")
+        await status_message.edit_text(
+            f"⏳ В очереди на распознавание. Позиция: {queue_position or '?'}.\nJob ID: {job_id}"
+        )
+
+        last_status = "queued"
+        for _ in range(30):
+            await asyncio.sleep(2)
+            job = await asyncio.to_thread(backend_client.asr_job_status, job_id)
+            status = job.get("status")
+            if not status:
+                continue
+            if status != last_status and status == "processing":
+                try:
+                    await status_message.edit_text(f"🛠️ Распознаю аудиофайл...\nJob ID: {job_id}")
+                except Exception:
+                    pass
+                last_status = status
+            if status == "done":
+                text = (job.get("text") or "").strip()
+                audio_meta = job.get("audio_meta") or {}
+                meta_lines = []
+                original_name = audio_meta.get("original_name") or file_name
+                duration_s = audio_meta.get("duration_s")
+                size_bytes = audio_meta.get("size_bytes")
+                sample_rate = audio_meta.get("sample_rate")
+                channels = audio_meta.get("channels")
+                sent_at = audio_meta.get("sent_at")
+                if original_name:
+                    meta_lines.append(f"Файл: {original_name}")
+                if duration_s:
+                    meta_lines.append(f"Длительность: {duration_s:.1f}с")
+                if size_bytes:
+                    meta_lines.append(f"Размер: {size_bytes} байт")
+                if sample_rate:
+                    meta_lines.append(f"Частота: {sample_rate} Гц")
+                if channels:
+                    meta_lines.append(f"Каналы: {channels}")
+                if sent_at:
+                    meta_lines.append(f"Отправлено: {sent_at}")
+                if text:
+                    meta_block = "\n".join(meta_lines)
+                    prefix = "📝 Транскрипция"
+                    if meta_block:
+                        prefix = f"📝 Транскрипция\n{meta_block}"
+                    await update.message.reply_text(f"{prefix}\n\n{text}")
+                else:
+                    await update.message.reply_text("⚠️ Распознавание завершилось без текста.")
+                return
+            if status == "error":
+                error = job.get("error") or "Неизвестная ошибка"
+                await update.message.reply_text(f"❌ Ошибка распознавания: {error}")
+                return
+
+        await update.message.reply_text(
+            f"⏳ Распознавание продолжается. Попробуйте позже. Job ID: {job_id}"
+        )
+    except Exception as e:  # noqa: BLE001
+        file_size = getattr(file_info, "file_size", None)
+        if "File is too big" in str(e) and file_size:
+            backend_limit = get_asr_max_file_bytes()
+            telegram_limit = get_telegram_file_max_bytes()
+            effective_limit = min(backend_limit, telegram_limit)
+            is_telegram_limit = effective_limit == telegram_limit
+            await update.message.reply_text(
+                _size_limit_message(file_size, effective_limit, is_telegram_limit)
+            )
+        else:
+            await update.message.reply_text(f"❌ Ошибка обработки аудиофайла: {str(e)}")
 
 
 async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, kb_id: int):

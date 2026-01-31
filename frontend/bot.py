@@ -6,7 +6,7 @@ from shared.logging_config import logger
 
 from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, CommandHandler, filters
 
-from frontend.bot_handlers import handle_start, handle_text, handle_document, handle_photo, handle_voice
+from frontend.bot_handlers import handle_start, handle_text, handle_document, handle_photo, handle_voice, handle_audio
 from frontend.bot_callbacks import callback_handler
 from frontend.error_handlers import global_error_handler
 try:
@@ -36,7 +36,9 @@ def main():
 
     # Обработчики сообщений
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.Document.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 

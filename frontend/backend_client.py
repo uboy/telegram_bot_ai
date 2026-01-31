@@ -353,11 +353,12 @@ class BackendClient:
         message_id: str,
         language: Optional[str] = None,
         message_date: Optional[str] = None,
+        content_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         url_api = self._url("/asr/transcribe")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         files = {
-            "file": (file_name, file_bytes, "audio/ogg"),
+            "file": (file_name, file_bytes, content_type or "audio/ogg"),
         }
         data: Dict[str, Any] = {
             "telegram_id": telegram_id,
@@ -372,9 +373,21 @@ class BackendClient:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
+        except httpx.HTTPStatusError as e:
+            error_payload = None
+            try:
+                error_payload = e.response.json()
+            except Exception:
+                error_payload = {"error": e.response.text}
+            logger.error("Ошибка при ASR transcribe через backend: %s", error_payload, exc_info=True)
+            return {
+                "error": error_payload.get("error"),
+                "status_code": e.response.status_code,
+                "error_payload": error_payload,
+            }
         except Exception as e:  # noqa: BLE001
             logger.error("Ошибка при ASR transcribe через backend: %s", e, exc_info=True)
-            return {}
+            return {"error": str(e)}
 
     def asr_job_status(self, job_id: str) -> Dict[str, Any]:
         url = self._url(f"/asr/jobs/{job_id}")

@@ -13,6 +13,7 @@ from backend.schemas.asr import AsrJobQueued, AsrJobStatus, AsrSettings, AsrSett
 from backend.services.asr_queue import enqueue_asr_job, get_job_status
 from shared.database import Session, AppSettings  # type: ignore
 from shared.logging_config import logger
+from shared.asr_limits import get_asr_max_file_bytes
 
 
 router = APIRouter(prefix="/asr", tags=["asr"])
@@ -62,8 +63,7 @@ async def transcribe_voice(
                    "or upload WAV audio.",
         )
 
-    max_mb = int(os.getenv("ASR_MAX_FILE_MB", "25"))
-    max_bytes = max_mb * 1024 * 1024
+    max_bytes = get_asr_max_file_bytes()
     suffix = suffix or ".ogg"
 
     total = 0
@@ -80,7 +80,14 @@ async def transcribe_voice(
                     os.remove(temp_path)
                 except Exception:
                     pass
-                raise HTTPException(status_code=413, detail="audio file is too large")
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "message": "audio file is too large",
+                        "limit_bytes": max_bytes,
+                        "size_bytes": total,
+                    },
+                )
             tmp_file.write(chunk)
 
     audio_meta = {
