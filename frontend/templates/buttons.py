@@ -32,6 +32,7 @@ def admin_menu():
         [InlineKeyboardButton("🎙️ Настройки распознавания", callback_data='admin_asr')],
         [InlineKeyboardButton("🔗 Интеграция n8n", callback_data='admin_n8n')],
         [InlineKeyboardButton("📤 Загрузить документы", callback_data='admin_upload')],
+        [InlineKeyboardButton("📊 Аналитика чатов", callback_data='admin_analytics')],
         [InlineKeyboardButton("🔙 Главное меню", callback_data='main_menu')],
     ])
 
@@ -306,4 +307,80 @@ def n8n_menu(public_url: str | None = None):
     if public_url:
         buttons.append([InlineKeyboardButton("🌐 Открыть n8n", url=public_url)])
     buttons.append([InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')])
+    return InlineKeyboardMarkup(buttons)
+
+
+# ── Chat Analytics menus ─────────────────────────────────────────────
+
+def analytics_menu():
+    """Menu for chat analytics admin panel."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚙️ Настроить чат", callback_data='analytics_select_chat')],
+        [InlineKeyboardButton("📥 Импорт истории", callback_data='analytics_import')],
+        [InlineKeyboardButton("📋 Просмотр дайджестов", callback_data='analytics_digests')],
+        [InlineKeyboardButton("📈 Статистика", callback_data='analytics_stats')],
+        [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
+    ])
+
+
+def analytics_chat_menu(chat_id: str, config: dict = None):
+    """Menu for configuring analytics for a specific chat."""
+    config = config or {}
+    collection = config.get('collection_enabled', True)
+    collection_label = "ВКЛ" if collection else "ВЫКЛ"
+
+    buttons = [
+        [InlineKeyboardButton(
+            f"📡 Сбор: {collection_label}",
+            callback_data=f"a_toggle:{chat_id}",
+        )],
+        [InlineKeyboardButton(
+            "📅 Расписание дайджеста",
+            callback_data=f"a_schedule:{chat_id}",
+        )],
+        [InlineKeyboardButton(
+            "🚀 Сгенерировать сейчас",
+            callback_data=f"a_gen_now:{chat_id}",
+        )],
+        [InlineKeyboardButton(
+            "📈 Статистика чата",
+            callback_data=f"a_stats:{chat_id}",
+        )],
+        [InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def analytics_schedule_menu(chat_id: str):
+    """Menu for setting digest schedule."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Ежедневно (09:00)", callback_data=f"a_cron:{chat_id}:0 9 * * *:24")],
+        [InlineKeyboardButton("Еженедельно (пн)", callback_data=f"a_cron:{chat_id}:0 9 * * 1:168")],
+        [InlineKeyboardButton("Ежемесячно (1-е)", callback_data=f"a_cron:{chat_id}:0 9 1 * *:720")],
+        [InlineKeyboardButton("Отключить", callback_data=f"a_cron_off:{chat_id}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"a_chat:{chat_id}")],
+    ])
+
+
+def analytics_generate_period_menu(chat_id: str):
+    """Menu for choosing generation period."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("За 24 часа", callback_data=f"a_gen:{chat_id}:24")],
+        [InlineKeyboardButton("За 7 дней", callback_data=f"a_gen:{chat_id}:168")],
+        [InlineKeyboardButton("За 30 дней", callback_data=f"a_gen:{chat_id}:720")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"a_chat:{chat_id}")],
+    ])
+
+
+def analytics_import_chat_menu(chats: list):
+    """Menu for selecting chat to import history into."""
+    buttons = []
+    for chat in chats:
+        chat_id = chat.get('chat_id', '')
+        title = chat.get('chat_title') or chat_id
+        buttons.append([InlineKeyboardButton(
+            f"💬 {title}",
+            callback_data=f"a_import_to:{chat_id}",
+        )])
+    buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
     return InlineKeyboardMarkup(buttons)

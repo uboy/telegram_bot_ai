@@ -11,6 +11,7 @@ from backend.api.routes.auth import router as auth_router
 from backend.api.routes.ingestion import router as ingestion_router
 from backend.api.routes.jobs import router as jobs_router
 from backend.api.routes.asr import router as asr_router
+from backend.api.routes.analytics import router as analytics_router
 from backend.services.asr_worker import start_asr_workers
 from backend.core.settings import settings
 from shared.logging_config import logger  # type: ignore
@@ -29,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(ingestion_router, prefix=prefix)
     app.include_router(jobs_router, prefix=prefix)
     app.include_router(asr_router, prefix=prefix)
+    app.include_router(analytics_router, prefix=prefix)
 
     @app.on_event("startup")
     def _start_asr_workers() -> None:

@@ -1164,7 +1164,57 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop('wiki_zip_kb_id', None)
             context.user_data.pop('wiki_zip_url', None)
         return
-    
+
+    # Импорт истории чата для аналитики
+    if state == 'waiting_analytics_import':
+        chat_id = context.user_data.get('analytics_import_chat_id')
+        if not chat_id:
+            await update.message.reply_text("❌ Ошибка: не найден ID чата для импорта.")
+            context.user_data.pop('state', None)
+            context.user_data.pop('analytics_import_chat_id', None)
+            return
+
+        await update.message.reply_text("🔄 Импорт истории чата...\nЭто может занять некоторое время.")
+
+        try:
+            bot = update.get_bot()
+            tg_file = await bot.get_file(document.file_id)
+            file_bytes = await tg_file.download_as_bytearray()
+
+            result = await asyncio.to_thread(
+                backend_client.analytics_import_history,
+                file_bytes=bytes(file_bytes),
+                chat_id=chat_id,
+                format_hint=file_type,
+                filename=file_name or f"import_{document.file_id}",
+            )
+
+            if result:
+                imported = result.get('messages_imported', 0)
+                skipped = result.get('messages_skipped', 0)
+                total = result.get('messages_found', 0)
+                import_id = result.get('import_id', '')
+                text = (
+                    f"✅ Импорт завершён!\n\n"
+                    f"Найдено сообщений: {total}\n"
+                    f"Импортировано: {imported}\n"
+                    f"Пропущено (дубликаты): {skipped}"
+                )
+                if import_id:
+                    text += f"\n\nID импорта: {import_id}"
+            else:
+                text = "❌ Ошибка при импорте истории чата."
+
+            from frontend.templates.buttons import analytics_chat_menu
+            await update.message.reply_text(text, reply_markup=analytics_chat_menu(chat_id))
+        except Exception as e:
+            logger.error("Ошибка при импорте истории чата: %s", e, exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка при импорте: {str(e)}")
+        finally:
+            context.user_data.pop('state', None)
+            context.user_data.pop('analytics_import_chat_id', None)
+        return
+
     # Обычная загрузка документа
     kb_id = context.user_data.get('kb_id')
     
@@ -1619,3 +1669,52 @@ async def load_web_page(update: Update, context: ContextTypes.DEFAULT_TYPE, url:
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка загрузки веб-страницы: {str(e)}")
+
+
+# ── Chat Analytics: message collector ──────────────────────────────────
+
+async def message_collector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Collect text messages from groups/supergroups for analytics.
+
+    Registered with group=10 so it runs AFTER normal handlers.
+    Fire-and-forget: does not block the main bot flow.
+    """
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return
+
+    chat = update.effective_chat
+    if not chat or chat.type not in ('group', 'supergroup'):
+        return
+
+    user = update.effective_user
+
+    payload = {
+        "chat_id": str(chat.id),
+        "thread_id": getattr(msg, "message_thread_id", None),
+        "message_id": msg.message_id,
+        "author_telegram_id": str(user.id) if user else None,
+        "author_username": user.username if user else None,
+        "author_display_name": user.full_name if user else None,
+        "text": msg.text,
+        "timestamp": msg.date.isoformat() if msg.date else None,
+        "message_link": _build_message_link(chat.id, msg.message_id),
+        "is_bot_message": user.is_bot if user else False,
+        "is_system_message": False,
+    }
+
+    asyncio.create_task(_send_to_analytics(payload))
+
+
+async def _send_to_analytics(payload: dict) -> None:
+    """Send message to backend analytics endpoint (fire-and-forget)."""
+    try:
+        await asyncio.to_thread(backend_client.analytics_store_message, payload)
+    except Exception as e:
+        logger.debug("Analytics store_message failed: %s", e)
+
+
+def _build_message_link(chat_id: int, message_id: int) -> str:
+    """Build Telegram message link for supergroups."""
+    clean_id = str(chat_id).replace("-100", "")
+    return f"https://t.me/c/{clean_id}/{message_id}"

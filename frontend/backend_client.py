@@ -645,6 +645,163 @@ class BackendClient:
             logger.error("Ошибка при удалении базы знаний %s через backend: %s", kb_id, e, exc_info=True)
             return False
 
+    # === Chat Analytics ===
+
+    def analytics_store_message(self, payload: dict) -> Optional[Dict[str, Any]]:
+        """Store a chat message for analytics."""
+        url = self._url("/analytics/messages")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=5.0, headers=headers) as client:
+                resp = client.post(url, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_store_message error: %s", e)
+            return None
+
+    def analytics_list_configs(self) -> Optional[List[Dict[str, Any]]]:
+        """List all analytics configs."""
+        url = self._url("/analytics/configs")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_list_configs error: %s", e)
+            return []
+
+    def analytics_get_config(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        """Get analytics config for a chat."""
+        url = self._url(f"/analytics/configs/{chat_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_get_config error: %s", e)
+            return None
+
+    def analytics_update_config(self, chat_id: str, config: dict) -> Optional[Dict[str, Any]]:
+        """Update analytics config."""
+        url = self._url(f"/analytics/configs/{chat_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.put(url, json=config)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_update_config error: %s", e)
+            return None
+
+    def analytics_generate_digest(self, request: dict) -> Optional[Dict[str, Any]]:
+        """Trigger digest generation."""
+        url = self._url("/analytics/digests/generate")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=30.0, headers=headers) as client:
+                resp = client.post(url, json=request)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_generate_digest error: %s", e)
+            return None
+
+    def analytics_get_digest(self, digest_id: int) -> Optional[Dict[str, Any]]:
+        """Get a generated digest."""
+        url = self._url(f"/analytics/digests/{digest_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_get_digest error: %s", e)
+            return None
+
+    def analytics_search(self, request: dict) -> Optional[Dict[str, Any]]:
+        """Search chat messages."""
+        url = self._url("/analytics/search")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=30.0, headers=headers) as client:
+                resp = client.post(url, json=request)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_search error: %s", e)
+            return None
+
+    def analytics_qa(self, request: dict) -> Optional[Dict[str, Any]]:
+        """Q&A over chat history."""
+        url = self._url("/analytics/qa")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=60.0, headers=headers) as client:
+                resp = client.post(url, json=request)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_qa error: %s", e)
+            return None
+
+    def analytics_import_history(self, file_bytes: bytes, chat_id: str,
+                                  format_hint: Optional[str] = None,
+                                  filename: str = "export") -> Optional[Dict[str, Any]]:
+        """Import chat history file."""
+        url = self._url("/analytics/import")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        files = {"file": (filename, file_bytes)}
+        data: Dict[str, Any] = {"chat_id": chat_id}
+        if format_hint:
+            data["format_hint"] = format_hint
+        try:
+            with httpx.Client(timeout=120.0, headers=headers) as client:
+                resp = client.post(url, files=files, data=data)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_import_history error: %s", e)
+            return None
+
+    def analytics_get_import_status(self, import_id: int) -> Optional[Dict[str, Any]]:
+        """Check import status."""
+        url = self._url(f"/analytics/import/{import_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_get_import_status error: %s", e)
+            return None
+
+    def analytics_get_stats(self, chat_id: str, period_start: Optional[str] = None,
+                             period_end: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get chat message statistics."""
+        url = self._url(f"/analytics/stats/{chat_id}")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        params: Dict[str, Any] = {}
+        if period_start:
+            params["period_start"] = period_start
+        if period_end:
+            params["period_end"] = period_end
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url, params=params)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("analytics_get_stats error: %s", e)
+            return None
+
 
 # Глобальный экземпляр клиента для использования в боте
 backend_client = BackendClient()

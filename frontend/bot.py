@@ -6,7 +6,7 @@ from shared.logging_config import logger
 
 from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, CommandHandler, filters
 
-from frontend.bot_handlers import handle_start, handle_text, handle_document, handle_photo, handle_voice, handle_audio
+from frontend.bot_handlers import handle_start, handle_text, handle_document, handle_photo, handle_voice, handle_audio, message_collector
 from frontend.bot_callbacks import callback_handler
 from frontend.error_handlers import global_error_handler
 try:
@@ -44,6 +44,15 @@ def main():
 
     # Обработчики callback'ов (кнопки)
     app.add_handler(CallbackQueryHandler(callback_handler))
+
+    # Chat analytics: collect group messages (group=10 = runs after normal handlers)
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & (filters.ChatType.SUPERGROUP | filters.ChatType.GROUP),
+            message_collector,
+        ),
+        group=10,
+    )
 
     # Глобальный обработчик ошибок
     app.add_error_handler(global_error_handler)

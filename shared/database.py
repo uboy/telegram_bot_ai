@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text, Index, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -129,6 +129,140 @@ class Job(Base):
     error_message = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+# ── Chat Analytics models ──────────────────────────────────────────────
+
+class ChatMessage(Base):
+    """Полная история сообщений из Telegram supergroup topics"""
+    __tablename__ = 'chat_messages'
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(String(20), nullable=False, index=True)
+    thread_id = Column(Integer, nullable=True, index=True)
+    message_id = Column(Integer, nullable=False)
+
+    author_telegram_id = Column(String(20), nullable=True)
+    author_username = Column(String(100), nullable=True)
+    author_display_name = Column(String(200), nullable=True)
+
+    text = Column(Text, nullable=True)
+    message_link = Column(String(500), nullable=True)
+
+    timestamp = Column(DateTime, nullable=False, index=True)
+    is_bot_message = Column(Boolean, default=False)
+    is_system_message = Column(Boolean, default=False)
+    is_imported = Column(Boolean, default=False)
+    import_source = Column(String(200), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('chat_id', 'message_id', name='uq_chat_message'),
+        Index('ix_chat_messages_chat_thread', 'chat_id', 'thread_id'),
+        Index('ix_chat_messages_chat_time', 'chat_id', 'timestamp'),
+    )
+
+
+class ChatAnalyticsConfig(Base):
+    """Настройки аналитики для конкретного чата"""
+    __tablename__ = 'chat_analytics_configs'
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(String(20), nullable=False, unique=True)
+    chat_title = Column(String(200), nullable=True)
+
+    collection_enabled = Column(Boolean, default=True)
+    analysis_enabled = Column(Boolean, default=True)
+
+    digest_cron = Column(String(100), nullable=True)
+    digest_period_hours = Column(Integer, default=168)
+    digest_timezone = Column(String(50), default='UTC')
+
+    delivery_chat_id = Column(String(20), nullable=True)
+    delivery_thread_id = Column(Integer, nullable=True)
+    delivery_to_admins = Column(Boolean, default=False)
+
+    configured_by = Column(String(20), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ChatDigest(Base):
+    """Сгенерированный дайджест"""
+    __tablename__ = 'chat_digests'
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(String(20), nullable=False, index=True)
+
+    period_start = Column(DateTime, nullable=False)
+    period_end = Column(DateTime, nullable=False)
+
+    summary_text = Column(Text, nullable=True)
+    theme_count = Column(Integer, default=0)
+    total_messages_analyzed = Column(Integer, default=0)
+
+    generation_time_sec = Column(Integer, nullable=True)
+    llm_model_used = Column(String(100), nullable=True)
+    status = Column(String(20), default='pending')
+    error_message = Column(Text, nullable=True)
+
+    delivered = Column(Boolean, default=False)
+    delivered_at = Column(DateTime, nullable=True)
+    delivered_message_id = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    themes = relationship("ChatDigestTheme", back_populates="digest",
+                          cascade="all, delete-orphan")
+
+
+class ChatDigestTheme(Base):
+    """Тема внутри дайджеста"""
+    __tablename__ = 'chat_digest_themes'
+
+    id = Column(Integer, primary_key=True)
+    digest_id = Column(Integer, ForeignKey('chat_digests.id'), nullable=False)
+
+    emoji = Column(String(10), nullable=True)
+    title = Column(String(300), nullable=False)
+    summary = Column(Text, nullable=False)
+
+    related_thread_ids = Column(Text, nullable=True)
+    key_message_links = Column(Text, nullable=True)
+    main_participants = Column(Text, nullable=True)
+    message_count = Column(Integer, default=0)
+
+    sort_order = Column(Integer, default=0)
+
+    digest = relationship("ChatDigest", back_populates="themes")
+
+
+class ChatMessageEmbedding(Base):
+    """Кеш эмбеддингов для сообщений чатов"""
+    __tablename__ = 'chat_message_embeddings'
+
+    id = Column(Integer, primary_key=True)
+    chat_message_id = Column(Integer, ForeignKey('chat_messages.id'),
+                             nullable=False, unique=True)
+    embedding = Column(Text, nullable=False)
+    model_name = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class ChatImportLog(Base):
+    """Лог импорта истории чата"""
+    __tablename__ = 'chat_import_logs'
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(String(20), nullable=False)
+    user_telegram_id = Column(String(20), nullable=True)
+    source_filename = Column(String(500), nullable=True)
+    source_format = Column(String(50), nullable=True)
+    messages_imported = Column(Integer, default=0)
+    messages_skipped = Column(Integer, default=0)
+    status = Column(String(20), default='pending')
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 # Определить, какую базу данных использовать
 # Приоритет: MYSQL_URL > DB_PATH > SQLite по умолчанию

@@ -93,6 +93,16 @@ try:
 except ValueError:
     N8N_TIMEOUT = 10
 
+# Chat Analytics
+ANALYTICS_ENABLED = os.getenv('ANALYTICS_ENABLED', 'true').lower() == 'true'
+ANALYTICS_MIN_TEXT_LENGTH = int(os.getenv('ANALYTICS_MIN_TEXT_LENGTH', '10'))
+ANALYTICS_EMBEDDING_BATCH_SIZE = int(os.getenv('ANALYTICS_EMBEDDING_BATCH_SIZE', '64'))
+ANALYTICS_MAX_THEMES = int(os.getenv('ANALYTICS_MAX_THEMES', '15'))
+ANALYTICS_CLUSTER_METHOD = os.getenv('ANALYTICS_CLUSTER_METHOD', 'hdbscan')
+ANALYTICS_CLUSTER_MIN_SIZE = int(os.getenv('ANALYTICS_CLUSTER_MIN_SIZE', '5'))
+ANALYTICS_DIGEST_MAX_MESSAGES = int(os.getenv('ANALYTICS_DIGEST_MAX_MESSAGES', '10000'))
+ANALYTICS_RETENTION_DAYS = int(os.getenv('ANALYTICS_RETENTION_DAYS', '365'))
+
 # Проверка обязательных параметров
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не указан в .env файле!")

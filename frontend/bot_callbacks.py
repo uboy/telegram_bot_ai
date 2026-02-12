@@ -1963,6 +1963,281 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         await safe_edit_message_text(query, text, reply_markup=n8n_menu(N8N_PUBLIC_URL or None))
         return
     
+    # ── Chat Analytics ──────────────────────────────────────────────────
+    if data == 'admin_analytics':
+        from frontend.templates.buttons import analytics_menu
+        await safe_edit_message_text(
+            query,
+            "📊 <b>Аналитика чатов</b>\n\n"
+            "Управление сбором сообщений, импортом истории и генерацией дайджестов.",
+            reply_markup=analytics_menu(),
+            parse_mode='HTML',
+        )
+        return
+
+    if data == 'analytics_select_chat':
+        from frontend.templates.buttons import analytics_menu
+        configs = await asyncio.to_thread(backend_client.analytics_list_configs)
+        if not configs:
+            await safe_edit_message_text(
+                query,
+                "Нет настроенных чатов.\n\n"
+                "Добавьте бота в группу и включите сбор сообщений.",
+                reply_markup=analytics_menu(),
+            )
+            return
+        buttons = []
+        for c in configs:
+            cid = c.get('chat_id', '')
+            title = c.get('chat_title') or cid
+            buttons.append([InlineKeyboardButton(f"💬 {title}", callback_data=f"a_chat:{cid}")])
+        buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
+        await safe_edit_message_text(query, "Выберите чат:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith('a_chat:'):
+        from frontend.templates.buttons import analytics_chat_menu
+        chat_id_val = data.split(':', 1)[1]
+        config = await asyncio.to_thread(backend_client.analytics_get_config, chat_id_val)
+        if not config:
+            config = {}
+        title = config.get('chat_title') or chat_id_val
+        collection = "ВКЛ" if config.get('collection_enabled', True) else "ВЫКЛ"
+        cron = config.get('digest_cron') or 'не задано'
+        period = config.get('digest_period_hours', 168)
+        text = (
+            f"📊 <b>{title}</b>\n\n"
+            f"Сбор: {collection}\n"
+            f"Расписание: {cron}\n"
+            f"Период: {period}ч"
+        )
+        await safe_edit_message_text(query, text, reply_markup=analytics_chat_menu(chat_id_val, config), parse_mode='HTML')
+        return
+
+    if data.startswith('a_toggle:'):
+        from frontend.templates.buttons import analytics_chat_menu
+        chat_id_val = data.split(':', 1)[1]
+        config = await asyncio.to_thread(backend_client.analytics_get_config, chat_id_val)
+        current = config.get('collection_enabled', True) if config else True
+        await asyncio.to_thread(backend_client.analytics_update_config, chat_id_val, {'collection_enabled': not current})
+        new_status = "ВЫКЛ" if current else "ВКЛ"
+        await query.answer(f"Сбор сообщений: {new_status}")
+        updated = await asyncio.to_thread(backend_client.analytics_get_config, chat_id_val)
+        await safe_edit_message_text(
+            query, f"Сбор сообщений: {new_status}",
+            reply_markup=analytics_chat_menu(chat_id_val, updated or {}),
+        )
+        return
+
+    if data.startswith('a_schedule:'):
+        from frontend.templates.buttons import analytics_schedule_menu
+        chat_id_val = data.split(':', 1)[1]
+        await safe_edit_message_text(query, "Выберите расписание:", reply_markup=analytics_schedule_menu(chat_id_val))
+        return
+
+    if data.startswith('a_cron:'):
+        from frontend.templates.buttons import analytics_chat_menu
+        parts = data.split(':')
+        chat_id_val = parts[1]
+        cron_expr = parts[2]
+        period_hours = int(parts[3])
+        await asyncio.to_thread(
+            backend_client.analytics_update_config, chat_id_val,
+            {'digest_cron': cron_expr, 'digest_period_hours': period_hours, 'analysis_enabled': True},
+        )
+        await query.answer("Расписание обновлено!")
+        config = await asyncio.to_thread(backend_client.analytics_get_config, chat_id_val)
+        await safe_edit_message_text(
+            query, f"✅ Расписание: {cron_expr} (период: {period_hours}ч)",
+            reply_markup=analytics_chat_menu(chat_id_val, config or {}),
+        )
+        return
+
+    if data.startswith('a_cron_off:'):
+        from frontend.templates.buttons import analytics_chat_menu
+        chat_id_val = data.split(':', 1)[1]
+        await asyncio.to_thread(
+            backend_client.analytics_update_config, chat_id_val,
+            {'digest_cron': None, 'analysis_enabled': False},
+        )
+        await query.answer("Расписание отключено")
+        config = await asyncio.to_thread(backend_client.analytics_get_config, chat_id_val)
+        await safe_edit_message_text(query, "Расписание отключено.", reply_markup=analytics_chat_menu(chat_id_val, config or {}))
+        return
+
+    if data.startswith('a_gen_now:'):
+        from frontend.templates.buttons import analytics_generate_period_menu
+        chat_id_val = data.split(':', 1)[1]
+        await safe_edit_message_text(query, "Период для дайджеста:", reply_markup=analytics_generate_period_menu(chat_id_val))
+        return
+
+    if data.startswith('a_gen:'):
+        from frontend.templates.buttons import analytics_menu
+        parts = data.split(':')
+        chat_id_val = parts[1]
+        period_hours = int(parts[2])
+        from datetime import timedelta, timezone as tz
+        period_end = datetime.now(tz.utc)
+        period_start = period_end - timedelta(hours=period_hours)
+        request = {
+            'chat_id': chat_id_val,
+            'period_start': period_start.isoformat(),
+            'period_end': period_end.isoformat(),
+        }
+        result = await asyncio.to_thread(backend_client.analytics_generate_digest, request)
+        if result and result.get('digest_id'):
+            digest_id = result['digest_id']
+            await safe_edit_message_text(
+                query,
+                f"🚀 Генерация запущена!\nDigest ID: {digest_id}\nПериод: {period_hours}ч",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Обновить", callback_data=f"a_dstatus:{digest_id}")],
+                    [InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')],
+                ]),
+            )
+        else:
+            await safe_edit_message_text(query, "❌ Не удалось запустить.", reply_markup=analytics_menu())
+        return
+
+    if data.startswith('a_dstatus:'):
+        from frontend.templates.buttons import analytics_menu
+        digest_id = int(data.split(':', 1)[1])
+        result = await asyncio.to_thread(backend_client.analytics_get_digest, digest_id)
+        if not result:
+            await safe_edit_message_text(query, "Дайджест не найден.", reply_markup=analytics_menu())
+            return
+        status = result.get('status', 'unknown')
+        text = f"📋 Дайджест #{digest_id}\n\nСтатус: {status}"
+        if status == 'completed':
+            summary = result.get('summary_text', '')
+            theme_count = result.get('theme_count', 0)
+            total = result.get('total_messages_analyzed', 0)
+            gen_time = result.get('generation_time_sec', 0)
+            text = (
+                f"✅ Дайджест #{digest_id}\n\n"
+                f"Тем: {theme_count}, сообщений: {total}, время: {gen_time}с\n\n"
+                f"{summary[:3000] if summary else '(пусто)'}"
+            )
+        elif status == 'failed':
+            error = result.get('error_message', '')
+            text = f"❌ Дайджест #{digest_id} — ошибка\n\n{error}"
+        buttons = []
+        if status in ('pending', 'generating'):
+            buttons.append([InlineKeyboardButton("🔄 Обновить", callback_data=f"a_dstatus:{digest_id}")])
+        buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
+        try:
+            await safe_edit_message_text(query, text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=None)
+        except Exception:
+            await safe_edit_message_text(query, text[:4000], reply_markup=InlineKeyboardMarkup(buttons), parse_mode=None)
+        return
+
+    if data == 'analytics_digests':
+        from frontend.templates.buttons import analytics_menu
+        configs = await asyncio.to_thread(backend_client.analytics_list_configs)
+        if not configs:
+            await safe_edit_message_text(query, "Нет настроенных чатов.", reply_markup=analytics_menu())
+            return
+        buttons = []
+        for c in configs:
+            cid = c.get('chat_id', '')
+            title = c.get('chat_title') or cid
+            buttons.append([InlineKeyboardButton(f"📋 {title}", callback_data=f"a_dlist:{cid}")])
+        buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
+        await safe_edit_message_text(query, "Выберите чат:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith('a_dlist:'):
+        from frontend.templates.buttons import analytics_menu
+        chat_id_val = data.split(':', 1)[1]
+        import httpx
+        url = backend_client._url(f"/analytics/digests?chat_id={chat_id_val}&limit=10")
+        headers = {"X-API-Key": backend_client.api_key} if backend_client.api_key else {}
+        try:
+            with httpx.Client(timeout=backend_client.timeout, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                digests = resp.json()
+        except Exception:
+            digests = []
+        if not digests:
+            await safe_edit_message_text(query, f"Нет дайджестов для {chat_id_val}.", reply_markup=analytics_menu())
+            return
+        buttons = []
+        for d in digests[:10]:
+            did = d.get('id', 0)
+            st = d.get('status', '?')
+            tc = d.get('theme_count', 0)
+            buttons.append([InlineKeyboardButton(f"#{did} [{st}] {tc} тем", callback_data=f"a_dstatus:{did}")])
+        buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
+        await safe_edit_message_text(query, f"Дайджесты для {chat_id_val}:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == 'analytics_import':
+        from frontend.templates.buttons import analytics_menu, analytics_import_chat_menu
+        configs = await asyncio.to_thread(backend_client.analytics_list_configs)
+        chat_list = [{'chat_id': c.get('chat_id', ''), 'chat_title': c.get('chat_title')} for c in (configs or [])]
+        if not chat_list:
+            await safe_edit_message_text(
+                query, "Нет настроенных чатов для импорта.\nДобавьте бота в группу.",
+                reply_markup=analytics_menu(),
+            )
+            return
+        await safe_edit_message_text(query, "📥 Выберите чат для импорта:", reply_markup=analytics_import_chat_menu(chat_list))
+        return
+
+    if data.startswith('a_import_to:'):
+        chat_id_val = data.split(':', 1)[1]
+        context.user_data['analytics_import_chat_id'] = chat_id_val
+        context.user_data['state'] = 'waiting_analytics_import'
+        await safe_edit_message_text(
+            query,
+            f"📥 Импорт в чат {chat_id_val}\n\n"
+            "Отправьте файл экспорта (JSON, HTML, CSV, TXT).\n\n"
+            "Telegram Desktop: Settings → Advanced → Export chat history → JSON.",
+        )
+        return
+
+    if data == 'analytics_stats':
+        from frontend.templates.buttons import analytics_menu
+        configs = await asyncio.to_thread(backend_client.analytics_list_configs)
+        if not configs:
+            await safe_edit_message_text(query, "Нет настроенных чатов.", reply_markup=analytics_menu())
+            return
+        buttons = []
+        for c in configs:
+            cid = c.get('chat_id', '')
+            title = c.get('chat_title') or cid
+            buttons.append([InlineKeyboardButton(f"📈 {title}", callback_data=f"a_stats:{cid}")])
+        buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
+        await safe_edit_message_text(query, "Выберите чат:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith('a_stats:'):
+        from frontend.templates.buttons import analytics_menu
+        chat_id_val = data.split(':', 1)[1]
+        stats = await asyncio.to_thread(backend_client.analytics_get_stats, chat_id_val)
+        if not stats:
+            await safe_edit_message_text(query, f"Нет данных для {chat_id_val}.", reply_markup=analytics_menu())
+            return
+        total = stats.get('total_messages', 0)
+        authors = stats.get('unique_authors', 0)
+        threads = stats.get('active_threads', 0)
+        per_day = stats.get('messages_per_day', 0)
+        top_authors = stats.get('top_authors', [])
+        text = (
+            f"📈 <b>Статистика: {chat_id_val}</b>\n\n"
+            f"Всего сообщений: {total}\n"
+            f"Авторов: {authors}\n"
+            f"Тем: {threads}\n"
+            f"Сообщений/день: {per_day}\n"
+        )
+        if top_authors:
+            text += "\n<b>Топ авторов:</b>\n"
+            for a in top_authors[:5]:
+                text += f"  • {a.get('name', '?')} — {a.get('count', 0)}\n"
+        await safe_edit_message_text(query, text, reply_markup=analytics_menu(), parse_mode='HTML')
+        return
+
     # Загрузка документов (общее меню)
     if data == 'admin_upload':
         kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
