@@ -20,6 +20,7 @@ Source: `SPEC.md` acceptance criteria.
 | AC-14 | ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) | `frontend/bot_handlers.py` | `tests/test_bot_voice.py`, manual Telegram verification | PASS |
 | AC-15 | High-performance ASR: Faster-Whisper and FP16 support | `backend/services/asr_worker.py`, `requirements.txt` | `scripts/test_asr_engines.py` | PASS |
 | AC-16 | Robust Docker GPU support: NVIDIA runtimes integrated into slim image | `Dockerfile`, `requirements.txt` | `scripts/test_asr_engines.py` | PASS |
+| AC-17 | Direct AI mode works from reply keyboard and supports text + voice/audio (`ASR -> AI`) | `frontend/bot_handlers.py` | `tests/test_bot_text_ai_mode.py`, `tests/test_bot_voice.py`, `tests/test_bot_audio.py` | PASS |
 
 ## Gaps to close
 

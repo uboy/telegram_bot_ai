@@ -158,6 +158,18 @@ async def perform_rag_query_and_render(query: str, kb_id: int, user: UserContext
     return f"🤖 <b>Ответ:</b>\n\n{ai_html}\n\n<i>(Основано на общих знаниях ИИ)</i>", True
 
 
+async def render_ai_answer_html(query: str, user: UserContext) -> str:
+    """Сформировать HTML-ответ ИИ по текстовому запросу."""
+    prompt = create_prompt_with_language(query, None, task="answer")
+    ans = await asyncio.to_thread(
+        ai_manager.query,
+        prompt,
+        provider_name=user.preferred_provider,
+        model=user.preferred_model,
+    )
+    return f"🤖 <b>Ответ:</b>\n\n{format_for_telegram_answer(ans, False)}"
+
+
 async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT_TYPE, user: UserContext, query: str) -> Tuple[Optional[int], bool]:
     kb_id = context.user_data.get('kb_id')
     if kb_id: return kb_id, False
@@ -188,6 +200,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = 'waiting_query'
         await update.message.reply_text("🔍 Введите запрос для поиска:")
         return
+    if text_input == "🤖 Задать вопрос ИИ":
+        context.user_data['state'] = 'waiting_ai_query'
+        await update.message.reply_text("🤖 Задайте вопрос ИИ:")
+        return
     if text_input == "👨‍💼 Админ-панель" and user.role == 'admin':
         await update.message.reply_text("👨‍💼 Админ-панель:", reply_markup=admin_menu())
         return
@@ -199,9 +215,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(html, parse_mode='HTML')
         context.user_data['state'] = None
     elif state == 'waiting_ai_query':
-        prompt = create_prompt_with_language(text_input, None, task="answer")
-        ans = await asyncio.to_thread(ai_manager.query, prompt, provider_name=user.preferred_provider, model=user.preferred_model)
-        html = f"🤖 <b>Ответ:</b>\n\n{format_for_telegram_answer(ans, False)}"
+        html = await render_ai_answer_html(text_input, user)
         await update.message.reply_text(html, parse_mode='HTML', reply_markup=main_menu(user.role == 'admin'))
         context.user_data['state'] = None
     elif state == 'waiting_asr_model' and user.role == 'admin':
@@ -285,6 +299,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if text:
                     await status_message.edit_text(f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}", parse_mode='HTML')
+                    if context.user_data.get('state') == 'waiting_ai_query':
+                        html = await render_ai_answer_html(text, user)
+                        await update.message.reply_text(html, parse_mode='HTML', reply_markup=main_menu(user.role == 'admin'))
+                        context.user_data['state'] = None
                 else:
                     await status_message.edit_text("⚠️ Текст не распознан.")
                 return
@@ -346,6 +364,10 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     meta_content = "\n".join(lines)
                     meta_block = f"\n\n<blockquote expandable>{escape(meta_content)}</blockquote>"
                 await status_message.edit_text(f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}", parse_mode='HTML')
+                if text and context.user_data.get('state') == 'waiting_ai_query':
+                    html = await render_ai_answer_html(text, user)
+                    await update.message.reply_text(html, parse_mode='HTML', reply_markup=main_menu(user.role == 'admin'))
+                    context.user_data['state'] = None
                 return
             if job.get("status") == "error":
                 await status_message.edit_text(f"❌ Ошибка: {job.get('error')}")
