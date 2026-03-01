@@ -170,6 +170,49 @@ async def render_ai_answer_html(query: str, user: UserContext) -> str:
     return f"🤖 <b>Ответ:</b>\n\n{format_for_telegram_answer(ans, False)}"
 
 
+def _split_plain_text_for_telegram(text: str, max_len: int = 3900) -> list[str]:
+    """Разбить длинный plain text на безопасные для Telegram куски."""
+    if len(text) <= max_len:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    text_len = len(text)
+    while start < text_len:
+        end = min(start + max_len, text_len)
+        split_at = end
+        if end < text_len:
+            newline_idx = text.rfind("\n", start, end)
+            if newline_idx > start + max_len // 2:
+                split_at = newline_idx
+
+        chunk = text[start:split_at].strip()
+        if not chunk:
+            chunk = text[start:end]
+            split_at = end
+
+        chunks.append(chunk)
+        start = split_at
+        while start < text_len and text[start] in (" ", "\n"):
+            start += 1
+    return chunks
+
+
+async def reply_html_safe(message, html_text: str, reply_markup=None) -> None:
+    """Отправить HTML-ответ, а при превышении лимита — plain text частями."""
+    if len(html_text) <= 3900:
+        await message.reply_text(html_text, parse_mode='HTML', reply_markup=reply_markup)
+        return
+
+    plain_text = strip_html_tags(html_text)
+    chunks = _split_plain_text_for_telegram(plain_text, max_len=3900)
+    for i, chunk in enumerate(chunks):
+        kwargs = {}
+        if i == 0 and reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        await message.reply_text(chunk, **kwargs)
+
+
 async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT_TYPE, user: UserContext, query: str) -> Tuple[Optional[int], bool]:
     kb_id = context.user_data.get('kb_id')
     if kb_id: return kb_id, False
@@ -215,8 +258,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(html, parse_mode='HTML')
         context.user_data['state'] = None
     elif state == 'waiting_ai_query':
+        if not text_input:
+            await update.message.reply_text("⚠️ Введите непустой вопрос для ИИ.")
+            return
         html = await render_ai_answer_html(text_input, user)
-        await update.message.reply_text(html, parse_mode='HTML', reply_markup=main_menu(user.role == 'admin'))
+        await reply_html_safe(update.message, html, reply_markup=main_menu(user.role == 'admin'))
         context.user_data['state'] = None
     elif state == 'waiting_asr_model' and user.role == 'admin':
         await update.message.reply_text(f"⏳ Проверяю модель <code>{text_input}</code>...", parse_mode='HTML')
@@ -301,7 +347,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await status_message.edit_text(f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}", parse_mode='HTML')
                     if context.user_data.get('state') == 'waiting_ai_query':
                         html = await render_ai_answer_html(text, user)
-                        await update.message.reply_text(html, parse_mode='HTML', reply_markup=main_menu(user.role == 'admin'))
+                        await reply_html_safe(update.message, html, reply_markup=main_menu(user.role == 'admin'))
                         context.user_data['state'] = None
                 else:
                     await status_message.edit_text("⚠️ Текст не распознан.")
@@ -366,7 +412,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await status_message.edit_text(f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}", parse_mode='HTML')
                 if text and context.user_data.get('state') == 'waiting_ai_query':
                     html = await render_ai_answer_html(text, user)
-                    await update.message.reply_text(html, parse_mode='HTML', reply_markup=main_menu(user.role == 'admin'))
+                    await reply_html_safe(update.message, html, reply_markup=main_menu(user.role == 'admin'))
                     context.user_data['state'] = None
                 return
             if job.get("status") == "error":
