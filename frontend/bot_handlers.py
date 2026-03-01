@@ -112,6 +112,7 @@ async def check_user(update: Update) -> Optional[UserContext]:
     preferred_provider = None
     preferred_model = None
     preferred_image_model = None
+    show_asr_metadata = True
     
     session = Session()
     try:
@@ -140,6 +141,7 @@ async def check_user(update: Update) -> Optional[UserContext]:
         preferred_provider = getattr(user, "preferred_provider", None)
         preferred_model = getattr(user, "preferred_model", None)
         preferred_image_model = getattr(user, "preferred_image_model", None)
+        show_asr_metadata = getattr(user, "show_asr_metadata", True)
     finally:
         session.close()
 
@@ -153,6 +155,7 @@ async def check_user(update: Update) -> Optional[UserContext]:
         preferred_provider=preferred_provider,
         preferred_model=preferred_model,
         preferred_image_model=preferred_image_model,
+        show_asr_metadata=show_asr_metadata,
     )
 
     if not user_context.approved and user_context.role != "admin":
@@ -1425,31 +1428,38 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if status == "done":
                 text = (job.get("text") or "").strip()
                 audio_meta = job.get("audio_meta") or {}
-                meta_lines = []
-                original_name = audio_meta.get("original_name") or voice.file_id
-                duration_s = audio_meta.get("duration_s")
-                size_bytes = audio_meta.get("size_bytes")
-                sample_rate = audio_meta.get("sample_rate")
-                channels = audio_meta.get("channels")
-                sent_at = audio_meta.get("sent_at")
-                if original_name:
-                    meta_lines.append(f"Файл: {original_name}")
-                if duration_s:
-                    meta_lines.append(f"Длительность: {duration_s:.1f}с")
-                if size_bytes:
-                    meta_lines.append(f"Размер: {size_bytes} байт")
-                if sample_rate:
-                    meta_lines.append(f"Частота: {sample_rate} Гц")
-                if channels:
-                    meta_lines.append(f"Каналы: {channels}")
-                if sent_at:
-                    meta_lines.append(f"Отправлено: {sent_at}")
+                
+                # Формируем тех. информацию
+                meta_block = ""
+                if user.show_asr_metadata:
+                    meta_lines = []
+                    original_name = audio_meta.get("original_name") or voice.file_id
+                    duration_s = audio_meta.get("duration_s")
+                    size_bytes = audio_meta.get("size_bytes")
+                    sample_rate = audio_meta.get("sample_rate")
+                    channels = audio_meta.get("channels")
+                    sent_at = audio_meta.get("sent_at")
+                    
+                    if original_name:
+                        meta_lines.append(f"Файл: {escape(original_name)}")
+                    if duration_s:
+                        meta_lines.append(f"Длительность: {duration_s:.1f}с")
+                    if size_bytes:
+                        meta_lines.append(f"Размер: {size_bytes} байт")
+                    if sample_rate:
+                        meta_lines.append(f"Частота: {sample_rate} Гц")
+                    if channels:
+                        meta_lines.append(f"Каналы: {channels}")
+                    if sent_at:
+                        meta_lines.append(f"Отправлено: {escape(str(sent_at))}")
+                    
+                    if meta_lines:
+                        meta_content = "\n".join(meta_lines)
+                        meta_block = f"\n\n<blockquote expandable>{meta_content}</blockquote>"
+
                 if text:
-                    meta_block = "\n".join(meta_lines)
-                    prefix = "📝 Транскрипция"
-                    if meta_block:
-                        prefix = f"📝 Транскрипция\n{meta_block}"
-                    await update.message.reply_text(f"{prefix}\n\n{text}")
+                    message_text = f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}"
+                    await update.message.reply_text(message_text, parse_mode='HTML')
                 else:
                     await update.message.reply_text("⚠️ Распознавание завершилось без текста.")
                 return
@@ -1587,31 +1597,38 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if status == "done":
                 text = (job.get("text") or "").strip()
                 audio_meta = job.get("audio_meta") or {}
-                meta_lines = []
-                original_name = audio_meta.get("original_name") or file_name
-                duration_s = audio_meta.get("duration_s")
-                size_bytes = audio_meta.get("size_bytes")
-                sample_rate = audio_meta.get("sample_rate")
-                channels = audio_meta.get("channels")
-                sent_at = audio_meta.get("sent_at")
-                if original_name:
-                    meta_lines.append(f"Файл: {original_name}")
-                if duration_s:
-                    meta_lines.append(f"Длительность: {duration_s:.1f}с")
-                if size_bytes:
-                    meta_lines.append(f"Размер: {size_bytes} байт")
-                if sample_rate:
-                    meta_lines.append(f"Частота: {sample_rate} Гц")
-                if channels:
-                    meta_lines.append(f"Каналы: {channels}")
-                if sent_at:
-                    meta_lines.append(f"Отправлено: {sent_at}")
+                
+                # Формируем тех. информацию
+                meta_block = ""
+                if user.show_asr_metadata:
+                    meta_lines = []
+                    original_name = audio_meta.get("original_name") or file_name
+                    duration_s = audio_meta.get("duration_s")
+                    size_bytes = audio_meta.get("size_bytes")
+                    sample_rate = audio_meta.get("sample_rate")
+                    channels = audio_meta.get("channels")
+                    sent_at = audio_meta.get("sent_at")
+                    
+                    if original_name:
+                        meta_lines.append(f"Файл: {escape(original_name)}")
+                    if duration_s:
+                        meta_lines.append(f"Длительность: {duration_s:.1f}с")
+                    if size_bytes:
+                        meta_lines.append(f"Размер: {size_bytes} байт")
+                    if sample_rate:
+                        meta_lines.append(f"Частота: {sample_rate} Гц")
+                    if channels:
+                        meta_lines.append(f"Каналы: {channels}")
+                    if sent_at:
+                        meta_lines.append(f"Отправлено: {escape(str(sent_at))}")
+                    
+                    if meta_lines:
+                        meta_content = "\n".join(meta_lines)
+                        meta_block = f"\n\n<blockquote expandable>{meta_content}</blockquote>"
+
                 if text:
-                    meta_block = "\n".join(meta_lines)
-                    prefix = "📝 Транскрипция"
-                    if meta_block:
-                        prefix = f"📝 Транскрипция\n{meta_block}"
-                    await update.message.reply_text(f"{prefix}\n\n{text}")
+                    message_text = f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}"
+                    await update.message.reply_text(message_text, parse_mode='HTML')
                 else:
                     await update.message.reply_text("⚠️ Распознавание завершилось без текста.")
                 return

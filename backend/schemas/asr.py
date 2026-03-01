@@ -22,9 +22,11 @@ class AsrSettings(BaseModel):
     asr_provider: str
     asr_model_name: str
     asr_device: Optional[str] = None
+    show_asr_metadata: bool = True
 
 
 class AsrSettingsUpdate(BaseModel):
     asr_provider: Optional[str] = None
     asr_model_name: Optional[str] = None
     asr_device: Optional[str] = None
+    show_asr_metadata: Optional[bool] = None

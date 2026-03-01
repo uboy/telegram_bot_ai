@@ -38,6 +38,7 @@ class User(Base):
     preferred_provider = Column(String(50), default='ollama')  # Предпочитаемый провайдер ИИ
     preferred_model = Column(String(100), default='')  # Предпочитаемая модель (для Ollama)
     preferred_image_model = Column(String(100), default='')  # Предпочитаемая модель для изображений
+    show_asr_metadata = Column(Boolean, default=True)  # Показывать тех. информацию ASR
 
 
 class AppSettings(Base):
@@ -46,6 +47,7 @@ class AppSettings(Base):
     asr_provider = Column(String(50), default='transformers')
     asr_model_name = Column(String(200), default='openai/whisper-small')
     asr_device = Column(String(50), default='')
+    show_asr_metadata = Column(Boolean, default=True)  # Глобальная настройка тех. инфо ASR
 
 class KnowledgeBase(Base):
     """База знаний"""
@@ -505,6 +507,30 @@ def migrate_database():
                     """))
                     session.commit()
                     logger.info("✅ Миграция: добавлена колонка 'phone'")
+                if 'show_asr_metadata' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE users
+                        ADD COLUMN show_asr_metadata BOOLEAN DEFAULT 1
+                    """))
+                    session.commit()
+                    logger.info("✅ Миграция: добавлена колонка 'show_asr_metadata' в 'users'")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Проверить и добавить колонку show_asr_metadata в app_settings
+        try:
+            if 'app_settings' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('app_settings')]
+                if 'show_asr_metadata' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE app_settings
+                        ADD COLUMN show_asr_metadata BOOLEAN DEFAULT 1
+                    """))
+                    session.commit()
+                    logger.info("✅ Миграция: добавлена колонка 'show_asr_metadata' в 'app_settings'")
         except Exception:
             try:
                 session.rollback()

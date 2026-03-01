@@ -22,6 +22,7 @@ class UserContext:
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
     preferred_image_model: Optional[str] = None
+    show_asr_metadata: bool = True
 
 
 @dataclass(frozen=True)

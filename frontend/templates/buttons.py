@@ -37,13 +37,15 @@ def admin_menu():
     ])
 
 
-def settings_menu():
+def settings_menu(show_asr_metadata: bool = True):
     """Меню настроек"""
+    asr_meta_label = "✅ Тех. инфо в ASR" if show_asr_metadata else "⚪ Тех. инфо в ASR"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🤖 Выбрать ИИ провайдер", callback_data='select_provider')],
         [InlineKeyboardButton("💬 Модель для текста (Ollama)", callback_data='select_text_model')],
         [InlineKeyboardButton("🖼️ Модель для изображений (Ollama)", callback_data='select_image_model')],
         [InlineKeyboardButton("🔧 Настройки RAG", callback_data='rag_settings')],
+        [InlineKeyboardButton(asr_meta_label, callback_data='toggle_asr_metadata')],
         [InlineKeyboardButton("🔙 Главное меню", callback_data='main_menu')],
     ])
 

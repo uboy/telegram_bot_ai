@@ -329,7 +329,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Настройки
     if data == 'settings':
-        await safe_edit_message_text(query, "⚙️ Настройки:", reply_markup=settings_menu())
+        session = Session()
+        try:
+            user_db = session.query(User).filter_by(telegram_id=user_id).first()
+            show_meta = user_db.show_asr_metadata if user_db else True
+            await safe_edit_message_text(query, "⚙️ Настройки:", reply_markup=settings_menu(show_asr_metadata=show_meta))
+        finally:
+            session.close()
+        return
+
+    if data == 'toggle_asr_metadata':
+        session = Session()
+        try:
+            user_db = session.query(User).filter_by(telegram_id=user_id).first()
+            if user_db:
+                user_db.show_asr_metadata = not user_db.show_asr_metadata
+                session.commit()
+                show_meta = user_db.show_asr_metadata
+                await safe_edit_message_text(
+                    query, 
+                    f"⚙️ Настройки:\n\nТехническая информация ASR: {'ВКЛ' if show_meta else 'ВЫКЛ'}", 
+                    reply_markup=settings_menu(show_asr_metadata=show_meta)
+                )
+            else:
+                await query.answer("Пользователь не найден")
+        finally:
+            session.close()
         return
     
     # Выбор провайдера ИИ
@@ -1912,15 +1937,56 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         provider = settings.get("asr_provider", "transformers")
         model = settings.get("asr_model_name", "openai/whisper-small")
         device = settings.get("asr_device") or "auto"
+        show_meta = settings.get("show_asr_metadata", True)
+        
         text = (
             "🎙️ Настройки распознавания речи\n\n"
             f"Провайдер: {provider}\n"
             f"Модель: {model}\n"
-            f"Устройство: {device}\n\n"
+            f"Устройство: {device}\n"
+            f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
             "Чтобы изменить модель, нажмите кнопку ниже."
         )
+        
+        asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ Изменить модель", callback_data='asr_set_model')],
+            [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
+            [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
+        ])
+        await safe_edit_message_text(query, text, reply_markup=keyboard)
+        return
+
+    if data == 'toggle_global_asr_metadata':
+        settings = await asyncio.to_thread(backend_client.get_asr_settings)
+        current_show = settings.get("show_asr_metadata", True)
+        new_show = not current_show
+        
+        await asyncio.to_thread(
+            backend_client.update_asr_settings,
+            {"show_asr_metadata": new_show}
+        )
+        
+        # Перерисовываем меню
+        settings = await asyncio.to_thread(backend_client.get_asr_settings)
+        provider = settings.get("asr_provider", "transformers")
+        model = settings.get("asr_model_name", "openai/whisper-small")
+        device = settings.get("asr_device") or "auto"
+        show_meta = settings.get("show_asr_metadata", True)
+        
+        text = (
+            "🎙️ Настройки распознавания речи\n\n"
+            f"Провайдер: {provider}\n"
+            f"Модель: {model}\n"
+            f"Устройство: {device}\n"
+            f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
+            "Чтобы изменить модель, нажмите кнопку ниже."
+        )
+        
+        asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Изменить модель", callback_data='asr_set_model')],
+            [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
             [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
         ])
         await safe_edit_message_text(query, text, reply_markup=keyboard)

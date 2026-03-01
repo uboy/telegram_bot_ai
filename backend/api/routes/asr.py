@@ -164,6 +164,7 @@ def get_asr_settings() -> AsrSettings:
             asr_provider=settings.asr_provider or "transformers",
             asr_model_name=settings.asr_model_name or "openai/whisper-small",
             asr_device=settings.asr_device or None,
+            show_asr_metadata=getattr(settings, "show_asr_metadata", True),
         )
     finally:
         session.close()
@@ -188,6 +189,8 @@ def update_asr_settings(payload: AsrSettingsUpdate) -> AsrSettings:
             settings.asr_model_name = payload.asr_model_name.strip()
         if payload.asr_device is not None:
             settings.asr_device = payload.asr_device.strip() or ""
+        if payload.show_asr_metadata is not None:
+            settings.show_asr_metadata = payload.show_asr_metadata
 
         session.commit()
         session.refresh(settings)
@@ -195,6 +198,7 @@ def update_asr_settings(payload: AsrSettingsUpdate) -> AsrSettings:
             asr_provider=settings.asr_provider or "transformers",
             asr_model_name=settings.asr_model_name or "openai/whisper-small",
             asr_device=settings.asr_device or None,
+            show_asr_metadata=getattr(settings, "show_asr_metadata", True),
         )
     finally:
         session.close()
