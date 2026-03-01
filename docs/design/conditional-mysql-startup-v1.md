@@ -13,11 +13,16 @@ Goal: avoid starting MySQL container when project is configured to run with SQLi
    - reads `.env`,
    - if `MYSQL_URL` is set -> runs `docker compose --profile mysql up ...`,
    - else runs `docker compose up ...` without MySQL profile.
+4. Add convenience wrappers:
+   - `scripts/start_stack.ps1` for Windows PowerShell
+   - `scripts/start_stack.sh` for Linux/macOS shells
 
 ## Scope
 In scope:
 - `docker-compose.yml`
 - `scripts/start_stack.py`
+- `scripts/start_stack.ps1`
+- `scripts/start_stack.sh`
 - tests for launcher logic
 - docs/spec/traceability updates
 

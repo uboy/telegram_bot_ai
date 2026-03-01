@@ -25,6 +25,14 @@
 python scripts/start_stack.py
 ```
 
+```powershell
+.\scripts\start_stack.ps1
+```
+
+```bash
+./scripts/start_stack.sh
+```
+
 - Если в `.env` задан `MYSQL_URL`, launcher поднимет профиль `mysql` (включая `db`).
 - Если `MYSQL_URL` пустой/не задан, `db` контейнер не будет запускаться.
 

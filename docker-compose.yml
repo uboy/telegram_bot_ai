@@ -82,8 +82,6 @@ services:
     container_name: telegram_rag_redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    sysctls:
-      - vm.overcommit_memory=1
     ports:
       - "6389:6379"
     volumes:

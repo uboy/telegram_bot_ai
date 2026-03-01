@@ -27,7 +27,7 @@ Out of scope:
    - read from `HF_TOKEN` with fallback to `HUGGINGFACE_HUB_TOKEN`;
    - exported back to both env aliases for downstream library compatibility.
 3. Docker runtime warning hardening:
-   - Redis: set `vm.overcommit_memory=1` via service `sysctls`.
+   - Redis: document host-level `vm.overcommit_memory=1` recommendation (container `sysctls` may be unsupported on some runtimes).
    - n8n: enforce secure config permissions via `N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true`.
    - MySQL: use non-deprecated auth/cache options in `mysqld` command.
 

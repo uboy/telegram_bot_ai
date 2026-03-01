@@ -308,6 +308,14 @@ docker-compose up -d --build
 python scripts/start_stack.py
 ```
 
+```powershell
+.\scripts\start_stack.ps1
+```
+
+```bash
+./scripts/start_stack.sh
+```
+
 - При заданном `MYSQL_URL` launcher включает compose-profile `mysql` и поднимает `db`.
 - Если `MYSQL_URL` не задан, MySQL контейнер не запускается (SQLite режим).
 

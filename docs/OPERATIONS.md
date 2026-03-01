@@ -29,11 +29,23 @@ Use smart launcher:
 python scripts/start_stack.py
 ```
 
+```powershell
+.\scripts\start_stack.ps1
+```
+
+```bash
+./scripts/start_stack.sh
+```
+
 - `MYSQL_URL` set -> launcher enables `mysql` compose profile and starts `db`.
 - `MYSQL_URL` missing/empty -> launcher starts stack without `db`.
 - Dry-run mode:
 ```bash
 python scripts/start_stack.py --dry-run
+```
+
+```powershell
+.\scripts\start_stack.ps1 --dry-run
 ```
 
 ## Health Checks
@@ -45,7 +57,8 @@ python scripts/start_stack.py --dry-run
 
 ## Container Runtime Notes
 
-- Redis: compose config sets `vm.overcommit_memory=1` to avoid Redis persistence warnings.
+- Redis: on some Docker runtimes container-level `sysctls` are not allowed.  
+  Set `vm.overcommit_memory=1` on the host if you need to suppress Redis overcommit warnings.
 - n8n: compose config enforces secure settings file permissions (`N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true`).
 - MySQL: compose starts `mysqld` with non-deprecated auth/cache options (`--authentication-policy`, `--host-cache-size=0`).
 
