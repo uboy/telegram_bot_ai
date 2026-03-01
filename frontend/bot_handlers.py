@@ -884,20 +884,39 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['state'] = None
             return
 
-        result = await asyncio.to_thread(
-            backend_client.update_asr_settings,
-            {"asr_model_name": model_name},
-        )
-        if result and result.get("asr_model_name"):
-            await update.message.reply_text(
-                f"✅ ASR модель изменена на: {result.get('asr_model_name')}",
-                reply_markup=admin_menu(),
+        await update.message.reply_text(f"⏳ Проверяю и устанавливаю модель <code>{model_name}</code>...", parse_mode='HTML')
+        
+        try:
+            result = await asyncio.to_thread(
+                backend_client.update_asr_settings,
+                {"asr_model_name": model_name},
             )
-        else:
+            if result and result.get("asr_model_name"):
+                await update.message.reply_text(
+                    f"✅ ASR модель успешно изменена на: <code>{result.get('asr_model_name')}</code>",
+                    reply_markup=admin_menu(),
+                    parse_mode='HTML'
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Не удалось изменить ASR модель через backend.",
+                    reply_markup=admin_menu(),
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при смене модели ASR: {e}")
+            error_text = str(e)
+            if "400" in error_text:
+                msg = f"❌ Ошибка: Модель <code>{model_name}</code> не найдена на Hugging Face.\n\nПроверьте правильность названия и попробуйте снова."
+            else:
+                msg = f"❌ Ошибка при смене модели: {error_text}"
+            
+            from frontend.templates.buttons import asr_models_menu
             await update.message.reply_text(
-                "⚠️ Не удалось обновить ASR модель через backend.",
-                reply_markup=admin_menu(),
+                msg, 
+                reply_markup=asr_models_menu(model_name),
+                parse_mode='HTML'
             )
+        
         context.user_data['state'] = None
         
     elif state == 'waiting_user_delete':

@@ -31,6 +31,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Handle `/start`, text queries, document uploads, and images.
   - Provide menus for: KB search, web search, ask AI, settings.
   - Admin menu for users/KBs/ingestion/AI settings.
+  - **ASR visibility control: users can toggle technical metadata display in their settings.**
 - Backend API:
   - Auth by telegram_id and API key (`X-API-Key`).
   - CRUD for users and knowledge bases.
@@ -86,6 +87,8 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Inline citations are present when enabled and only reference provided sources.
 - Command snippets in answers are filtered to those present in KB context.
 - Web search uses DuckDuckGo and returns summarized results with source links.
+- **ASR results: technical metadata is hidden by default or toggleable by user.**
+- **ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.**
 - Backend enforces API key header when configured.
 - n8n receives `knowledge_import` events with KB id/name, source type, and stats.
 - Docker Compose starts bot, backend, db, redis, and n8n with externalized data.

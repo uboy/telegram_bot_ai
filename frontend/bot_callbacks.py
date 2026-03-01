@@ -1935,72 +1935,97 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     if data == 'admin_asr':
         settings = await asyncio.to_thread(backend_client.get_asr_settings)
         provider = settings.get("asr_provider", "transformers")
-        model = settings.get("asr_model_name", "openai/whisper-small")
+        model = settings.get("asr_model_name", "openai/whisper-large-v3-turbo")
         device = settings.get("asr_device") or "auto"
         show_meta = settings.get("show_asr_metadata", True)
         
         text = (
             "🎙️ Настройки распознавания речи\n\n"
             f"Провайдер: {provider}\n"
-            f"Модель: {model}\n"
+            f"Текущая модель: <code>{model}</code>\n"
             f"Устройство: {device}\n"
             f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
-            "Чтобы изменить модель, нажмите кнопку ниже."
+            "Выберите модель из списка или введите свое название."
         )
         
         asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Изменить модель", callback_data='asr_set_model')],
+            [InlineKeyboardButton("✏️ Выбрать модель", callback_data='asr_select_model_list')],
             [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
             [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
         ])
-        await safe_edit_message_text(query, text, reply_markup=keyboard)
+        await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode='HTML')
         return
 
-    if data == 'toggle_global_asr_metadata':
+    if data == 'asr_select_model_list':
         settings = await asyncio.to_thread(backend_client.get_asr_settings)
-        current_show = settings.get("show_asr_metadata", True)
-        new_show = not current_show
-        
-        await asyncio.to_thread(
-            backend_client.update_asr_settings,
-            {"show_asr_metadata": new_show}
+        current_model = settings.get("asr_model_name", "")
+        await safe_edit_message_text(
+            query, 
+            "🎙️ Выберите модель ASR из популярных или введите свою:", 
+            reply_markup=asr_models_menu(current_model)
         )
-        
-        # Перерисовываем меню
-        settings = await asyncio.to_thread(backend_client.get_asr_settings)
-        provider = settings.get("asr_provider", "transformers")
-        model = settings.get("asr_model_name", "openai/whisper-small")
-        device = settings.get("asr_device") or "auto"
-        show_meta = settings.get("show_asr_metadata", True)
-        
-        text = (
-            "🎙️ Настройки распознавания речи\n\n"
-            f"Провайдер: {provider}\n"
-            f"Модель: {model}\n"
-            f"Устройство: {device}\n"
-            f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
-            "Чтобы изменить модель, нажмите кнопку ниже."
-        )
-        
-        asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✏️ Изменить модель", callback_data='asr_set_model')],
-            [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
-            [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
-        ])
-        await safe_edit_message_text(query, text, reply_markup=keyboard)
         return
 
-    if data == 'asr_set_model':
+    if data.startswith('asr_set_model_id:'):
+        model_id = data.split(':', 1)[1]
+        await safe_edit_message_text(query, f"⏳ Проверяю и устанавливаю модель <code>{model_id}</code>...", parse_mode='HTML')
+        
+        try:
+            # Отправляем запрос на обновление в бэкенд
+            # Бэкенд теперь сам проверяет существование модели
+            await asyncio.to_thread(
+                backend_client.update_asr_settings,
+                {"asr_model_name": model_id}
+            )
+            await query.answer(f"✅ Модель {model_id} установлена", show_alert=True)
+            # Возвращаемся в основное меню ASR
+            data = 'admin_asr'
+            # Рекурсивно вызываем или просто повторяем логику
+            settings = await asyncio.to_thread(backend_client.get_asr_settings)
+            provider = settings.get("asr_provider", "transformers")
+            model = settings.get("asr_model_name", "openai/whisper-large-v3-turbo")
+            device = settings.get("asr_device") or "auto"
+            show_meta = settings.get("show_asr_metadata", True)
+            text = (
+                "🎙️ Настройки распознавания речи\n\n"
+                f"Провайдер: {provider}\n"
+                f"Текущая модель: <code>{model}</code>\n"
+                f"Устройство: {device}\n"
+                f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
+                "✅ Модель успешно обновлена!"
+            )
+            asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Выбрать модель", callback_data='asr_select_model_list')],
+                [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
+                [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
+            ])
+            await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"Ошибка при смене модели ASR: {e}")
+            error_text = str(e)
+            if "400" in error_text:
+                msg = f"❌ Ошибка: Модель <code>{model_id}</code> не найдена на Hugging Face.\n\nПроверьте название и попробуйте снова."
+            else:
+                msg = f"❌ Ошибка при смене модели: {error_text}"
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад к списку", callback_data='asr_select_model_list')],
+            ])
+            await safe_edit_message_text(query, msg, reply_markup=keyboard, parse_mode='HTML')
+        return
+
+    if data == 'asr_model_custom':
         context.user_data['state'] = 'waiting_asr_model'
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Назад", callback_data='admin_asr')],
+            [InlineKeyboardButton("🔙 Назад", callback_data='asr_select_model_list')],
         ])
         await safe_edit_message_text(
             query,
-            "Введите имя модели ASR (например, openai/whisper-small):",
+            "Введите полное название модели с Hugging Face (например, <code>openai/whisper-large-v3-turbo</code>):",
             reply_markup=keyboard,
+            parse_mode='HTML'
         )
         return
 

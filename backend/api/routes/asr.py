@@ -162,7 +162,7 @@ def get_asr_settings() -> AsrSettings:
             session.refresh(settings)
         return AsrSettings(
             asr_provider=settings.asr_provider or "transformers",
-            asr_model_name=settings.asr_model_name or "openai/whisper-small",
+            asr_model_name=settings.asr_model_name or "openai/whisper-large-v3-turbo",
             asr_device=settings.asr_device or None,
             show_asr_metadata=getattr(settings, "show_asr_metadata", True),
         )
@@ -185,8 +185,25 @@ def update_asr_settings(payload: AsrSettingsUpdate) -> AsrSettings:
 
         if payload.asr_provider is not None:
             settings.asr_provider = payload.asr_provider.strip() or "transformers"
+        
         if payload.asr_model_name is not None:
-            settings.asr_model_name = payload.asr_model_name.strip()
+            model_name = payload.asr_model_name.strip()
+            # Валидация модели (только если провайдер transformers)
+            if settings.asr_provider == "transformers" and model_name:
+                try:
+                    from huggingface_hub import model_info
+                    # Проверяем существование модели на HF (быстрый запрос метаданных)
+                    model_info(model_name)
+                    logger.info("✅ Модель ASR '%s' найдена на Hugging Face", model_name)
+                except Exception as e:
+                    logger.warning("❌ Ошибка валидации модели ASR '%s': %s", model_name, e)
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Модель '{model_name}' не найдена на Hugging Face или недоступна. "
+                               f"Проверьте правильность написания (например, openai/whisper-large-v3-turbo)."
+                    ) from e
+            settings.asr_model_name = model_name
+
         if payload.asr_device is not None:
             settings.asr_device = payload.asr_device.strip() or ""
         if payload.show_asr_metadata is not None:
@@ -196,7 +213,7 @@ def update_asr_settings(payload: AsrSettingsUpdate) -> AsrSettings:
         session.refresh(settings)
         return AsrSettings(
             asr_provider=settings.asr_provider or "transformers",
-            asr_model_name=settings.asr_model_name or "openai/whisper-small",
+            asr_model_name=settings.asr_model_name or "openai/whisper-large-v3-turbo",
             asr_device=settings.asr_device or None,
             show_asr_metadata=getattr(settings, "show_asr_metadata", True),
         )

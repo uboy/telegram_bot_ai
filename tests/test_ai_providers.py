@@ -31,7 +31,7 @@ def test_openai_provider_uses_model_override(monkeypatch):
     monkeypatch.setattr(ai_providers.requests, "post", fake_post)
 
     provider = ai_providers.OpenAIProvider(
-        api_key="openai-key",
+        api_key="sk-dummy-test-value-not-real-key",
         model="default-model",
         base_url="https://api.example.com/v1",
     )
@@ -59,7 +59,7 @@ def test_anthropic_provider_builds_messages_payload(monkeypatch):
     monkeypatch.setattr(ai_providers.requests, "post", fake_post)
 
     provider = ai_providers.AnthropicProvider(
-        api_key="anthropic-key",
+        api_key="x-anthropic-dummy-test-key",
         model="claude-default",
         base_url="https://anthropic.example",
     )

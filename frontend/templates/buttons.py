@@ -386,3 +386,24 @@ def analytics_import_chat_menu(chats: list):
         )])
     buttons.append([InlineKeyboardButton("🔙 К аналитике", callback_data='admin_analytics')])
     return InlineKeyboardMarkup(buttons)
+
+
+def asr_models_menu(current_model: str):
+    """Меню выбора моделей ASR"""
+    models = [
+        ("🚀 Large V3 Turbo", "openai/whisper-large-v3-turbo"),
+        ("🏆 Large V3", "openai/whisper-large-v3"),
+        ("⚖️ Medium", "openai/whisper-medium"),
+        ("⚡ Small", "openai/whisper-small"),
+        ("🏃 Base", "openai/whisper-base"),
+        ("☁️ Tiny", "openai/whisper-tiny"),
+    ]
+    
+    buttons = []
+    for label, model_id in models:
+        prefix = "✅ " if model_id == current_model else "⚪ "
+        buttons.append([InlineKeyboardButton(f"{prefix}{label}", callback_data=f"asr_set_model_id:{model_id}")])
+    
+    buttons.append([InlineKeyboardButton("✏️ Свой вариант (Hugging Face)", callback_data='asr_model_custom')])
+    buttons.append([InlineKeyboardButton("🔙 Назад", callback_data='admin_asr')])
+    return InlineKeyboardMarkup(buttons)

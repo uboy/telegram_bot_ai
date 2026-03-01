@@ -45,7 +45,7 @@ class AppSettings(Base):
     __tablename__ = 'app_settings'
     id = Column(Integer, primary_key=True)
     asr_provider = Column(String(50), default='transformers')
-    asr_model_name = Column(String(200), default='openai/whisper-small')
+    asr_model_name = Column(String(200), default='openai/whisper-large-v3-turbo')
     asr_device = Column(String(50), default='')
     show_asr_metadata = Column(Boolean, default=True)  # Глобальная настройка тех. инфо ASR
 

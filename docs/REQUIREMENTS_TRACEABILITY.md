@@ -16,6 +16,8 @@ Source: `SPEC.md` acceptance criteria.
 | AC-10 | Docker Compose starts full stack | `docker-compose.yml`, `Dockerfile` | Manual ops verification | PARTIAL |
 | AC-11 | AI providers (Ollama/OpenAI/Anthropic/DeepSeek/Open WebUI) configurable through unified provider manager | `shared/ai_providers.py`, `env.template`, `README.md` | `tests/test_ai_providers.py` | PASS |
 | AC-12 | Feature/bugfix changes must include spec/design/traceability updates | `AGENTS.md`, `scripts/ci_policy_gate.py`, `.github/workflows/agent-quality-gates.yml` | CI policy gate execution | PASS |
+| AC-13 | ASR results: technical metadata is hidden by default or toggleable by user | `shared/database.py`, `frontend/bot_callbacks.py`, `frontend/bot_handlers.py` | `tests/test_bot_voice.py` | PASS |
+| AC-14 | ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) | `frontend/bot_handlers.py` | `tests/test_bot_voice.py`, manual Telegram verification | PASS |
 
 ## Gaps to close
 
