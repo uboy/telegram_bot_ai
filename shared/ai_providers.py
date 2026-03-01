@@ -2,10 +2,12 @@
 Модуль для работы с различными провайдерами ИИ
 """
 import os
+import base64
+import mimetypes
 import requests
-import json
 import logging
-from typing import Optional, Dict, List
+import re
+from typing import Optional, Dict, List, Any
 from shared.config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
 logger = logging.getLogger(__name__)
@@ -17,13 +19,23 @@ class AIProvider:
     def __init__(self, name: str):
         self.name = name
     
-    def query(self, prompt: str, **kwargs) -> str:
+    def query(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
         """Отправка запроса к ИИ"""
         raise NotImplementedError
     
-    def query_multimodal(self, prompt: str, image_path: Optional[str] = None, **kwargs) -> str:
+    def query_multimodal(
+        self,
+        prompt: str,
+        image_path: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """Мультимодальный запрос с изображением"""
         raise NotImplementedError
+
+    def list_models(self) -> List[str]:
+        """Получить список доступных моделей (если поддерживается провайдером)"""
+        return []
 
 
 class OllamaProvider(AIProvider):
@@ -34,12 +46,13 @@ class OllamaProvider(AIProvider):
         self.base_url = base_url
         self.model = model
     
-    def query(self, prompt: str, **kwargs) -> str:
+    def query(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
         """Запрос к Ollama"""
         try:
             if os.getenv("OLLAMA_DEBUG_PROMPT", "false").lower() == "true":
                 preview = (prompt or "")[:800]
                 logger.debug("Ollama prompt preview (len=%d): %s", len(prompt or ""), preview)
+            effective_model = model or self.model
             # Получить настройку фильтрации thinking tokens из конфига
             try:
                 from shared.config import OLLAMA_FILTER_THINKING
@@ -49,7 +62,7 @@ class OllamaProvider(AIProvider):
             
             # Подготовить параметры запроса
             request_params = {
-                "model": self.model,
+                "model": effective_model,
                 "prompt": prompt,
                 "stream": False,
             }
@@ -84,8 +97,6 @@ class OllamaProvider(AIProvider):
     
     def _filter_thinking_tokens(self, text: str) -> str:
         """Удалить thinking tokens из ответа reasoning моделей"""
-        import re
-        
         # Удалить блоки между <think>...</think> (включая сами маркеры)
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
         
@@ -125,14 +136,19 @@ class OllamaProvider(AIProvider):
         
         return text.strip()
     
-    def query_multimodal(self, prompt: str, image_path: Optional[str] = None, **kwargs) -> str:
+    def query_multimodal(
+        self,
+        prompt: str,
+        image_path: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """Мультимодальный запрос с изображением"""
         if not image_path:
-            return self.query(prompt, **kwargs)
+            return self.query(prompt, model=model, **kwargs)
         
         try:
-            import base64
-            import os
+            effective_model = model or self.model
             
             # Получить настройку фильтрации thinking tokens из конфига
             try:
@@ -145,7 +161,7 @@ class OllamaProvider(AIProvider):
                 image_data = base64.b64encode(f.read()).decode('utf-8')
             
             request_params = {
-                "model": self.model,
+                "model": effective_model,
                 "prompt": prompt,
                 "images": [image_data],
                 "stream": False,
@@ -184,68 +200,256 @@ class OllamaProvider(AIProvider):
 class OpenAIProvider(AIProvider):
     """Провайдер для OpenAI API"""
     
-    def __init__(self, api_key: str, model: str = "gpt-4"):
-        super().__init__("OpenAI")
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4",
+        base_url: str = "https://api.openai.com/v1",
+        provider_name: str = "OpenAI",
+    ):
+        super().__init__(provider_name)
         self.api_key = api_key
         self.model = model
-        self.base_url = "https://api.openai.com/v1"
+        self.base_url = base_url.rstrip("/")
+
+    def _headers(self) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json"
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _extract_chat_content(self, payload: Dict[str, Any]) -> str:
+        choices = payload.get("choices", [])
+        if not choices:
+            return ""
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: List[str] = []
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+            return "\n".join(parts).strip()
+        return str(content).strip()
     
-    def query(self, prompt: str, **kwargs) -> str:
-        """Запрос к OpenAI"""
+    def query(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
+        """Запрос к OpenAI-совместимому API"""
         try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+            request_payload = {
+                "model": model or self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                **kwargs
             }
             resp = requests.post(
                 f"{self.base_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    **kwargs
-                },
+                headers=self._headers(),
+                json=request_payload,
                 timeout=120
             )
             if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"].strip()
-            return f"Ошибка при обращении к OpenAI: {resp.status_code}"
+                content = self._extract_chat_content(resp.json())
+                return content or "Пустой ответ от модели"
+            return f"Ошибка при обращении к {self.name}: {resp.status_code}"
         except Exception as e:
-            return f"Ошибка подключения к OpenAI: {str(e)}"
+            return f"Ошибка подключения к {self.name}: {str(e)}"
     
-    def query_multimodal(self, prompt: str, image_path: Optional[str] = None, **kwargs) -> str:
+    def query_multimodal(
+        self,
+        prompt: str,
+        image_path: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """Мультимодальный запрос с изображением"""
         if not image_path:
-            return self.query(prompt, **kwargs)
+            return self.query(prompt, model=model, **kwargs)
         
         try:
-            import base64
             with open(image_path, 'rb') as f:
                 image_data = base64.b64encode(f.read()).decode('utf-8')
             
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+            media_type, _ = mimetypes.guess_type(image_path)
+            media_type = media_type or "image/jpeg"
+            request_payload = {
+                "model": model or self.model,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_data}"}}
+                    ]
+                }],
+                **kwargs
             }
             resp = requests.post(
                 f"{self.base_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": "gpt-4-vision-preview",
-                    "messages": [{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
-                        ]
-                    }],
-                    **kwargs
-                },
+                headers=self._headers(),
+                json=request_payload,
                 timeout=120
             )
             if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"].strip()
-            return f"Ошибка при обращении к OpenAI: {resp.status_code}"
+                content = self._extract_chat_content(resp.json())
+                return content or "Пустой ответ от модели"
+            return f"Ошибка при обращении к {self.name}: {resp.status_code}"
+        except Exception as e:
+            return f"Ошибка обработки изображения: {str(e)}"
+
+    def list_models(self) -> List[str]:
+        """Получить список моделей (если API поддерживает endpoint /models)"""
+        try:
+            resp = requests.get(
+                f"{self.base_url}/models",
+                headers=self._headers(),
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return []
+            items = resp.json().get("data", [])
+            return [item.get("id", "") for item in items if item.get("id")]
+        except Exception:
+            return []
+
+
+class OpenWebUIProvider(OpenAIProvider):
+    """Провайдер для Open WebUI OpenAI-compatible API"""
+
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = OLLAMA_MODEL,
+        base_url: str = "http://localhost:3000/api",
+    ):
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            provider_name="Open WebUI",
+        )
+
+
+class DeepSeekProvider(OpenAIProvider):
+    """Провайдер для DeepSeek API"""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "deepseek-chat",
+        base_url: str = "https://api.deepseek.com/v1",
+    ):
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            provider_name="DeepSeek",
+        )
+
+
+class AnthropicProvider(AIProvider):
+    """Провайдер для Anthropic Messages API"""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-3-5-sonnet-latest",
+        base_url: str = "https://api.anthropic.com",
+    ):
+        super().__init__("Anthropic")
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+
+    def _extract_text(self, payload: Dict[str, Any]) -> str:
+        content = payload.get("content", [])
+        if not isinstance(content, list):
+            return ""
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts).strip()
+
+    def query(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
+        try:
+            max_tokens = kwargs.pop("max_tokens", 1024)
+            request_payload = {
+                "model": model or self.model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+                **kwargs,
+            }
+            resp = requests.post(
+                f"{self.base_url}/v1/messages",
+                headers=self._headers(),
+                json=request_payload,
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                content = self._extract_text(resp.json())
+                return content or "Пустой ответ от модели"
+            return f"Ошибка при обращении к Anthropic: {resp.status_code}"
+        except Exception as e:
+            return f"Ошибка подключения к Anthropic: {str(e)}"
+
+    def query_multimodal(
+        self,
+        prompt: str,
+        image_path: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        if not image_path:
+            return self.query(prompt, model=model, **kwargs)
+
+        try:
+            with open(image_path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode("utf-8")
+            media_type, _ = mimetypes.guess_type(image_path)
+            media_type = media_type or "image/jpeg"
+            max_tokens = kwargs.pop("max_tokens", 1024)
+            request_payload = {
+                "model": model or self.model,
+                "max_tokens": max_tokens,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": image_data,
+                                },
+                            },
+                        ],
+                    }
+                ],
+                **kwargs,
+            }
+            resp = requests.post(
+                f"{self.base_url}/v1/messages",
+                headers=self._headers(),
+                json=request_payload,
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                content = self._extract_text(resp.json())
+                return content or "Пустой ответ от модели"
+            return f"Ошибка при обращении к Anthropic: {resp.status_code}"
         except Exception as e:
             return f"Ошибка обработки изображения: {str(e)}"
 
@@ -284,14 +488,7 @@ class AIProviderManager:
         """Отправить запрос через текущий или указанный провайдер"""
         provider = self.get_provider(provider_name)
         if provider:
-            # Если указана модель и провайдер - Ollama, использовать её
-            if model and isinstance(provider, OllamaProvider):
-                old_model = provider.model
-                provider.model = model
-                result = provider.query(prompt, **kwargs)
-                provider.model = old_model  # Восстановить оригинальную модель
-                return result
-            return provider.query(prompt, **kwargs)
+            return provider.query(prompt, model=model, **kwargs)
         return "Провайдер ИИ не найден"
     
     def query_multimodal(
@@ -305,14 +502,7 @@ class AIProviderManager:
         """Мультимодальный запрос"""
         provider = self.get_provider(provider_name)
         if provider:
-            # Аналогично текстовому запросу: позволяем временно переопределить модель Ollama
-            if model and isinstance(provider, OllamaProvider):
-                old_model = provider.model
-                provider.model = model
-                result = provider.query_multimodal(prompt, image_path, **kwargs)
-                provider.model = old_model
-                return result
-            return provider.query_multimodal(prompt, image_path, **kwargs)
+            return provider.query_multimodal(prompt, image_path, model=model, **kwargs)
         return "Провайдер ИИ не найден"
 
 
@@ -321,10 +511,66 @@ ai_manager = AIProviderManager()
 
 # Инициализация провайдеров по умолчанию
 def init_default_providers():
-    """Инициализация провайдеров по умолчанию"""
+    """Инициализация провайдеров по умолчанию (из env)"""
+    ai_manager.providers = {}
+    ai_manager.current_provider = None
+    ai_manager.default_provider = "ollama"
+
     ollama = OllamaProvider()
     ai_manager.register_provider("ollama", ollama)
-    ai_manager.set_provider("ollama")
+
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if openai_api_key:
+        ai_manager.register_provider(
+            "openai",
+            OpenAIProvider(
+                api_key=openai_api_key,
+                model=os.getenv("OPENAI_MODEL", "gpt-4"),
+                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            ),
+        )
+
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_api_key:
+        ai_manager.register_provider(
+            "anthropic",
+            AnthropicProvider(
+                api_key=anthropic_api_key,
+                model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
+                base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+            ),
+        )
+
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if deepseek_api_key:
+        ai_manager.register_provider(
+            "deepseek",
+            DeepSeekProvider(
+                api_key=deepseek_api_key,
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            ),
+        )
+
+    open_webui_base_url = os.getenv("OPEN_WEBUI_BASE_URL", "").strip()
+    open_webui_api_key = os.getenv("OPEN_WEBUI_API_KEY", "").strip()
+    open_webui_model = os.getenv("OPEN_WEBUI_MODEL", "").strip()
+    if open_webui_base_url or open_webui_api_key or open_webui_model:
+        ai_manager.register_provider(
+            "open_webui",
+            OpenWebUIProvider(
+                api_key=open_webui_api_key,
+                model=open_webui_model or OLLAMA_MODEL,
+                base_url=open_webui_base_url or "http://localhost:3000/api",
+            ),
+        )
+
+    requested_default = (os.getenv("AI_DEFAULT_PROVIDER", "ollama").strip().lower() or "ollama")
+    if requested_default in ai_manager.providers:
+        ai_manager.default_provider = requested_default
+        ai_manager.set_provider(requested_default)
+    else:
+        ai_manager.set_provider("ollama")
 
 init_default_providers()
 

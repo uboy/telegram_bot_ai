@@ -1,5 +1,6 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 pytest.importorskip("telegram")
 
@@ -7,7 +8,7 @@ from shared.types import UserContext
 
 
 @pytest.mark.anyio
-async def test_handle_voice_transcription(monkeypatch):
+async def test_handle_audio_transcription(monkeypatch):
     from frontend import bot_handlers
 
     async def _check_user(_update):
@@ -20,16 +21,15 @@ async def test_handle_voice_transcription(monkeypatch):
         )
 
     monkeypatch.setattr(bot_handlers, "check_user", _check_user)
-
     monkeypatch.setattr(
         bot_handlers.backend_client,
         "asr_transcribe",
-        lambda **kwargs: {"job_id": "job-1", "queue_position": 1},
+        lambda **kwargs: {"job_id": "job-audio-1", "queue_position": 1},
     )
     monkeypatch.setattr(
         bot_handlers.backend_client,
         "asr_job_status",
-        lambda _job_id: {"status": "done", "text": "hello"},
+        lambda _job_id: {"status": "done", "text": "audio text"},
     )
 
     async def _fast_sleep(_seconds):
@@ -38,20 +38,20 @@ async def test_handle_voice_transcription(monkeypatch):
     monkeypatch.setattr(bot_handlers.asyncio, "sleep", _fast_sleep)
 
     class DummyStatusMessage:
-        def __init__(self):
-            self.edits = []
-
         async def edit_text(self, text, **kwargs):
-            self.edits.append(text)
+            return None
 
-    class DummyVoice:
-        file_id = "voice-1"
-        file_size = 1024
-        mime_type = "audio/ogg"
+    class DummyAudio:
+        file_id = "audio-1"
+        file_name = "file.mp3"
+        file_size = 2048
+        mime_type = "audio/mpeg"
+        duration = 10
 
     class DummyMessage:
         def __init__(self):
-            self.voice = DummyVoice()
+            self.audio = DummyAudio()
+            self.document = None
             self.message_id = 42
             self.date = datetime.now(timezone.utc)
             self.sent = []
@@ -83,6 +83,6 @@ async def test_handle_voice_transcription(monkeypatch):
     update = DummyUpdate()
     context = DummyContext()
 
-    await bot_handlers.handle_voice(update, context)
+    await bot_handlers.handle_audio(update, context)
 
     assert any("Транскрипция" in text for text in update.message.sent)

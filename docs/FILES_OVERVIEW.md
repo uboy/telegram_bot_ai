@@ -109,6 +109,8 @@
 ### API для поиска
 - **`backend/api/routes/rag.py`** — REST API для поиска:
   - `POST /api/v1/rag/query` — поиск в базе знаний
+  - `POST /api/v1/rag/summary` — сводка/FAQ/инструкция по БЗ
+  - `POST /api/v1/rag/reload-models` — перезагрузка моделей RAG
 
 - **`frontend/bot_handlers.py`** — обработка запросов в Telegram боте:
   - `handle_text()` — обработка текстовых запросов пользователей

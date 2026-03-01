@@ -5,16 +5,24 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from starlette.datastructures import UploadFile
+from starlette.datastructures import Headers, UploadFile
 
 from backend.api.routes import asr as asr_routes
+
+
+def _audio_upload(filename: str, data: bytes, content_type: str = "audio/ogg") -> UploadFile:
+    return UploadFile(
+        filename=filename,
+        file=io.BytesIO(data),
+        headers=Headers({"content-type": content_type}),
+    )
 
 
 @pytest.mark.anyio
 async def test_transcribe_voice_too_large(monkeypatch):
     monkeypatch.setenv("ASR_MAX_FILE_MB", "1")
     data = b"x" * (2 * 1024 * 1024)
-    file = UploadFile(filename="voice.ogg", file=io.BytesIO(data), content_type="audio/ogg")
+    file = _audio_upload("voice.ogg", data)
 
     with pytest.raises(Exception) as excinfo:
         await asr_routes.transcribe_voice(
@@ -28,7 +36,7 @@ async def test_transcribe_voice_too_large(monkeypatch):
 
 @pytest.mark.anyio
 async def test_transcribe_voice_queue_full(monkeypatch):
-    file = UploadFile(filename="voice.ogg", file=io.BytesIO(b"hello"), content_type="audio/ogg")
+    file = _audio_upload("voice.ogg", b"hello")
 
     def _enqueue(*args, **kwargs):
         raise RuntimeError("queue is full")
@@ -47,7 +55,7 @@ async def test_transcribe_voice_queue_full(monkeypatch):
 
 @pytest.mark.anyio
 async def test_transcribe_voice_enqueues(monkeypatch):
-    file = UploadFile(filename="voice.ogg", file=io.BytesIO(b"hello"), content_type="audio/ogg")
+    file = _audio_upload("voice.ogg", b"hello")
 
     def _enqueue(file_path, telegram_id, message_id, language=None, audio_meta=None):
         if os.path.exists(file_path):
@@ -67,7 +75,7 @@ async def test_transcribe_voice_enqueues(monkeypatch):
 
 @pytest.mark.anyio
 async def test_transcribe_voice_ffmpeg_missing(monkeypatch):
-    file = UploadFile(filename="voice.ogg", file=io.BytesIO(b"hello"), content_type="audio/ogg")
+    file = _audio_upload("voice.ogg", b"hello")
     monkeypatch.setattr(asr_routes.shutil, "which", lambda _: None)
 
     with pytest.raises(Exception) as excinfo:

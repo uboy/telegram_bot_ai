@@ -1,42 +1,83 @@
-# Конфигурация бота
+# Конфигурация
 
-## Важно: Безопасность
+## Базовый порядок
 
-**`config.py` не должен содержать секретные ключи!** Он только читает переменные из `.env` файла.
+1. Скопируйте шаблон:
+```bash
+Copy-Item env.template .env
+```
 
-## Настройка
+2. Заполните обязательные значения:
+- `TELEGRAM_BOT_TOKEN`
+- `ADMIN_IDS`
+- `MYSQL_URL` или `DB_PATH`
 
-1. **Скопируйте `env.template` в `.env`:**
-   ```bash
-   cp env.template .env
-   ```
+3. Для защищённого режима задайте:
+- `BACKEND_API_KEY`
 
-2. **Отредактируйте `.env` и укажите свои значения:**
-   - `TELEGRAM_BOT_TOKEN` - токен вашего Telegram бота (обязательно)
-   - `ADMIN_IDS` - ID администраторов через запятую (обязательно)
-   - Остальные параметры опциональны
+## Основные переменные
 
-3. **`.env` файл уже в `.gitignore`** - он не будет загружен в git
+### Backend/bot
+- `BACKEND_BASE_URL`
+- `BACKEND_API_PREFIX` (обычно `/api/v1`)
+- `BACKEND_API_KEY`
+- `AI_DEFAULT_PROVIDER`
 
-## Если `config.py` удален
+### RAG
+- `RAG_ENABLE`
+- `RAG_MODEL_NAME`
+- `RAG_RERANK_MODEL`
+- `RAG_TOP_K`
+- `RAG_CONTEXT_LENGTH`
+- `RAG_CHUNK_SIZE`
+- `RAG_CHUNK_OVERLAP`
 
-Если вы удалили `config.py` из репозитория, бот все равно будет работать:
-- Все импорты из `config` имеют fallback на переменные окружения
-- `load_dotenv()` автоматически загрузит `.env` файл
-- Если `.env` не найден, используются значения по умолчанию или переменные окружения системы
+### AI providers
+- Ollama:
+  - `OLLAMA_BASE_URL`
+  - `OLLAMA_MODEL`
+  - `OLLAMA_VISION_MODEL`
+- OpenAI:
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL`
+  - `OPENAI_BASE_URL` (опционально, для OpenAI-compatible endpoint)
+- Anthropic:
+  - `ANTHROPIC_API_KEY`
+  - `ANTHROPIC_MODEL`
+  - `ANTHROPIC_BASE_URL` (опционально)
+- DeepSeek:
+  - `DEEPSEEK_API_KEY`
+  - `DEEPSEEK_MODEL`
+  - `DEEPSEEK_BASE_URL` (опционально)
+- Open WebUI:
+  - `OPEN_WEBUI_BASE_URL`
+  - `OPEN_WEBUI_API_KEY`
+  - `OPEN_WEBUI_MODEL`
 
-## Восстановление `config.py`
+### ASR
+- `ASR_MAX_FILE_MB`
+- `ASR_QUEUE_MAX`
+- `ASR_MAX_WORKERS`
 
-Если нужно восстановить `config.py`, просто скопируйте его из репозитория - он не содержит секретов.
+### Analytics
+- `ANALYTICS_ENABLED`
+- `ANALYTICS_MIN_TEXT_LENGTH`
+- `ANALYTICS_EMBEDDING_BATCH_SIZE`
+- `ANALYTICS_MAX_THEMES`
+- `ANALYTICS_CLUSTER_METHOD`
+- `ANALYTICS_CLUSTER_MIN_SIZE`
+- `ANALYTICS_DIGEST_MAX_MESSAGES`
+- `ANALYTICS_RETENTION_DAYS`
 
+### Optional integrations
+- `N8N_BASE_URL`
+- `N8N_DEFAULT_WEBHOOK`
+- `N8N_PUBLIC_URL`
+- `N8N_API_KEY`
 
-## KB Settings
+## Безопасность
 
-- KB chunking and RAG behavior are stored in the database per knowledge base.
-- Manage via admin panel -> KB Settings, or API `GET/PUT /knowledge-bases/{id}/settings`.
-- Recommended for wiki: `chunking.wiki.mode=full` (one page per chunk).
-
-## Code Indexing
-
-- Local code paths must be available inside the container.
-- Recommended: mount read-only and set `CODEBASE_ROOT`.
+- `.env` должен оставаться только локальным.
+- Не коммитьте реальные токены/пароли.
+- Для production всегда задавайте `BACKEND_API_KEY`.
+- Перед завершением задач запускайте `python scripts/scan_secrets.py`.

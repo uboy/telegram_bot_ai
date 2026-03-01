@@ -11,6 +11,9 @@ HARD RULES
 - No drive-by refactors.
 - No new dependencies unless the design spec explicitly allows it.
 - Follow project conventions and commands in AGENTS.md (if present).
+- Never run `git add` / `git commit` / `git push` unless user explicitly approved commit actions for the current diff.
+- For any functional/API/behavior/config change (including bugfix), update specs/docs in the same task.
+- Run secret checks before completion and block task on leaked sensitive data.
 
 INPUTS
 - Design spec file: docs/design/<feature>-v1.md (or the latest vN)
@@ -29,11 +32,20 @@ WHEN APPROVED
    - Prefer commands listed in AGENTS.md and/or the spec test plan.
    - If not available, propose reasonable defaults and ask before running destructive actions.
 5) Fix failures until green.
-6) Produce an acceptance criteria mapping:
+6) Update specs/docs:
+   - `SPEC.md`
+   - relevant `docs/design/<feature>-vN.md`
+   - `docs/REQUIREMENTS_TRACEABILITY.md`
+   - related README/API/CONFIG docs when applicable
+7) Produce an acceptance criteria mapping:
    - For each acceptance criterion from the spec: where/how it’s implemented + how it’s verified.
+8) Add a `Clarifications` section (questions asked, answers, resolved assumptions).
 
 OUTPUT FORMAT
 - Summary of changes
 - Files changed (with brief rationale)
 - Commands run + results
 - Acceptance criteria checklist (PASS/FAIL with evidence)
+- Spec/doc updates performed (or explicit reason not needed)
+- Secret check result
+- Commit message text + `Commit pending user approval` status

@@ -2,6 +2,7 @@
 approval_policy = "on-request"
 
 [workflow]
-source_of_truth = "AGENTS.md"
-roles = ["architect", "developer", "reviewer"]
-notes = "Architect produces design spec -> user approves -> Developer implements -> Reviewer verifies and security-checks."
+source_of_truth = "C:/Users/devl/.codex/AGENTS.md"
+project_supplements = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "SPEC.md", "docs/REQUIREMENTS_TRACEABILITY.md"]
+roles = ["product", "architect", "developer", "reviewer", "qa", "security", "devops"]
+notes = "Use global baseline policy + project supplements. No git commit/push without explicit user approval for current diff. Any functional/bugfix change must update SPEC/design/traceability docs."

@@ -135,4 +135,4 @@
 
 **Approval**
 
-REVIEW REQUIRED - Reply "APPROVED:v1" or "CHANGES:<bullets>"
+APPROVED:v1

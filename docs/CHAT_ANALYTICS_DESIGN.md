@@ -1,6 +1,6 @@
 # Технический дизайн: Аналитика чатов, извлечение тем и дайджесты для Telegram
 
-**Статус:** Draft
+**Статус:** APPROVED:v1
 **Автор:** Architect Agent
 **Дата:** 2026-02-10
 **Входные данные:** ТЗ на аналитику чатов, текущая кодовая база проекта
@@ -1694,3 +1694,9 @@ Instructions:
 Format your response as plain text with [source](link) references inline.
 If you cannot answer, respond: "Недостаточно информации в истории чата для ответа на этот вопрос."
 ```
+
+---
+
+## Approval
+
+APPROVED:v1

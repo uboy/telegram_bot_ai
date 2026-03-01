@@ -65,6 +65,7 @@ def create_knowledge_base(
     "/{kb_id}/sources",
     response_model=List[KnowledgeSourceInfo],
     summary="Список источников в базе знаний с датой последнего обновления",
+    dependencies=[Depends(require_api_key)],
 )
 def list_knowledge_sources(
     kb_id: int,

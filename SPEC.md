@@ -15,7 +15,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - RAG pipeline: chunking, embeddings, FAISS index, optional reranking, keyword fallback.
 - Inline citations and source listing in responses.
 - User/admin roles and approval flow.
-- AI provider selection (Ollama default; optional OpenAI).
+- AI provider selection and routing (Ollama, OpenAI, Anthropic, DeepSeek, Open WebUI via OpenAI-compatible endpoint).
 - n8n webhook integration for ingestion events.
 - Docker-based deployment with MySQL/Redis; local run with SQLite.
 
@@ -51,12 +51,14 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Optional Redis cache for conversation history.
 - Integration:
   - n8n webhook events for ingestion actions.
+  - Multi-provider AI access with configurable defaults and model selection.
 
 ## Non-functional requirements
 - Reliability: bot and backend recover gracefully from ingestion or model errors.
 - Latency: interactive responses for typical KB sizes (seconds, not minutes).
 - Configurability: all operational settings via `.env` and DB-stored KB settings.
 - Security: API key for bot → backend, admin ID allowlist, no secrets in code.
+- Governance: feature/bugfix changes must keep specs and traceability docs up to date.
 - Portability: run via Docker Compose or locally with minimal setup.
 - Observability: structured logs to file and stdout; error notifications to admins.
 
@@ -87,10 +89,18 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Backend enforces API key header when configured.
 - n8n receives `knowledge_import` events with KB id/name, source type, and stats.
 - Docker Compose starts bot, backend, db, redis, and n8n with externalized data.
+- Supported AI providers are configurable via env and available through unified provider management.
+- Any feature/bugfix that changes behavior updates `SPEC.md`, related design spec, and `docs/REQUIREMENTS_TRACEABILITY.md` in the same task.
+
+## Specification maintenance policy
+- `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.
+- Every behavior/API/config/flow change must update this spec in the same PR/task.
+- Every bugfix must include a regression expectation in the spec or linked design doc.
+- `docs/REQUIREMENTS_TRACEABILITY.md` must map updated criteria to implementation and verification evidence.
+- If no spec update is required, the task must include an explicit rationale.
 
 ## Open questions
 - Should admin approval be optional for certain environments (e.g., single-user mode)?
-- Is OpenAI support required in all deployments or only optional via config?
+- Should any provider-specific capabilities be mandatory, or is all provider support optional via configuration?
 - Do we need formal API versioning (`/api/v1`) stability guarantees?
 - What is the expected maximum KB size and ingestion volume for baseline SLAs?
-

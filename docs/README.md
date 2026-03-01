@@ -1,34 +1,45 @@
 # Документация проекта
 
-Добро пожаловать в документацию Telegram Bot AI с поддержкой RAG!
+Единая документация проекта Telegram Bot AI (bot + backend + RAG + analytics).
 
-## Структура документации
+## Основные документы
 
-### Основные документы
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - актуальная архитектура и границы модулей.
+- **[API_REFERENCE.md](API_REFERENCE.md)** - API-контракты `/api/v1/*`, auth, примеры.
+- **[USAGE.md](USAGE.md)** - пользовательские и админские сценарии.
+- **[CONFIGURATION.md](CONFIGURATION.md)** - env-переменные и профиль конфигурации.
+- **[DATABASE.md](DATABASE.md)** - DB-режимы, миграции, эксплуатационные заметки.
+- **[TESTING.md](TESTING.md)** - стратегия тестирования и команды запуска.
+- **[OPERATIONS.md](OPERATIONS.md)** - runbook запуска/диагностики/отката.
+- **[REQUIREMENTS_TRACEABILITY.md](REQUIREMENTS_TRACEABILITY.md)** - трассировка требований к реализации и тестам.
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Архитектура системы, описание компонентов и принципов работы микросервисной архитектуры (Telegram Bot + Backend API)
+## Design Specs (`docs/design/`)
 
-### Настройка и конфигурация
+- `voice-to-text-v1.md` - APPROVED:v1
+- `audio-handler-v1.md` - APPROVED:v1
+- `asr-num-frames-v1.md` - APPROVED:v1
+- `asr-warnings-audio-metadata-v1.md` - APPROVED:v1
+- `async-ingestion-jobs-v1.md` - APPROVED:v1
+- `kb-settings-api-v1.md` - APPROVED:v1
+- `rag-summary-modes-v1.md` - APPROVED:v1
+- `codebase-ingestion-v1.md` - APPROVED:v1
 
-- **[CONFIGURATION.md](CONFIGURATION.md)** - Настройка конфигурации бота, работа с `.env` файлом и переменными окружения
-- **[DATABASE.md](DATABASE.md)** - Настройка базы данных (SQLite и MySQL), переключение между базами, резервное копирование
+## Templates (`docs/templates/`)
 
-### Использование
+- `feature-spec-template.md` - template for new feature specs.
+- `bugfix-spec-template.md` - template for bugfix specs with regression requirements.
 
-- **[USAGE.md](USAGE.md)** - Инструкция по использованию бота для пользователей и администраторов, установка зависимостей, запуск
+## Прочие материалы
 
-## Быстрый старт
+- **[CHAT_ANALYTICS_DESIGN.md](CHAT_ANALYTICS_DESIGN.md)** - утвержденный детальный дизайн аналитики чатов.
+- **[FILES_OVERVIEW.md](FILES_OVERVIEW.md)** - обзор модулей и потоков данных.
+- **[IMPROVEMENTS.md](IMPROVEMENTS.md)** - backlog улучшений.
 
-1. Прочитайте [CONFIGURATION.md](CONFIGURATION.md) для настройки проекта
-2. Настройте базу данных согласно [DATABASE.md](DATABASE.md)
-3. Следуйте инструкциям в [USAGE.md](USAGE.md) для запуска
+## Внешние ссылки в корне репозитория
 
-## Для разработчиков
-
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Подробная информация об архитектуре и внутреннем устройстве системы
-- **[IMPROVEMENTS.md](IMPROVEMENTS.md)** - Предложения по улучшению сервиса (rate limiting, асинхронная обработка, метрики, тесты и многое другое)
-
-## Дополнительная информация
-
-Основной README проекта находится в корне репозитория: [../README.md](../README.md)
+- [ROOT_DOCS.md](ROOT_DOCS.md)
+- [../README.md](../README.md)
+- [../SPEC.md](../SPEC.md)
+- [../IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md)
+- [../AGENTS.md](../AGENTS.md)
 

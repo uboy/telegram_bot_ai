@@ -1,8 +1,9 @@
 """Chat analytics API endpoints."""
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from typing import Optional
 
+from backend.api.deps import require_api_key
 from backend.schemas.analytics import (
     MessagePayload,
     MessageBatchPayload,
@@ -23,7 +24,11 @@ from backend.services.chat_analytics_service import ChatAnalyticsService
 from backend.services.chat_search_service import ChatSearchService
 from backend.services.history_import_service import HistoryImportService
 
-router = APIRouter(prefix="/analytics", tags=["analytics"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["analytics"],
+    dependencies=[Depends(require_api_key)],
+)
 
 _analytics_service = ChatAnalyticsService()
 _search_service = ChatSearchService()

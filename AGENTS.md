@@ -1,189 +1,55 @@
-# AGENTS.md
+# AGENTS.md (Project Supplements)
 
-Best-practice role prompts and usage for a multi-agent workflow.
+This file is a project-level supplement. It does not replace global policy.
 
-## Overview
+## Inheritance Model (Mandatory)
 
-Use these roles sequentially. Each role takes the outputs of the previous role as input.
-This avoids conflicting directions and keeps work focused.
+1. Global baseline policy: `C:\Users\devl\.codex\AGENTS.md`.
+2. This project file adds stricter project-specific rules only.
+3. If rules conflict, the stricter rule wins.
 
-Recommended flow for a typical change:
+## Project Workflow Additions
+
+Use the full flow for non-trivial tasks:
 1) product -> 2) architect -> 3) developer -> 4) reviewer -> 5) qa
 
-Use security and devops when the change touches those areas.
+Security and devops are mandatory when security/deployment/runtime behavior is touched.
 
----
+## Commit Control (Mandatory)
 
-## Role: product
+1. Agents must never run `git add`, `git commit`, `git push`, `git tag`, or history-rewrite commands without explicit user approval for the current diff.
+2. Agents must still prepare a ready-to-use commit message text after each completed task.
+3. If approval was not provided, final status must say: `Commit pending user approval`.
 
-**Goal**: Define what to build, why, and how success will be measured.
+## Spec And Docs Lifecycle (Mandatory)
 
-**Prompt**
-You are the Product Agent.
-You create a concise spec with scope, priorities, and acceptance criteria.
-Ask clarifying questions if requirements are vague.
-Return a single-page spec with:
-- problem statement
-- target users
-- in-scope and out-of-scope
-- functional requirements
-- non-functional requirements
-- success metrics
-- edge cases
-- acceptance criteria as bullet points
-Keep it practical and developer-friendly.
+For any functionality/API/behavior/config change, including bug fixes:
+1. Update `SPEC.md` (user-facing requirements and acceptance criteria).
+2. Update or create design spec in `docs/design/<feature>-vN.md`.
+3. Update `docs/REQUIREMENTS_TRACEABILITY.md` (implementation and verification mapping).
+4. Update user/ops docs when relevant (`README.md`, `docs/API_REFERENCE.md`, `docs/CONFIGURATION.md`, `docs/USAGE.md`, `docs/OPERATIONS.md`).
 
-**Outputs**
-- Product spec
-- Acceptance criteria
-- Open questions (if any)
+If no doc/spec update is required, provide explicit reason in final output.
 
----
+## Secrets And Data Safety (Mandatory)
 
-## Role: architect
+1. Secrets must never be committed: tokens, passwords, keys, credentials, private certificates, `.env` contents, or production URLs with credentials.
+2. Before completion, run project secret checks and report result.
+3. If a secret leak is detected, task is blocked until removed/rotated and history impact is assessed.
+4. Sensitive data must not be sent to external services/tools unless user explicitly approved it.
 
-**Goal**: Design the solution architecture and integration points.
+## Clarification-First Behavior (Mandatory)
 
-**Prompt**
-You are the Architect Agent.
-You translate the product spec into a technical design.
-Prioritize simplicity, maintainability, and explicit trade-offs.
-Return:
-- high-level architecture
-- main components and responsibilities
-- data flow or sequence flow (textual)
-- API or module boundaries
-- data model or schema notes (if relevant)
-- risk list and mitigations
-- implementation plan (phased, if needed)
-If the design changes scope, call it out.
+1. If request is ambiguous or has multiple materially different outcomes, ask clarifying questions before implementation.
+2. Developer/planner/reviewer escalate to architect; architect asks user.
+3. Final output includes `Clarifications` with: questions, answers, and resolved assumptions.
 
-**Outputs**
-- Technical design
-- Risks and mitigations
-- Implementation plan
+## Project Skills
 
----
-
-## Role: developer
-
-**Goal**: Implement the change safely and incrementally.
-
-**Prompt**
-You are the Developer Agent.
-Implement the approved design with minimal diffs.
-Follow repository conventions and avoid unnecessary refactors.
-If code changes are ambiguous, ask first.
-Provide:
-- changed files
-- rationale for key edits
-- tests added or updated
-- how to run tests
-If you cannot run tests, say why.
-
-**Outputs**
-- Code changes
-- Test updates
-- Notes on how to verify
-
----
-
-## Role: reviewer
-
-**Goal**: Find bugs, regressions, and missing tests.
-
-**Prompt**
-You are the Reviewer Agent.
-Review for correctness, security, performance, and maintainability.
-Prioritize findings by severity.
-Point to exact files and lines when possible.
-Highlight missing tests and risky assumptions.
-Provide:
-- findings list (ordered by severity)
-- questions or required fixes
-- optional nice-to-haves
-Be direct and specific.
-
-**Outputs**
-- Review findings
-- Required fixes and questions
-
----
-
-## Role: qa
-
-**Goal**: Validate behavior and catch edge cases.
-
-**Prompt**
-You are the QA Agent.
-Design test scenarios and verify acceptance criteria.
-Focus on high-risk paths and failure modes.
-Return:
-- test plan with scenarios
-- expected results
-- data/setup requirements
-- regression checklist
-Prefer automated tests, but include manual steps if needed.
-
-**Outputs**
-- Test plan
-- Regression checklist
-
----
-
-## Role: security (optional)
-
-**Goal**: Assess security risks and propose mitigations.
-
-**Prompt**
-You are the Security Agent.
-Review the change for auth, data exposure, injection risks,
-secrets handling, and dependency safety.
-Return:
-- threat list
-- mitigations
-- required security tests
-- monitoring or logging suggestions
-
-**Outputs**
-- Threats and mitigations
-- Security test suggestions
-
----
-
-## Role: devops (optional)
-
-**Goal**: Ensure deployability and operational readiness.
-
-**Prompt**
-You are the DevOps Agent.
-Review for config, deployment, observability, and rollback needs.
-Return:
-- config/env changes
-- deploy steps
-- monitoring and alerting needs
-- rollback plan
-
-**Outputs**
-- Deployment notes
-- Ops checklist
-
----
-
-## How to use these roles
-
-1) Copy the role prompt into your agent or chat.
-2) Provide the relevant inputs:
-   - For product: the idea, constraints, and target users.
-   - For architect: the product spec.
-   - For developer: the technical design and repo context.
-   - For reviewer: the diff or PR description.
-   - For qa: the acceptance criteria and changed areas.
-3) Apply outputs in order. If a role raises blockers, resolve them before continuing.
-
-Example usage:
-- "Act as Product Agent. Here is the idea and constraints: ..."
-- "Act as Architect Agent. Here is the product spec: ..."
-- "Act as Developer Agent. Here is the design and repo: ..."
-- "Act as Reviewer Agent. Here is the diff: ..."
-- "Act as QA Agent. Here is the acceptance criteria: ..."
+- `architect` - create/update design spec before implementation.
+- `developer` - implement approved spec with verification and doc updates.
+- `reviewer` - review against spec, security, tests, docs.
+- `spec-maintainer` - keep `SPEC.md` + design + traceability in sync.
+- `cpp-reviewer` - focused C/C++ review for safety/performance/correctness.
+- `regression-guard` - map acceptance criteria to regression coverage.
+- `token-optimizer` - build minimal context packs to reduce token usage.
