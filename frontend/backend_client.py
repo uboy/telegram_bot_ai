@@ -14,6 +14,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import httpx
+import time
 
 from shared.logging_config import logger
 
@@ -35,6 +36,29 @@ class BackendClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{self.api_prefix}{path}"
 
+    def _request_with_retry(self, method: str, url: str, max_retries: int = 10, **kwargs) -> httpx.Response:
+        """Выполнить запрос с повторными попытками при ошибках соединения."""
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                with httpx.Client(**kwargs) as client:
+                    resp = client.request(method, url)
+                    resp.raise_for_status()
+                    return resp
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                last_exception = e
+                # Если бэкенд еще запускается, подождем немного (экспоненциальная задержка)
+                wait_time = min((attempt + 1) * 2, 10)
+                logger.warning("Бэкенд недоступен (попытка %s/%s), жду %s сек: %s", 
+                               attempt + 1, max_retries, wait_time, e)
+                time.sleep(wait_time)
+            except Exception as e:
+                # Другие ошибки не ретраим, а прокидываем выше
+                raise e
+        
+        # Если все попытки исчерпаны
+        raise last_exception or RuntimeError(f"Не удалось подключиться к {url} после {max_retries} попыток")
+
     # === Аутентификация / пользователи ===
 
     def auth_telegram(self, telegram_id: str, username: str | None, full_name: str | None) -> Dict[str, Any]:
@@ -49,12 +73,10 @@ class BackendClient:
         }
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
-                resp = client.post(url, params=payload)
-                resp.raise_for_status()
-                return resp.json()
+            resp = self._request_with_retry("POST", url, params=payload, timeout=self.timeout, headers=headers)
+            return resp.json()
         except Exception as e:  # noqa: BLE001
-            logger.error("Ошибка при auth_telegram в backend: %s", e, exc_info=True)
+            logger.error("Ошибка при auth_telegram в backend: %s", e)
             return {}
 
     def rag_query(
@@ -497,12 +519,10 @@ class BackendClient:
         url = self._url("/knowledge-bases/")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
-                resp = client.get(url)
-                resp.raise_for_status()
-                return resp.json()
+            resp = self._request_with_retry("GET", url, timeout=self.timeout, headers=headers)
+            return resp.json()
         except Exception as e:  # noqa: BLE001
-            logger.error("Ошибка при обращении к backend (knowledge-bases): %s", e, exc_info=True)
+            logger.error("Ошибка при обращении к backend (knowledge-bases): %s", e)
             return []
 
     def list_knowledge_sources(self, kb_id: int) -> List[Dict[str, Any]]:
@@ -805,5 +825,3 @@ class BackendClient:
 
 # Глобальный экземпляр клиента для использования в боте
 backend_client = BackendClient()
-
-

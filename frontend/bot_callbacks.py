@@ -31,6 +31,7 @@ from frontend.templates.buttons import (
     search_options_menu,
     search_filters_menu,
     summary_mode_menu,
+    asr_models_menu,
 )
 from frontend.backend_client import backend_client
 try:
