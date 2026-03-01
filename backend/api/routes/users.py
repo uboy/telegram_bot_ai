@@ -29,6 +29,7 @@ def list_users(db: Session = Depends(get_db_dep)) -> list[UserOut]:
             phone=getattr(u, "phone", None),
             role=u.role or "user",
             approved=bool(u.approved),
+            show_asr_metadata=bool(getattr(u, "show_asr_metadata", True)),
         )
         for u in users
     ]
@@ -64,6 +65,40 @@ def toggle_user_role(user_id: int, db: Session = Depends(get_db_dep)) -> UserOut
         phone=getattr(user, "phone", None),
         role=user.role or "user",
         approved=bool(user.approved),
+        show_asr_metadata=bool(getattr(user, "show_asr_metadata", True)),
+    )
+
+
+@router.put(
+    "/{telegram_id}/settings",
+    response_model=UserOut,
+    summary="Обновить настройки пользователя",
+    dependencies=[Depends(require_api_key)],
+)
+def update_user_settings(
+    telegram_id: str,
+    payload: dict,
+    db: Session = Depends(get_db_dep)
+) -> UserOut:
+    user = db.query(User).filter_by(telegram_id=telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if "show_asr_metadata" in payload:
+        user.show_asr_metadata = bool(payload["show_asr_metadata"])
+
+    db.commit()
+    db.refresh(user)
+
+    return UserOut(
+        id=user.id,
+        telegram_id=user.telegram_id,
+        username=user.username,
+        full_name=getattr(user, "full_name", None),
+        phone=getattr(user, "phone", None),
+        role=user.role or "user",
+        approved=bool(user.approved),
+        show_asr_metadata=bool(getattr(user, "show_asr_metadata", True)),
     )
 
 

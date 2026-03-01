@@ -84,6 +84,7 @@ def auth_telegram(
         phone=getattr(user, "phone", None),
         role=user.role or "user",
         approved=bool(user.approved),
+        show_asr_metadata=getattr(user, "show_asr_metadata", True),
     )
 
 

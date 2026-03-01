@@ -31,7 +31,10 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Handle `/start`, text queries, document uploads, and images.
   - Provide menus for: KB search, web search, ask AI, settings.
   - Admin menu for users/KBs/ingestion/AI settings.
-  - **ASR visibility control: users can toggle technical metadata display in their settings.**
+  - ASR visibility control: users can toggle technical metadata display in their settings.
+  - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
+  - **GPU Acceleration: automatic detection and utilization of NVIDIA GPUs (RTX 3090 support) inside Docker containers.**
+
 - Backend API:
   - Auth by telegram_id and API key (`X-API-Key`).
   - CRUD for users and knowledge bases.
@@ -88,8 +91,12 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Command snippets in answers are filtered to those present in KB context.
 - Web search uses DuckDuckGo and returns summarized results with source links.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
-- **ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.**
+- ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
+- **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**
+- **ASR Engine selection: admins can switch between standard `transformers` and `faster-whisper` via bot settings.**
+- **Docker Infrastructure: GPU libraries (CUDA/cuDNN) are correctly integrated and visible to AI engines.**
 - Backend enforces API key header when configured.
+
 - n8n receives `knowledge_import` events with KB id/name, source type, and stats.
 - Docker Compose starts bot, backend, db, redis, and n8n with externalized data.
 - Supported AI providers are configurable via env and available through unified provider management.

@@ -10,3 +10,4 @@ class UserOut(BaseModel):
     phone: Optional[str] = None
     role: str
     approved: bool
+    show_asr_metadata: bool = True

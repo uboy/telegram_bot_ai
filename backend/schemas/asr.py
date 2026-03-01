@@ -23,6 +23,7 @@ class AsrSettings(BaseModel):
     asr_model_name: str
     asr_device: Optional[str] = None
     show_asr_metadata: bool = True
+    system_info: Optional[dict] = None
 
 
 class AsrSettingsUpdate(BaseModel):

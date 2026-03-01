@@ -344,16 +344,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             user_db = session.query(User).filter_by(telegram_id=user_id).first()
             if user_db:
-                user_db.show_asr_metadata = not user_db.show_asr_metadata
+                new_val = not user_db.show_asr_metadata
+                user_db.show_asr_metadata = new_val
                 session.commit()
-                show_meta = user_db.show_asr_metadata
+                
+                # Синхронизируем с backend
+                await asyncio.to_thread(
+                    backend_client.update_user_settings,
+                    telegram_id=user_id,
+                    settings={"show_asr_metadata": new_val}
+                )
+                
+                status_text = "ВКЛЮЧЕН" if new_val else "ВЫКЛЮЧЕН"
+                await query.answer(f"✅ Показ тех. инфо: {status_text}", show_alert=False)
+                
                 await safe_edit_message_text(
                     query, 
-                    f"⚙️ Настройки:\n\nТехническая информация ASR: {'ВКЛ' if show_meta else 'ВЫКЛ'}", 
-                    reply_markup=settings_menu(show_asr_metadata=show_meta)
+                    f"⚙️ <b>Настройки:</b>\n\nТехническая информация ASR: <b>{status_text}</b>", 
+                    reply_markup=settings_menu(show_asr_metadata=new_val),
+                    parse_mode='HTML'
                 )
             else:
-                await query.answer("Пользователь не найден")
+                await query.answer("❌ Пользователь не найден")
         finally:
             session.close()
         return
@@ -1056,16 +1068,36 @@ def _build_users_page_keyboard(users, page: int, page_size: int = 5) -> InlineKe
 
 
 async def handle_admin_callbacks(query, context, data: str, user: dict):
-    """Обработка админских callback'ов
-    
-    ВАЖНО: user - это dict с данными пользователя, не ORM объект.
-    Права пользователя/approved берём только из backend, локальная БД — кэш.
-    """
+    """Обработка админских callback'ов"""
+    logger.debug("Admin callback received: data=%s, user_id=%s", data, user.get("telegram_id"))
     
     # Админ-меню
     if data == 'admin_menu':
         await safe_edit_message_text(query, "👨‍💼 Админ-панель:", reply_markup=admin_menu())
         return
+
+    # Глобальные настройки ASR (вынесено в начало для гарантированного срабатывания)
+    if data == 'toggle_global_asr_metadata':
+        logger.info("Toggling global ASR metadata status...")
+        try:
+            settings = await asyncio.to_thread(backend_client.get_asr_settings)
+            current_show = bool(settings.get("show_asr_metadata", True))
+            new_show = not current_show
+            
+            await asyncio.to_thread(
+                backend_client.update_asr_settings,
+                {"show_asr_metadata": new_show}
+            )
+            
+            await query.answer(f"✅ Глобальный показ: {'ВКЛ' if new_show else 'ВЫКЛ'}")
+            logger.info("Global ASR metadata toggled to: %s", new_show)
+            
+            # Обновляем меню (код отрисовки)
+            data = 'admin_asr' 
+        except Exception as e:
+            logger.error("Error in toggle_global_asr_metadata: %s", e, exc_info=True)
+            await query.answer("❌ Ошибка при обновлении настроек")
+            return
     
     # Управление пользователями
     if data == 'admin_users':
@@ -1938,19 +1970,68 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         provider = settings.get("asr_provider", "transformers")
         model = settings.get("asr_model_name", "openai/whisper-large-v3-turbo")
         device = settings.get("asr_device") or "auto"
-        show_meta = settings.get("show_asr_metadata", True)
+        show_meta = bool(settings.get("show_asr_metadata", True))
+        sys_info = settings.get("system_info") or {}
+        
+        # Формируем описание железа
+        hw_lines = []
+        if sys_info.get("device_type") == "cuda":
+            hw_lines.append(f"🖥️ <b>GPU:</b> {sys_info.get('gpu_info', 'Unknown')}")
+            hw_lines.append(f"📟 <b>VRAM:</b> {sys_info.get('vram_free', 0)} / {sys_info.get('vram_total', 0)} MB")
+        else:
+            hw_lines.append(f"💻 <b>CPU:</b> {sys_info.get('cpu_info', 'Unknown')}")
+        
+        hw_text = "\n".join(hw_lines)
+        status_text = "ВКЛ" if show_meta else "ВЫКЛ"
         
         text = (
-            "🎙️ Настройки распознавания речи\n\n"
-            f"Провайдер: {provider}\n"
-            f"Текущая модель: <code>{model}</code>\n"
-            f"Устройство: {device}\n"
-            f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
-            "Выберите модель из списка или введите свое название."
+            "🎙️ <b>Настройки распознавания речи</b>\n\n"
+            f"⚙️ Движок: <code>{provider}</code>\n"
+            f"📦 Модель: <code>{model}</code>\n"
+            f"{hw_text}\n"
+            f"🔔 Глобальный показ тех. инфо: <b>{status_text}</b>\n\n"
+            "Движок <b>faster-whisper</b> работает значительно быстрее на GPU."
         )
         
         asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
         keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Сменить движок (Engine)", callback_data='asr_toggle_engine')],
+            [InlineKeyboardButton("✏️ Выбрать модель", callback_data='asr_select_model_list')],
+            [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
+            [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
+        ])
+        await safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode='HTML')
+        return
+
+    if data == 'asr_toggle_engine':
+        settings = await asyncio.to_thread(backend_client.get_asr_settings)
+        current_provider = settings.get("asr_provider", "transformers")
+        new_provider = "faster-whisper" if current_provider == "transformers" else "transformers"
+        
+        await asyncio.to_thread(
+            backend_client.update_asr_settings,
+            {"asr_provider": new_provider}
+        )
+        
+        await query.answer(f"✅ Движок изменен на {new_provider}")
+        # Возвращаемся в меню
+        settings = await asyncio.to_thread(backend_client.get_asr_settings)
+        provider = settings.get("asr_provider", "transformers")
+        model = settings.get("asr_model_name", "openai/whisper-large-v3-turbo")
+        device = settings.get("asr_device") or "auto"
+        show_meta = settings.get("show_asr_metadata", True)
+        
+        text = (
+            "🎙️ <b>Настройки распознавания речи</b>\n\n"
+            f"Движок (Engine): <code>{provider}</code>\n"
+            f"Текущая модель: <code>{model}</code>\n"
+            f"Устройство: <code>{device}</code>\n"
+            f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
+            "✅ Движок успешно обновлен!"
+        )
+        asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Сменить движок (Engine)", callback_data='asr_toggle_engine')],
             [InlineKeyboardButton("✏️ Выбрать модель", callback_data='asr_select_model_list')],
             [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
             [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],
@@ -1989,15 +2070,16 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             device = settings.get("asr_device") or "auto"
             show_meta = settings.get("show_asr_metadata", True)
             text = (
-                "🎙️ Настройки распознавания речи\n\n"
-                f"Провайдер: {provider}\n"
+                "🎙️ <b>Настройки распознавания речи</b>\n\n"
+                f"Движок (Engine): <code>{provider}</code>\n"
                 f"Текущая модель: <code>{model}</code>\n"
                 f"Устройство: {device}\n"
-                f"Глобальный показ тех. инфо: {'ВКЛ' if show_meta else 'ВЫКЛ'}\n\n"
+                f"Глобальный показ тех. инфо: <b>{'ВКЛ' if show_meta else 'ВЫКЛ'}</b>\n\n"
                 "✅ Модель успешно обновлена!"
             )
             asr_meta_label = "✅ Глобальное тех. инфо" if show_meta else "⚪ Глобальное тех. инфо"
             keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Сменить движок (Engine)", callback_data='asr_toggle_engine')],
                 [InlineKeyboardButton("✏️ Выбрать модель", callback_data='asr_select_model_list')],
                 [InlineKeyboardButton(asr_meta_label, callback_data='toggle_global_asr_metadata')],
                 [InlineKeyboardButton("🔙 Админ-меню", callback_data='admin_menu')],

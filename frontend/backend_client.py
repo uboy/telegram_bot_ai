@@ -639,6 +639,19 @@ class BackendClient:
             logger.error("Ошибка при удалении пользователя %s через backend: %s", user_id, e, exc_info=True)
             return False
 
+    def update_user_settings(self, telegram_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Обновить настройки пользователя через backend."""
+        url = self._url(f"/users/{telegram_id}/settings")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.put(url, json=settings)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при обновлении настроек пользователя %s через backend: %s", telegram_id, e, exc_info=True)
+            return {}
+
     def clear_knowledge_base(self, kb_id: int) -> bool:
         """Очистить базу знаний через backend."""
         url = self._url(f"/knowledge-bases/{kb_id}/clear")

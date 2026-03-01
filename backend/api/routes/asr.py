@@ -160,11 +160,19 @@ def get_asr_settings() -> AsrSettings:
             session.add(settings)
             session.commit()
             session.refresh(settings)
+        
+        # Гарантируем наличие значения
+        show_meta = bool(settings.show_asr_metadata) if settings.show_asr_metadata is not None else True
+        
+        from backend.services.asr_worker import get_system_info
+        sys_info = get_system_info()
+        
         return AsrSettings(
             asr_provider=settings.asr_provider or "transformers",
             asr_model_name=settings.asr_model_name or "openai/whisper-large-v3-turbo",
             asr_device=settings.asr_device or None,
-            show_asr_metadata=getattr(settings, "show_asr_metadata", True),
+            show_asr_metadata=show_meta,
+            system_info=sys_info,
         )
     finally:
         session.close()
@@ -211,11 +219,18 @@ def update_asr_settings(payload: AsrSettingsUpdate) -> AsrSettings:
 
         session.commit()
         session.refresh(settings)
+        
+        show_meta = bool(settings.show_asr_metadata) if settings.show_asr_metadata is not None else True
+        
+        from backend.services.asr_worker import get_system_info
+        sys_info = get_system_info()
+        
         return AsrSettings(
             asr_provider=settings.asr_provider or "transformers",
             asr_model_name=settings.asr_model_name or "openai/whisper-large-v3-turbo",
             asr_device=settings.asr_device or None,
-            show_asr_metadata=getattr(settings, "show_asr_metadata", True),
+            show_asr_metadata=show_meta,
+            system_info=sys_info,
         )
     finally:
         session.close()
