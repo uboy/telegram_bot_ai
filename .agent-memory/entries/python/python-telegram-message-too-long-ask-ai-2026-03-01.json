@@ -1,0 +1,16 @@
+{
+  "id": "python-telegram-message-too-long-ask-ai-2026-03-01",
+  "technology": "python-telegram-bot",
+  "skills": ["developer", "spec-maintainer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "In direct AI mode, validate empty input and never send potentially oversized model output as a single Telegram message. Use safe chunking fallback (plain text) to prevent `Message is too long` errors.",
+  "source_links": [
+    "frontend/bot_handlers.py",
+    "tests/test_bot_text_ai_mode.py",
+    "docs/design/ask-ai-message-limits-v1.md"
+  ],
+  "recorded_on": "2026-03-01",
+  "last_verified_on": "2026-03-01",
+  "verify_after_days": 30,
+  "status": "active"
+}

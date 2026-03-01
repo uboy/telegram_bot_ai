@@ -202,6 +202,9 @@ REDIS_PORT=6379
 # RAG_CONTEXT_LENGTH=1200  # Максимальная длина контекста на источник в символах
 # RAG_ENABLE_CITATIONS=true  # Включить inline citations [source_id] в ответах ИИ
 
+# Hugging Face (опционально, для gated/private моделей и лимитов API)
+# HF_TOKEN=hf_xxx
+
 # Интеграция с n8n (опционально — уже настроено по умолчанию)
 # N8N_BASE_URL=http://n8n:5678          # можно переопределить внешний адрес
 # N8N_DEFAULT_WEBHOOK=bot-events       # предустановленный путь вебхука
@@ -298,6 +301,15 @@ python -m frontend.bot
 ```bash
 docker-compose up -d --build
 ```
+
+Рекомендуемый запуск с авто-выбором DB режима:
+
+```bash
+python scripts/start_stack.py
+```
+
+- При заданном `MYSQL_URL` launcher включает compose-profile `mysql` и поднимает `db`.
+- Если `MYSQL_URL` не задан, MySQL контейнер не запускается (SQLite режим).
 
 Будут подняты сервисы:
 

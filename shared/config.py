@@ -31,6 +31,16 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
 # Фильтровать thinking tokens из ответов reasoning моделей (deepseek-r1, qwen3 и т.д.)
 OLLAMA_FILTER_THINKING = os.getenv("OLLAMA_FILTER_THINKING", "true").lower() == "true"
 
+# Hugging Face token (optional): allows access to gated/private models and higher rate limits.
+HF_TOKEN = (
+    os.getenv("HF_TOKEN", "").strip()
+    or os.getenv("HUGGINGFACE_HUB_TOKEN", "").strip()
+)
+if HF_TOKEN:
+    # Normalize aliases expected by different HF libraries.
+    os.environ["HF_TOKEN"] = HF_TOKEN
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = HF_TOKEN
+
 # Admin Configuration
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
 if ADMIN_IDS_STR:

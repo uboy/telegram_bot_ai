@@ -22,6 +22,9 @@ Source: `SPEC.md` acceptance criteria.
 | AC-16 | Robust Docker GPU support: NVIDIA runtimes integrated into slim image | `Dockerfile`, `requirements.txt` | `scripts/test_asr_engines.py` | PASS |
 | AC-17 | Direct AI mode works from reply keyboard and supports text + voice/audio (`ASR -> AI`) | `frontend/bot_handlers.py` | `tests/test_bot_text_ai_mode.py`, `tests/test_bot_voice.py`, `tests/test_bot_audio.py` | PASS |
 | AC-18 | Direct AI mode validates empty input and safely delivers long AI responses without Telegram length errors | `frontend/bot_handlers.py` | `tests/test_bot_text_ai_mode.py` | PASS |
+| AC-19 | Optional HF token is loaded from env and available under both `HF_TOKEN` and `HUGGINGFACE_HUB_TOKEN` aliases | `shared/config.py` | `tests/test_config_hf_token.py` | PASS |
+| AC-20 | SQLite WAL status check is SQLAlchemy 2.x compatible (no raw-string execute call) | `shared/database.py` | `python -m py_compile shared/database.py` + startup log verification | PASS |
+| AC-21 | Startup launcher enables MySQL service only when `MYSQL_URL` is configured | `scripts/start_stack.py`, `docker-compose.yml` | `tests/test_start_stack.py`, manual `--dry-run` verification | PASS |
 
 ## Gaps to close
 

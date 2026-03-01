@@ -19,6 +19,15 @@
 .venv\Scripts\python -m frontend.bot
 ```
 
+### Docker compose (умный запуск)
+
+```bash
+python scripts/start_stack.py
+```
+
+- Если в `.env` задан `MYSQL_URL`, launcher поднимет профиль `mysql` (включая `db`).
+- Если `MYSQL_URL` пустой/не задан, `db` контейнер не будет запускаться.
+
 ## Пользовательские функции
 
 - Поиск по базе знаний (`/rag/query` через UI).

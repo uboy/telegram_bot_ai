@@ -37,6 +37,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - ASR visibility control: users can toggle technical metadata display in their settings.
   - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
   - **GPU Acceleration: automatic detection and utilization of NVIDIA GPUs (RTX 3090 support) inside Docker containers.**
+  - Optional Hugging Face token (`HF_TOKEN`) is supported for gated/private model access and startup model loading.
 
 - Backend API:
   - Auth by telegram_id and API key (`X-API-Key`).
@@ -59,12 +60,14 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Integration:
   - n8n webhook events for ingestion actions.
   - Multi-provider AI access with configurable defaults and model selection.
+  - Stack startup checks DB configuration and enables MySQL service only when `MYSQL_URL` is configured.
 
 ## Non-functional requirements
 - Reliability: bot and backend recover gracefully from ingestion or model errors.
 - Latency: interactive responses for typical KB sizes (seconds, not minutes).
 - Configurability: all operational settings via `.env` and DB-stored KB settings.
 - Security: API key for bot → backend, admin ID allowlist, no secrets in code.
+- Operational resilience: startup should not fail due SQLAlchemy 2.x raw SQL execution API incompatibilities in SQLite WAL checks.
 - Governance: feature/bugfix changes must keep specs and traceability docs up to date.
 - Portability: run via Docker Compose or locally with minimal setup.
 - Observability: structured logs to file and stdout; error notifications to admins.
@@ -101,9 +104,12 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - **ASR Engine selection: admins can switch between standard `transformers` and `faster-whisper` via bot settings.**
 - **Docker Infrastructure: GPU libraries (CUDA/cuDNN) are correctly integrated and visible to AI engines.**
 - Backend enforces API key header when configured.
+- `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` from env is loaded at startup and available to Hugging Face libraries.
+- SQLite WAL check runs without SQLAlchemy `Not an executable object` warning.
 
 - n8n receives `knowledge_import` events with KB id/name, source type, and stats.
 - Docker Compose starts bot, backend, db, redis, and n8n with externalized data.
+- Smart startup launcher (`scripts/start_stack.py`) starts MySQL profile only when `MYSQL_URL` is configured; otherwise stack runs without `db` service.
 - Supported AI providers are configurable via env and available through unified provider management.
 - Any feature/bugfix that changes behavior updates `SPEC.md`, related design spec, and `docs/REQUIREMENTS_TRACEABILITY.md` in the same task.
 

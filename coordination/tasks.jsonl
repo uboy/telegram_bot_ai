@@ -1,0 +1,4 @@
+{"id":"INFRA-001","title":"Research warnings root causes (WAL, Redis, n8n, MySQL) and runtime DB mode","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-01"}
+{"id":"INFRA-002","title":"Implement safe runtime fixes in code/config/compose","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
+{"id":"INFRA-003","title":"Update docs/spec/traceability for infra and config changes","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-01"}
+{"id":"INFRA-004","title":"Verification: tests/compile/secret scan + docker config sanity","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-01"}

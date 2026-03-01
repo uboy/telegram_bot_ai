@@ -1,0 +1,17 @@
+{
+  "id": "docker-compose-conditional-mysql-profile-launcher-2026-03-01",
+  "technology": "docker-compose-python",
+  "skills": ["developer", "spec-maintainer", "reviewer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "When app supports both SQLite and MySQL, avoid unconditional db startup by putting MySQL under compose profile and selecting it via startup launcher based on MYSQL_URL presence.",
+  "source_links": [
+    "docker-compose.yml",
+    "scripts/start_stack.py",
+    "tests/test_start_stack.py",
+    "docs/design/conditional-mysql-startup-v1.md"
+  ],
+  "recorded_on": "2026-03-01",
+  "last_verified_on": "2026-03-01",
+  "verify_after_days": 30,
+  "status": "active"
+}

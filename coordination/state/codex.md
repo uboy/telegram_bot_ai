@@ -1,0 +1,14 @@
+# codex state
+- date: 2026-03-01
+- role: reviewer + spec-maintainer
+- current_step: done
+- summary:
+  - Added conditional MySQL startup with compose profile + smart launcher.
+  - Kept MySQL support in codebase; startup now respects config mode.
+  - Updated runtime warning hardening, HF token config, and docs/traceability.
+- verification:
+  - pytest tests/test_start_stack.py tests/test_config_hf_token.py -> PASS (7 passed)
+  - python -m py_compile scripts/start_stack.py shared/config.py shared/database.py tests/test_start_stack.py tests/test_config_hf_token.py -> PASS
+  - python scripts/scan_secrets.py -> PASS
+  - python scripts/start_stack.py --dry-run -> MySQL mode when MYSQL_URL present
+  - python scripts/start_stack.py --dry-run --env-file .env.nonexistent -> SQLite mode without mysql profile

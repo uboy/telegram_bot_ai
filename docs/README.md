@@ -12,6 +12,7 @@
 - **[TESTING.md](TESTING.md)** - стратегия тестирования и команды запуска.
 - **[OPERATIONS.md](OPERATIONS.md)** - runbook запуска/диагностики/отката.
 - **[REQUIREMENTS_TRACEABILITY.md](REQUIREMENTS_TRACEABILITY.md)** - трассировка требований к реализации и тестам.
+- **[FEATURE_COVERAGE_AUDIT.md](FEATURE_COVERAGE_AUDIT.md)** - аудит покрытия архитектуры, требований и тестов.
 
 ## Design Specs (`docs/design/`)
 
@@ -23,6 +24,10 @@
 - `kb-settings-api-v1.md` - APPROVED:v1
 - `rag-summary-modes-v1.md` - APPROVED:v1
 - `codebase-ingestion-v1.md` - APPROVED:v1
+- `ask-ai-voice-handoff-v1.md` - implementation design
+- `ask-ai-message-limits-v1.md` - bugfix design
+- `runtime-warnings-config-hardening-v1.md` - runtime/config hardening design
+- `conditional-mysql-startup-v1.md` - startup profile selection design
 
 ## Templates (`docs/templates/`)
 

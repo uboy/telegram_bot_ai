@@ -11,6 +11,7 @@
 
 - Для MySQL задайте `MYSQL_URL`.
 - Для SQLite задайте `DB_PATH` и не задавайте `MYSQL_URL`.
+- Если `MYSQL_URL` не задан, приложение по умолчанию использует SQLite файл в `BOT_DATA_DIR/db/bot_database.db`.
 
 ## Что хранится
 

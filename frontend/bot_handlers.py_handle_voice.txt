@@ -1,0 +1,176 @@
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик голосовых сообщений (ASR)."""
+    user = await check_user(update)
+    if not user:
+        return
+
+    voice = update.message.voice if update.message else None
+    if not voice:
+        return
+
+    status_message = await update.message.reply_text(
+        "🎙️ Получено голосовое сообщение. Ставлю в очередь на распознавание..."
+    )
+    
+    def _size_limit_message(file_size: int, limit_bytes: int, is_telegram_limit: bool) -> str:
+        header = "❌ Аудио слишком большое для распознавания.
+"
+        if is_telegram_limit:
+            header = (
+                "❌ Бот не может скачать файл больше 20MB из Telegram.
+"
+                "Пожалуйста, отправьте файл меньше 20MB.
+"
+            )
+        return (
+            f"{header}"
+            f"Лимит: {limit_bytes} байт
+"
+            f"Размер файла: {file_size} байт"
+        )
+
+    try:
+        backend_limit = get_asr_max_file_bytes()
+        telegram_limit = get_telegram_file_max_bytes()
+        effective_limit = min(backend_limit, telegram_limit)
+        is_telegram_limit = effective_limit == telegram_limit
+        if voice.file_size and voice.file_size > effective_limit:
+            await update.message.reply_text(
+                _size_limit_message(voice.file_size, effective_limit, is_telegram_limit)
+            )
+            return
+
+        file = await context.bot.get_file(voice.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        tg_id = str(update.effective_user.id) if update.effective_user else ""
+        msg_id = str(update.message.message_id) if update.message else ""
+        message_date = None
+        if update.message and update.message.date:
+            try:
+                message_date = update.message.date.isoformat()
+            except Exception:
+                message_date = None
+        content_type = getattr(voice, "mime_type", None) or "audio/ogg"
+
+        logger.info("ASR voice upload: file_id=%s mime_type=%s", voice.file_id, content_type)
+
+        result = await asyncio.to_thread(
+            backend_client.asr_transcribe,
+            file_name=f"{voice.file_id}.ogg",
+            file_bytes=bytes(file_bytes),
+            telegram_id=tg_id,
+            message_id=msg_id,
+            language=None,
+            message_date=message_date,
+            content_type=content_type,
+        )
+        job_id = result.get("job_id")
+        if not job_id:
+            error_payload = result.get("error_payload") or {}
+            error_detail = error_payload.get("error") if isinstance(error_payload, dict) else None
+            if isinstance(error_detail, dict):
+                message = error_detail.get("message") or "Не удалось создать задачу распознавания."
+                limit_bytes = error_detail.get("limit_bytes")
+                size_bytes = error_detail.get("size_bytes")
+                if limit_bytes and size_bytes:
+                    message = (
+                        f"❌ {message}
+"
+                        f"Лимит: {limit_bytes} байт
+"
+                        f"Размер файла: {size_bytes} байт"
+                    )
+                else:
+                    message = f"❌ {message}"
+            else:
+                message = "❌ Не удалось создать задачу распознавания. Попробуйте позже."
+            await status_message.edit_text(message)
+            return
+
+        queue_position = result.get("queue_position")
+        await status_message.edit_text(
+            f"⏳ В очереди на распознавание. Позиция: {queue_position or '?'}.
+Job ID: {job_id}"
+        )
+
+        last_status = "queued"
+        # Увеличиваем время ожидания до 10 минут (300 итераций по 2 сек)
+        # так как тяжелые модели могут обрабатывать аудио долго
+        for _ in range(300):
+            await asyncio.sleep(2)
+            job = await asyncio.to_thread(backend_client.asr_job_status, job_id)
+            status = job.get("status")
+            if not status:
+                continue
+            if status != last_status and status == "processing":
+                try:
+                    await status_message.edit_text(f"🛠️ Распознаю сообщение...
+Job ID: {job_id}")
+                except Exception:
+                    pass
+                last_status = status
+            if status == "done":
+                text = (job.get("text") or "").strip()
+                audio_meta = job.get("audio_meta") or {}
+                
+                # Формируем тех. информацию
+                meta_block = ""
+                if user.show_asr_metadata:
+                    meta_lines = []
+                    # Используем file_id если нет имени
+                    orig_name = audio_meta.get("original_name") or voice.file_id
+                    duration_s = audio_meta.get("duration_s")
+                    size_bytes = audio_meta.get("size_bytes")
+                    sample_rate = audio_meta.get("sample_rate")
+                    channels = audio_meta.get("channels")
+                    sent_at = audio_meta.get("sent_at")
+                    
+                    if orig_name:
+                        meta_lines.append(f"Файл: {escape(orig_name)}")
+                    if duration_s:
+                        meta_lines.append(f"Длительность: {duration_s:.1f}с")
+                    if size_bytes:
+                        meta_lines.append(f"Размер: {size_bytes} байт")
+                    if sample_rate:
+                        meta_lines.append(f"Частота: {sample_rate} Гц")
+                    if channels:
+                        meta_lines.append(f"Каналы: {channels}")
+                    if sent_at:
+                        meta_lines.append(f"Отправлено: {escape(str(sent_at))}")
+                    
+                    if meta_lines:
+                        meta_content = "
+".join(meta_lines)
+                        meta_block = f"
+
+<blockquote expandable>{meta_content}</blockquote>"
+
+                if text:
+                    message_text = f"📝 <b>Транскрипция</b>
+
+{escape(text)}{meta_block}"
+                    await update.message.reply_text(message_text, parse_mode='HTML')
+                else:
+                    await update.message.reply_text("⚠️ Распознавание завершилось без текста.")
+                return
+            if status == "error":
+                error = job.get("error") or "Неизвестная ошибка"
+                await update.message.reply_text(f"❌ Ошибка распознавания: {error}")
+                return
+
+        await update.message.reply_text(
+            f"⏳ Распознавание продолжается. Попробуйте позже. Job ID: {job_id}"
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("Ошибка в handle_voice: %s", e, exc_info=True)
+        if voice and "File is too big" in str(e) and voice.file_size:
+            backend_limit = get_asr_max_file_bytes()
+            telegram_limit = get_telegram_file_max_bytes()
+            effective_limit = min(backend_limit, telegram_limit)
+            is_telegram_limit = effective_limit == telegram_limit
+            await update.message.reply_text(
+                _size_limit_message(voice.file_size, effective_limit, is_telegram_limit)
+            )
+        else:
+            await update.message.reply_text(f"❌ Ошибка обработки голосового сообщения: {str(e)}")

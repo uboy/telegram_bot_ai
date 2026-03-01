@@ -1,0 +1,17 @@
+{
+  "id": "python-telegram-ask-ai-reply-button-state-routing-2026-03-01",
+  "technology": "python-telegram-bot",
+  "skills": ["developer", "spec-maintainer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "When a reply-keyboard text command is added (e.g. '🤖 Задать вопрос ИИ'), handle_text must include explicit branch mapping this text to state transitions; otherwise fallback flows may trigger /start-like welcome responses. For AI mode, voice/audio handlers must check 'waiting_ai_query' and route transcript to AI.",
+  "source_links": [
+    "frontend/bot_handlers.py",
+    "tests/test_bot_text_ai_mode.py",
+    "tests/test_bot_voice.py",
+    "tests/test_bot_audio.py"
+  ],
+  "recorded_on": "2026-03-01",
+  "last_verified_on": "2026-03-01",
+  "verify_after_days": 30,
+  "status": "active"
+}

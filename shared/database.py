@@ -366,7 +366,7 @@ if 'sqlite' in db_url:
     # Также проверить и включить WAL при первом подключении
     try:
         with engine.connect() as conn:
-            result = conn.execute("PRAGMA journal_mode").fetchone()
+            result = conn.execute(text("PRAGMA journal_mode")).fetchone()
             if result and result[0].upper() != 'WAL':
                 logger.warning(f"SQLite WAL режим не включен, текущий режим: {result[0]}")
             else:

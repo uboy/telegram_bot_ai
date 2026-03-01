@@ -11,6 +11,7 @@ Copy-Item env.template .env
 - `TELEGRAM_BOT_TOKEN`
 - `ADMIN_IDS`
 - `MYSQL_URL` или `DB_PATH`
+  - Для docker launcher (`scripts/start_stack.py`) `MYSQL_URL` используется как переключатель профиля MySQL.
 
 3. Для защищённого режима задайте:
 - `BACKEND_API_KEY`
@@ -31,6 +32,7 @@ Copy-Item env.template .env
 - `RAG_CONTEXT_LENGTH`
 - `RAG_CHUNK_SIZE`
 - `RAG_CHUNK_OVERLAP`
+- `HF_TOKEN` (опционально, для gated/private моделей Hugging Face и лимитов API)
 
 ### AI providers
 - Ollama:
