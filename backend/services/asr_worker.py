@@ -28,6 +28,7 @@ _engine_lock = threading.Lock()
 
 _workers_started = False
 _workers_lock = threading.Lock()
+_worker_provider = "transformers"
 
 
 class ASREngine(Protocol):
@@ -232,7 +233,49 @@ def _get_settings() -> tuple[str, str, str]:
         session.close()
 
 
-def _worker_loop(worker_id: int):
+def _get_worker_devices(requested_workers: int, gpu_count: Optional[int]) -> list[str]:
+    """Compatibility helper used by tests and startup planning."""
+    workers = int(requested_workers or 0)
+    if workers <= 0:
+        return ["cpu"]
+    count = int(gpu_count) if gpu_count is not None else workers
+    count = max(0, min(workers, count))
+    if count <= 0:
+        return ["cpu"]
+    return [f"cuda:{idx}" for idx in range(count)]
+
+
+def _ensure_ffmpeg_available(input_path: str) -> None:
+    """Require ffmpeg when input likely needs conversion (e.g. ogg/mp3/m4a)."""
+    ext = os.path.splitext((input_path or "").lower())[1]
+    if ext in (".wav", ".flac"):
+        return
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg is required to process this audio format")
+
+
+def _convert_audio_if_needed(input_path: str) -> str:
+    return _prepare_audio(input_path)
+
+
+def _probe_audio_metadata(path: str) -> dict:
+    return _probe_audio(path)
+
+
+def _log_audio_metadata(job_id: str, meta: dict) -> None:
+    if not meta:
+        return
+    logger.debug("ASR job %s audio meta: %s", job_id, meta)
+
+
+def _transcribe_audio(path: str, language: Optional[str], model_name: str, device: str) -> str:
+    provider = _worker_provider or "transformers"
+    effective_device = device or _detect_gpu_device()
+    engine = get_asr_engine(provider, model_name, effective_device)
+    return engine.transcribe(path, language=language)
+
+
+def _worker_loop(worker_id: int, forced_device: Optional[str] = None):
     logger.info("ASR worker %s started", worker_id)
     
     while True:
@@ -242,16 +285,45 @@ def _worker_loop(worker_id: int):
             set_job_status(job.job_id, "processing")
             
             provider, model_name, device = _get_settings()
+            if forced_device:
+                device = forced_device
+            global _worker_provider
+            _worker_provider = provider or "transformers"
             
             # Подготовка аудио (конвертация в 16kHz mono WAV)
-            audio_path = _prepare_audio(job.file_path)
-            
-            # Получение движка
-            engine = get_asr_engine(provider, model_name, device)
+            _ensure_ffmpeg_available(job.file_path)
+            audio_path = _convert_audio_if_needed(job.file_path)
             
             # Транскрибация
             logger.info("ASR job %s: processing with %s (%s)", job.job_id, provider, model_name)
-            text = engine.transcribe(audio_path, language=job.language)
+            text = None
+            last_err = None
+            fallback_models = [
+                model_name,
+                os.getenv("ASR_FALLBACK_MODEL", "openai/whisper-large-v3-turbo"),
+                "openai/whisper-small",
+            ]
+            tried = set()
+            for candidate in fallback_models:
+                if not candidate or candidate in tried:
+                    continue
+                tried.add(candidate)
+                try:
+                    text = _transcribe_audio(audio_path, job.language, candidate, device)
+                    if text is not None:
+                        break
+                except Exception as exc:
+                    last_err = exc
+                    logger.warning(
+                        "ASR job %s: model '%s' failed, trying fallback. Error: %s",
+                        job.job_id,
+                        candidate,
+                        exc,
+                    )
+            if text is None:
+                if last_err:
+                    raise last_err
+                raise RuntimeError("ASR transcription failed")
             
             if not text:
                 logger.warning("ASR job %s: result is empty", job.job_id)
@@ -259,9 +331,10 @@ def _worker_loop(worker_id: int):
             duration = time.monotonic() - started_at
             
             # Метаданные для ответа
-            audio_info = _probe_audio(audio_path)
+            audio_info = _probe_audio_metadata(audio_path)
             audio_meta = dict(job.audio_meta or {})
             audio_meta.update(audio_info)
+            _log_audio_metadata(job.job_id, audio_meta)
             
             timing_meta = {
                 "processing_s": duration,

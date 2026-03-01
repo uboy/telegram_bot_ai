@@ -2,6 +2,7 @@
 Конфигурация бота из переменных окружения
 """
 import os
+import json
 from dotenv import load_dotenv
 
 # Загрузить переменные окружения из .env файла (если он существует)
@@ -112,6 +113,27 @@ ANALYTICS_CLUSTER_METHOD = os.getenv('ANALYTICS_CLUSTER_METHOD', 'hdbscan')
 ANALYTICS_CLUSTER_MIN_SIZE = int(os.getenv('ANALYTICS_CLUSTER_MIN_SIZE', '5'))
 ANALYTICS_DIGEST_MAX_MESSAGES = int(os.getenv('ANALYTICS_DIGEST_MAX_MESSAGES', '10000'))
 ANALYTICS_RETENTION_DAYS = int(os.getenv('ANALYTICS_RETENTION_DAYS', '365'))
+
+# Direct AI mode v2 (session memory + progress + concise-first policy)
+AI_CONTEXT_RESTORE_TTL_HOURS = int(os.getenv("AI_CONTEXT_RESTORE_TTL_HOURS", "24"))
+AI_CONTEXT_RECENT_TURNS = int(os.getenv("AI_CONTEXT_RECENT_TURNS", "6"))
+AI_CONTEXT_BUDGET_TOKENS_DEFAULT = int(os.getenv("AI_CONTEXT_BUDGET_TOKENS_DEFAULT", "1800"))
+AI_PROGRESS_THRESHOLD_SEC = float(os.getenv("AI_PROGRESS_THRESHOLD_SEC", "5"))
+AI_FIRST_REPLY_MAX_WORDS = int(os.getenv("AI_FIRST_REPLY_MAX_WORDS", "120"))
+
+_ai_context_budgets_raw = os.getenv("AI_CONTEXT_BUDGETS_JSON", "").strip()
+AI_CONTEXT_BUDGETS = {}
+if _ai_context_budgets_raw:
+    try:
+        parsed = json.loads(_ai_context_budgets_raw)
+        if isinstance(parsed, dict):
+            AI_CONTEXT_BUDGETS = {
+                str(k): int(v)
+                for k, v in parsed.items()
+                if str(k).strip() and str(v).strip()
+            }
+    except Exception:
+        AI_CONTEXT_BUDGETS = {}
 
 # Проверка обязательных параметров
 if not TELEGRAM_BOT_TOKEN:

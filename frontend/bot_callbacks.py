@@ -32,6 +32,7 @@ from frontend.templates.buttons import (
     search_filters_menu,
     summary_mode_menu,
     asr_models_menu,
+    ai_context_choice_menu,
 )
 from frontend.backend_client import backend_client
 try:
@@ -44,6 +45,10 @@ except ImportError:
     N8N_PUBLIC_URL = os.getenv("N8N_PUBLIC_URL", "http://localhost:5678")
 from shared.logging_config import logger
 from shared.n8n_client import n8n_client
+from shared.ai_conversation_service import (
+    create_conversation,
+    get_recent_active_conversation,
+)
 
 # Строковые id админов для безопасных сравнений
 ADMIN_ID_STRINGS = {str(x) for x in ADMIN_IDS}
@@ -943,8 +948,53 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Задать вопрос ИИ
     if data == 'ask_ai':
+        recent = await asyncio.to_thread(get_recent_active_conversation, user_id)
+        if recent:
+            context.user_data['state'] = 'waiting_ai_resume_choice'
+            context.user_data['pending_ai_restore_id'] = int(recent.id)
+            await safe_edit_message_text(
+                query,
+                "🤖 Найден предыдущий диалог.\nВыберите действие:",
+                reply_markup=ai_context_choice_menu(int(recent.id)),
+            )
+        else:
+            conv = await asyncio.to_thread(
+                create_conversation,
+                user_id,
+                provider_name=preferred_provider,
+                model_name=preferred_model,
+            )
+            context.user_data['ai_conversation_id'] = int(conv.id)
+            context.user_data['state'] = 'waiting_ai_query'
+            context.user_data['ai_inflight'] = False
+            context.user_data['ai_answer_count'] = 0
+            await safe_edit_message_text(query, "🤖 Задайте вопрос ИИ:")
+        return
+
+    if data.startswith("ask_ai_restore:"):
+        try:
+            conversation_id = int(data.split(":", 1)[1])
+        except Exception:
+            await query.answer("Некорректный id диалога", show_alert=True)
+            return
+        context.user_data['ai_conversation_id'] = conversation_id
         context.user_data['state'] = 'waiting_ai_query'
-        await safe_edit_message_text(query, "🤖 Задайте вопрос ИИ:")
+        context.user_data['ai_inflight'] = False
+        await safe_edit_message_text(query, "♻️ Контекст восстановлен.\n🤖 Задайте вопрос ИИ:")
+        return
+
+    if data == "ask_ai_new":
+        conv = await asyncio.to_thread(
+            create_conversation,
+            user_id,
+            provider_name=preferred_provider,
+            model_name=preferred_model,
+        )
+        context.user_data['ai_conversation_id'] = int(conv.id)
+        context.user_data['state'] = 'waiting_ai_query'
+        context.user_data['ai_inflight'] = False
+        context.user_data['ai_answer_count'] = 0
+        await safe_edit_message_text(query, "🆕 Начат новый диалог.\n🤖 Задайте вопрос ИИ:")
         return
     
     # Обработка изображения

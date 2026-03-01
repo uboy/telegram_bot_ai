@@ -1,10 +1,16 @@
 # codex state
 - date: 2026-03-01
 - role: developer
-- current_step: done (redis sysctl runtime compatibility hotfix)
+- current_step: done (AI mode v2 implementation + verification)
 - summary:
-  - Removed redis container sysctl `vm.overcommit_memory=1` from docker-compose (it breaks on runtimes without separate kernel namespace).
-  - Updated operations and design docs to host-level recommendation for vm.overcommit_memory.
+  - Added AI mode v2 data models in `shared/database.py`: `AIConversation`, `AIConversationTurn`, `AIRequestMetric`.
+  - Added services: `shared/ai_metrics.py`, `shared/ai_conversation_service.py`, `shared/ai_prompt_policy.py`.
+  - Instrumented `AIProviderManager.query/query_multimodal` with best-effort telemetry persistence.
+  - Integrated direct AI UX: restore/new session flow, context-aware prompting, progress status for long calls, per-user in-flight guard.
+  - Updated tests/docs/spec/traceability/config templates for new behavior.
+  - Added compatibility helpers in `backend/services/asr_worker.py` to align with existing worker tests (`_ensure_ffmpeg_available`, `_get_worker_devices`, fallback transcription path).
 - verification:
-  - git diff checked for target files
-  - python scripts/scan_secrets.py -> PASS
+  - `python -m py_compile shared/config.py shared/database.py shared/ai_metrics.py shared/ai_conversation_service.py shared/ai_prompt_policy.py shared/ai_providers.py frontend/bot_handlers.py frontend/bot_callbacks.py frontend/templates/buttons.py tests/test_bot_text_ai_mode.py tests/test_bot_voice.py tests/test_bot_audio.py tests/test_ai_providers.py tests/test_ai_metrics.py`
+  - `python -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_voice.py tests/test_bot_audio.py tests/test_ai_providers.py tests/test_ai_metrics.py` -> `8 passed, 3 skipped`
+  - `.venv\Scripts\python.exe -m pytest -q tests` -> `61 passed, 16 warnings`
+  - `python scripts/scan_secrets.py` -> PASS

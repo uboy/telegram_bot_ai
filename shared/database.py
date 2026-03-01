@@ -266,6 +266,89 @@ class ChatImportLog(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+
+class AIConversation(Base):
+    """Сессия диалога пользователя с ИИ в режиме direct AI."""
+    __tablename__ = 'ai_conversations'
+
+    id = Column(Integer, primary_key=True)
+    user_telegram_id = Column(String(20), nullable=False, index=True)
+    provider_name = Column(String(50), nullable=True)
+    model_name = Column(String(120), nullable=True)
+    status = Column(String(20), default='active', nullable=False)
+    title = Column(String(200), nullable=True)
+    summary_text = Column(Text, nullable=True)
+    summary_version = Column(Integer, default=1, nullable=False)
+    last_activity_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index('ix_ai_conversations_user_activity', 'user_telegram_id', 'last_activity_at'),
+        Index('ix_ai_conversations_status_updated', 'status', 'updated_at'),
+    )
+
+
+class AIConversationTurn(Base):
+    """Реплика внутри AIConversation."""
+    __tablename__ = 'ai_conversation_turns'
+
+    id = Column(Integer, primary_key=True)
+    conversation_id = Column(Integer, ForeignKey('ai_conversations.id'), nullable=False, index=True)
+    turn_index = Column(Integer, nullable=False)
+    role = Column(String(20), nullable=False)  # user|assistant|system
+    content = Column(Text, nullable=False)
+    content_chars = Column(Integer, default=0, nullable=False)
+    content_tokens_est = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('conversation_id', 'turn_index', name='uq_ai_conv_turn_index'),
+        Index('ix_ai_conv_turns_conv_created', 'conversation_id', 'created_at'),
+    )
+
+
+class AIRequestMetric(Base):
+    """Метрики LLM запросов для latency prediction и наблюдаемости."""
+    __tablename__ = 'ai_request_metrics'
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    feature = Column(String(64), nullable=True)  # ask_ai_text, ask_ai_voice, rag_query, ...
+    user_telegram_id = Column(String(20), nullable=True, index=True)
+    conversation_id = Column(Integer, ForeignKey('ai_conversations.id'), nullable=True, index=True)
+    provider_name = Column(String(50), nullable=True)
+    model_name = Column(String(120), nullable=True)
+    request_kind = Column(String(20), nullable=False, default='text')  # text|multimodal
+
+    prompt_chars = Column(Integer, default=0, nullable=False)
+    prompt_tokens_est = Column(Integer, default=0, nullable=False)
+    context_chars = Column(Integer, default=0, nullable=False)
+    context_tokens_est = Column(Integer, default=0, nullable=False)
+    history_turns_used = Column(Integer, default=0, nullable=False)
+
+    predicted_latency_ms = Column(Integer, nullable=True)
+    latency_ms = Column(Integer, nullable=False, default=0)
+
+    response_chars = Column(Integer, default=0, nullable=False)
+    response_tokens_est = Column(Integer, default=0, nullable=False)
+
+    status = Column(String(20), nullable=False, default='ok')  # ok|error|timeout
+    error_type = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index('ix_ai_metrics_provider_model_feature_time', 'provider_name', 'model_name', 'feature', 'created_at'),
+        Index('ix_ai_metrics_status_time', 'status', 'created_at'),
+    )
+
 # Определить, какую базу данных использовать
 # Приоритет: MYSQL_URL > DB_PATH > SQLite по умолчанию
 db_url = None

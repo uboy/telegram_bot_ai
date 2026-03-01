@@ -31,8 +31,13 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Handle `/start`, text queries, document uploads, and images.
   - Provide menus for: KB search, web search, ask AI, settings.
   - In direct AI mode ("Задать вопрос ИИ"), voice/audio inputs are first transcribed (ASR), then the transcript is sent to AI and returned as the answer.
+  - In direct AI mode, when re-entering mode the bot asks whether to restore the previous dialog context or start a new dialog.
+  - In direct AI mode, conversation context is persisted in DB and compressed (summary + recent turns) before sending to weaker models.
+  - In direct AI mode, first AI reply should be concise; for ambiguous queries model should ask one clarifying question first.
   - Direct AI mode validates empty user input and does not send blank prompts to AI.
   - Direct AI mode sends oversized model responses in Telegram-safe chunks to avoid `Message is too long` failures.
+  - For AI requests, request/model metrics are persisted in DB and used to estimate expected latency.
+  - If AI request is predicted (or observed) to exceed 5 seconds, bot shows temporary progress status and removes it after response/error.
   - Admin menu for users/KBs/ingestion/AI settings.
   - ASR visibility control: users can toggle technical metadata display in their settings.
   - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
@@ -56,6 +61,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Sanitize command snippets not present in KB context.
 - Storage:
   - SQL DB tables for users, knowledge bases, chunks, and import logs.
+  - SQL DB tables for AI conversations, turns, and per-request model metrics.
   - Optional Redis cache for conversation history.
 - Integration:
   - n8n webhook events for ingestion actions.
@@ -98,6 +104,10 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Web search uses DuckDuckGo and returns summarized results with source links.
 - Direct AI mode works from reply keyboard button "🤖 Задать вопрос ИИ" and accepts text plus voice/audio (voice/audio are transcribed first, then sent to AI).
 - Direct AI mode handles empty input with validation prompt and does not fail on long model outputs (responses are split into safe chunks).
+- Direct AI mode on re-entry offers context restore/new dialog choice; selected context is loaded from DB.
+- Direct AI mode prompt policy enforces concise first reply and clarification-first behavior for ambiguous user input.
+- AI request metrics are persisted for all `ai_manager` calls and include provider/model/latency/status fields.
+- AI mode shows temporary progress status for long requests (>5s predicted or observed) and removes it after completion to keep chat clean.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
 - ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
 - **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**

@@ -56,6 +56,15 @@ Copy-Item env.template .env
   - `OPEN_WEBUI_API_KEY`
   - `OPEN_WEBUI_MODEL`
 
+### Direct AI mode v2
+- `AI_CONTEXT_RESTORE_TTL_HOURS` — окно (часы), в котором предлагается восстановление предыдущего диалога.
+- `AI_CONTEXT_RECENT_TURNS` — сколько последних реплик хранить verbatim в контексте.
+- `AI_CONTEXT_BUDGET_TOKENS_DEFAULT` — базовый лимит токенов контекста для сжатия.
+- `AI_CONTEXT_BUDGETS_JSON` — JSON-override лимитов по моделям, пример:
+  - `{"qwen:30b": 1400, "llama3.1:70b": 2000}`
+- `AI_PROGRESS_THRESHOLD_SEC` — порог показа временного progress-сообщения для долгих AI-запросов.
+- `AI_FIRST_REPLY_MAX_WORDS` — лимит краткости первого ответа в direct AI mode.
+
 ### ASR
 - `ASR_MAX_FILE_MB`
 - `ASR_QUEUE_MAX`

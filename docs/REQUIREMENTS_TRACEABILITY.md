@@ -25,6 +25,11 @@ Source: `SPEC.md` acceptance criteria.
 | AC-19 | Optional HF token is loaded from env and available under both `HF_TOKEN` and `HUGGINGFACE_HUB_TOKEN` aliases | `shared/config.py` | `tests/test_config_hf_token.py` | PASS |
 | AC-20 | SQLite WAL status check is SQLAlchemy 2.x compatible (no raw-string execute call) | `shared/database.py` | `python -m py_compile shared/database.py` + startup log verification | PASS |
 | AC-21 | Startup launcher enables MySQL service only when `MYSQL_URL` is configured | `scripts/start_stack.py`, `scripts/start_stack.ps1`, `scripts/start_stack.sh`, `docker-compose.yml` | `tests/test_start_stack.py`, manual `--dry-run` verification | PASS |
+| AC-22 | Direct AI mode re-entry offers restore previous context vs start new dialog | `frontend/bot_handlers.py`, `frontend/bot_callbacks.py`, `frontend/templates/buttons.py`, `shared/ai_conversation_service.py` | `tests/test_bot_text_ai_mode.py` | PASS |
+| AC-23 | Direct AI mode persists and compresses context (summary + recent turns) for constrained models | `shared/ai_conversation_service.py`, `frontend/bot_handlers.py` | `python -m py_compile shared/ai_conversation_service.py` + bot-flow tests | PASS |
+| AC-24 | AI request metrics are stored for all `ai_manager` requests with provider/model/latency/status | `shared/ai_providers.py`, `shared/ai_metrics.py`, `shared/database.py` | `tests/test_ai_providers.py`, `tests/test_ai_metrics.py` | PASS |
+| AC-25 | Long AI requests show temporary progress status (>5s predicted/observed) and remove it after completion | `frontend/bot_handlers.py`, `shared/ai_metrics.py` | `tests/test_bot_text_ai_mode.py`, `tests/test_bot_voice.py`, `tests/test_bot_audio.py` | PASS |
+| AC-26 | Direct AI prompt policy is concise-first and clarification-first for ambiguous prompts | `shared/ai_prompt_policy.py`, `frontend/bot_handlers.py` | `python -m py_compile shared/ai_prompt_policy.py` + bot-flow tests | PASS |
 
 ## Gaps to close
 

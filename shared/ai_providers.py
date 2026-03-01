@@ -7,8 +7,10 @@ import mimetypes
 import requests
 import logging
 import re
+import time
 from typing import Optional, Dict, List, Any
 from shared.config import OLLAMA_BASE_URL, OLLAMA_MODEL
+from shared.ai_metrics import build_request_id, estimate_tokens, record_ai_metric
 
 logger = logging.getLogger(__name__)
 
@@ -488,7 +490,57 @@ class AIProviderManager:
         """Отправить запрос через текущий или указанный провайдер"""
         provider = self.get_provider(provider_name)
         if provider:
-            return provider.query(prompt, model=model, **kwargs)
+            telemetry_meta = kwargs.pop("telemetry_meta", None) or kwargs.pop("_telemetry_meta", None) or {}
+            request_id = str(telemetry_meta.get("request_id") or build_request_id())
+            started = time.monotonic()
+            response_text = ""
+            status = "ok"
+            error_type = None
+            error_message = None
+            try:
+                response_text = provider.query(prompt, model=model, **kwargs)
+                if isinstance(response_text, str) and response_text.lower().startswith("ошибка"):
+                    status = "error"
+                    error_type = "provider_error"
+                    error_message = response_text
+                return response_text
+            except Exception as exc:
+                status = "error"
+                error_type = exc.__class__.__name__
+                error_message = str(exc)
+                raise
+            finally:
+                try:
+                    prompt_chars = int(telemetry_meta.get("prompt_chars") or len(prompt or ""))
+                    prompt_tokens_est = int(telemetry_meta.get("prompt_tokens_est") or estimate_tokens(prompt))
+                    context_chars = int(telemetry_meta.get("context_chars") or 0)
+                    context_tokens_est = int(telemetry_meta.get("context_tokens_est") or 0)
+                    history_turns_used = int(telemetry_meta.get("history_turns_used") or 0)
+                    predicted_latency_ms = telemetry_meta.get("predicted_latency_ms")
+                    latency_ms = int((time.monotonic() - started) * 1000)
+                    record_ai_metric(
+                        request_id=request_id,
+                        feature=str(telemetry_meta.get("feature") or "unknown"),
+                        user_telegram_id=str(telemetry_meta.get("user_telegram_id")) if telemetry_meta.get("user_telegram_id") else None,
+                        conversation_id=int(telemetry_meta["conversation_id"]) if telemetry_meta.get("conversation_id") else None,
+                        provider_name=provider_name or self.current_provider or self.default_provider,
+                        model_name=model or getattr(provider, "model", None),
+                        request_kind="text",
+                        prompt_chars=prompt_chars,
+                        prompt_tokens_est=prompt_tokens_est,
+                        context_chars=context_chars,
+                        context_tokens_est=context_tokens_est,
+                        history_turns_used=history_turns_used,
+                        predicted_latency_ms=int(predicted_latency_ms) if predicted_latency_ms is not None else None,
+                        latency_ms=latency_ms,
+                        response_chars=len(response_text or ""),
+                        response_tokens_est=estimate_tokens(response_text),
+                        status=status,
+                        error_type=error_type,
+                        error_message=error_message,
+                    )
+                except Exception as exc:
+                    logger.debug("Skip telemetry logging for text query: %s", exc)
         return "Провайдер ИИ не найден"
     
     def query_multimodal(
@@ -502,7 +554,57 @@ class AIProviderManager:
         """Мультимодальный запрос"""
         provider = self.get_provider(provider_name)
         if provider:
-            return provider.query_multimodal(prompt, image_path, model=model, **kwargs)
+            telemetry_meta = kwargs.pop("telemetry_meta", None) or kwargs.pop("_telemetry_meta", None) or {}
+            request_id = str(telemetry_meta.get("request_id") or build_request_id())
+            started = time.monotonic()
+            response_text = ""
+            status = "ok"
+            error_type = None
+            error_message = None
+            try:
+                response_text = provider.query_multimodal(prompt, image_path, model=model, **kwargs)
+                if isinstance(response_text, str) and response_text.lower().startswith("ошибка"):
+                    status = "error"
+                    error_type = "provider_error"
+                    error_message = response_text
+                return response_text
+            except Exception as exc:
+                status = "error"
+                error_type = exc.__class__.__name__
+                error_message = str(exc)
+                raise
+            finally:
+                try:
+                    prompt_chars = int(telemetry_meta.get("prompt_chars") or len(prompt or ""))
+                    prompt_tokens_est = int(telemetry_meta.get("prompt_tokens_est") or estimate_tokens(prompt))
+                    context_chars = int(telemetry_meta.get("context_chars") or 0)
+                    context_tokens_est = int(telemetry_meta.get("context_tokens_est") or 0)
+                    history_turns_used = int(telemetry_meta.get("history_turns_used") or 0)
+                    predicted_latency_ms = telemetry_meta.get("predicted_latency_ms")
+                    latency_ms = int((time.monotonic() - started) * 1000)
+                    record_ai_metric(
+                        request_id=request_id,
+                        feature=str(telemetry_meta.get("feature") or "unknown"),
+                        user_telegram_id=str(telemetry_meta.get("user_telegram_id")) if telemetry_meta.get("user_telegram_id") else None,
+                        conversation_id=int(telemetry_meta["conversation_id"]) if telemetry_meta.get("conversation_id") else None,
+                        provider_name=provider_name or self.current_provider or self.default_provider,
+                        model_name=model or getattr(provider, "model", None),
+                        request_kind="multimodal",
+                        prompt_chars=prompt_chars,
+                        prompt_tokens_est=prompt_tokens_est,
+                        context_chars=context_chars,
+                        context_tokens_est=context_tokens_est,
+                        history_turns_used=history_turns_used,
+                        predicted_latency_ms=int(predicted_latency_ms) if predicted_latency_ms is not None else None,
+                        latency_ms=latency_ms,
+                        response_chars=len(response_text or ""),
+                        response_tokens_est=estimate_tokens(response_text),
+                        status=status,
+                        error_type=error_type,
+                        error_message=error_message,
+                    )
+                except Exception as exc:
+                    logger.debug("Skip telemetry logging for multimodal query: %s", exc)
         return "Провайдер ИИ не найден"
 
 

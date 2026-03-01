@@ -12,6 +12,16 @@ from telegram.ext import ContextTypes
 from shared.database import Session, User, Message, KnowledgeBase, KnowledgeImportLog
 from shared.logging_config import logger
 from shared.ai_providers import ai_manager
+from shared.ai_metrics import estimate_tokens, predict_latency_ms
+from shared.ai_conversation_service import (
+    append_turn,
+    build_context_payload,
+    create_conversation,
+    get_recent_active_conversation,
+    refresh_summary,
+    touch_conversation,
+)
+from shared.ai_prompt_policy import build_direct_ai_prompt
 from frontend.backend_client import backend_client
 from shared.document_loaders import document_loader_manager
 from shared.image_processor import image_processor
@@ -30,9 +40,9 @@ from frontend.templates.buttons import (
     main_menu, admin_menu, settings_menu, ai_providers_menu,
     user_management_menu, knowledge_base_menu, kb_actions_menu,
     document_type_menu, confirm_menu, search_options_menu,
-    asr_models_menu
+    asr_models_menu, ai_context_choice_menu
 )
-from shared.config import ADMIN_IDS
+from shared.config import ADMIN_IDS, AI_PROGRESS_THRESHOLD_SEC
 from shared.n8n_client import n8n_client
 
 # Глобальный session удалён - создаём session локально в функциях
@@ -159,15 +169,142 @@ async def perform_rag_query_and_render(query: str, kb_id: int, user: UserContext
 
 
 async def render_ai_answer_html(query: str, user: UserContext) -> str:
-    """Сформировать HTML-ответ ИИ по текстовому запросу."""
+    """Legacy helper kept for compatibility with tests/old call-sites."""
     prompt = create_prompt_with_language(query, None, task="answer")
     ans = await asyncio.to_thread(
         ai_manager.query,
         prompt,
         provider_name=user.preferred_provider,
         model=user.preferred_model,
+        telemetry_meta={"feature": "ask_ai_text"},
     )
     return f"🤖 <b>Ответ:</b>\n\n{format_for_telegram_answer(ans, False)}"
+
+
+async def _delete_message_safe(message_obj) -> None:
+    if not message_obj:
+        return
+    try:
+        await message_obj.delete()
+    except Exception:
+        pass
+
+
+async def _run_ai_query_with_progress(
+    *,
+    message,
+    prompt: str,
+    user: UserContext,
+    telemetry_meta: dict,
+    predicted_latency_ms: int,
+) -> str:
+    threshold_sec = max(1.0, float(AI_PROGRESS_THRESHOLD_SEC))
+    threshold_ms = int(threshold_sec * 1000)
+    progress_message = None
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            ai_manager.query,
+            prompt,
+            provider_name=user.preferred_provider,
+            model=user.preferred_model,
+            telemetry_meta=telemetry_meta,
+        )
+    )
+    try:
+        if predicted_latency_ms > threshold_ms:
+            progress_message = await message.reply_text("⏳ Запрос к ИИ выполняется, пожалуйста подождите...")
+            return await task
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=threshold_sec)
+        except asyncio.TimeoutError:
+            progress_message = await message.reply_text("⏳ Запрос к ИИ выполняется, пожалуйста подождите...")
+            return await task
+    finally:
+        await _delete_message_safe(progress_message)
+
+
+async def _ensure_ai_conversation(context: ContextTypes.DEFAULT_TYPE, user: UserContext) -> int:
+    conversation_id = context.user_data.get("ai_conversation_id")
+    if conversation_id:
+        await asyncio.to_thread(
+            touch_conversation,
+            int(conversation_id),
+            provider_name=user.preferred_provider,
+            model_name=user.preferred_model,
+        )
+        return int(conversation_id)
+
+    conv = await asyncio.to_thread(
+        create_conversation,
+        str(user.telegram_id),
+        provider_name=user.preferred_provider,
+        model_name=user.preferred_model,
+    )
+    context.user_data["ai_conversation_id"] = int(conv.id)
+    context.user_data["ai_answer_count"] = 0
+    return int(conv.id)
+
+
+async def _render_ai_answer_html_with_context(
+    *,
+    query: str,
+    user: UserContext,
+    context: ContextTypes.DEFAULT_TYPE,
+    message,
+    feature: str,
+) -> str:
+    if context.user_data.get("ai_inflight"):
+        return "⏳ <i>Предыдущий AI-запрос еще выполняется. Подождите его завершения.</i>"
+
+    context.user_data["ai_inflight"] = True
+    try:
+        conversation_id = await _ensure_ai_conversation(context, user)
+        is_first_turn = int(context.user_data.get("ai_answer_count", 0)) == 0
+        payload = await asyncio.to_thread(
+            build_context_payload,
+            conversation_id,
+            model_name=user.preferred_model,
+        )
+        prompt = build_direct_ai_prompt(
+            query=query,
+            context_text=payload.get("context_text") or "",
+            is_first_turn=is_first_turn,
+        )
+        prompt_tokens_est = estimate_tokens(prompt)
+        predicted_latency_ms = await asyncio.to_thread(
+            predict_latency_ms,
+            provider_name=user.preferred_provider,
+            model_name=user.preferred_model,
+            feature=feature,
+            prompt_tokens_est=prompt_tokens_est,
+            context_tokens_est=int(payload.get("context_tokens_est") or 0),
+        )
+
+        await asyncio.to_thread(append_turn, conversation_id, "user", query)
+        answer = await _run_ai_query_with_progress(
+            message=message,
+            prompt=prompt,
+            user=user,
+            predicted_latency_ms=predicted_latency_ms,
+            telemetry_meta={
+                "feature": feature,
+                "user_telegram_id": str(user.telegram_id),
+                "conversation_id": conversation_id,
+                "prompt_chars": len(prompt),
+                "prompt_tokens_est": prompt_tokens_est,
+                "context_chars": int(payload.get("context_chars") or 0),
+                "context_tokens_est": int(payload.get("context_tokens_est") or 0),
+                "history_turns_used": int(payload.get("history_turns_used") or 0),
+                "predicted_latency_ms": predicted_latency_ms,
+            },
+        )
+
+        await asyncio.to_thread(append_turn, conversation_id, "assistant", answer)
+        await asyncio.to_thread(refresh_summary, conversation_id)
+        context.user_data["ai_answer_count"] = int(context.user_data.get("ai_answer_count", 0)) + 1
+        return f"🤖 <b>Ответ:</b>\n\n{format_for_telegram_answer(answer, False)}"
+    finally:
+        context.user_data["ai_inflight"] = False
 
 
 def _split_plain_text_for_telegram(text: str, max_len: int = 3900) -> list[str]:
@@ -244,8 +381,26 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔍 Введите запрос для поиска:")
         return
     if text_input == "🤖 Задать вопрос ИИ":
-        context.user_data['state'] = 'waiting_ai_query'
-        await update.message.reply_text("🤖 Задайте вопрос ИИ:")
+        recent = await asyncio.to_thread(get_recent_active_conversation, str(user.telegram_id))
+        if recent:
+            context.user_data['state'] = 'waiting_ai_resume_choice'
+            context.user_data['pending_ai_restore_id'] = int(recent.id)
+            await update.message.reply_text(
+                "🤖 Найден предыдущий диалог.\nВыберите действие:",
+                reply_markup=ai_context_choice_menu(int(recent.id)),
+            )
+        else:
+            conv = await asyncio.to_thread(
+                create_conversation,
+                str(user.telegram_id),
+                provider_name=user.preferred_provider,
+                model_name=user.preferred_model,
+            )
+            context.user_data['ai_conversation_id'] = int(conv.id)
+            context.user_data['ai_answer_count'] = 0
+            context.user_data['ai_inflight'] = False
+            context.user_data['state'] = 'waiting_ai_query'
+            await update.message.reply_text("🤖 Задайте вопрос ИИ:")
         return
     if text_input == "👨‍💼 Админ-панель" and user.role == 'admin':
         await update.message.reply_text("👨‍💼 Админ-панель:", reply_markup=admin_menu())
@@ -261,9 +416,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not text_input:
             await update.message.reply_text("⚠️ Введите непустой вопрос для ИИ.")
             return
-        html = await render_ai_answer_html(text_input, user)
+        html = await _render_ai_answer_html_with_context(
+            query=text_input,
+            user=user,
+            context=context,
+            message=update.message,
+            feature="ask_ai_text",
+        )
         await reply_html_safe(update.message, html, reply_markup=main_menu(user.role == 'admin'))
-        context.user_data['state'] = None
+    elif state == 'waiting_ai_resume_choice':
+        text_lower = text_input.lower()
+        if "нов" in text_lower:
+            conv = await asyncio.to_thread(
+                create_conversation,
+                str(user.telegram_id),
+                provider_name=user.preferred_provider,
+                model_name=user.preferred_model,
+            )
+            context.user_data['ai_conversation_id'] = int(conv.id)
+            context.user_data['ai_answer_count'] = 0
+            context.user_data['ai_inflight'] = False
+            context.user_data['state'] = 'waiting_ai_query'
+            await update.message.reply_text("🆕 Начат новый диалог.\n🤖 Задайте вопрос ИИ:")
+        elif "восст" in text_lower or "прод" in text_lower:
+            conv_id = context.user_data.get('pending_ai_restore_id')
+            if not conv_id:
+                await update.message.reply_text("⚠️ Не удалось восстановить диалог. Нажмите «🤖 Задать вопрос ИИ» снова.")
+                context.user_data['state'] = None
+                return
+            context.user_data['ai_conversation_id'] = int(conv_id)
+            context.user_data['state'] = 'waiting_ai_query'
+            context.user_data['ai_inflight'] = False
+            await update.message.reply_text("♻️ Контекст восстановлен.\n🤖 Задайте вопрос ИИ:")
+        else:
+            await update.message.reply_text("Выберите действие кнопками: восстановить диалог или начать новый.")
     elif state == 'waiting_asr_model' and user.role == 'admin':
         await update.message.reply_text(f"⏳ Проверяю модель <code>{text_input}</code>...", parse_mode='HTML')
         try:
@@ -346,9 +532,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if text:
                     await status_message.edit_text(f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}", parse_mode='HTML')
                     if context.user_data.get('state') == 'waiting_ai_query':
-                        html = await render_ai_answer_html(text, user)
+                        html = await _render_ai_answer_html_with_context(
+                            query=text,
+                            user=user,
+                            context=context,
+                            message=update.message,
+                            feature="ask_ai_voice",
+                        )
                         await reply_html_safe(update.message, html, reply_markup=main_menu(user.role == 'admin'))
-                        context.user_data['state'] = None
                 else:
                     await status_message.edit_text("⚠️ Текст не распознан.")
                 return
@@ -411,9 +602,14 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     meta_block = f"\n\n<blockquote expandable>{escape(meta_content)}</blockquote>"
                 await status_message.edit_text(f"📝 <b>Транскрипция</b>\n\n{escape(text)}{meta_block}", parse_mode='HTML')
                 if text and context.user_data.get('state') == 'waiting_ai_query':
-                    html = await render_ai_answer_html(text, user)
+                    html = await _render_ai_answer_html_with_context(
+                        query=text,
+                        user=user,
+                        context=context,
+                        message=update.message,
+                        feature="ask_ai_audio",
+                    )
                     await reply_html_safe(update.message, html, reply_markup=main_menu(user.role == 'admin'))
-                    context.user_data['state'] = None
                 return
             if job.get("status") == "error":
                 await status_message.edit_text(f"❌ Ошибка: {job.get('error')}")

@@ -49,6 +49,15 @@ def settings_menu(show_asr_metadata: bool = True):
         [InlineKeyboardButton("🔙 Главное меню", callback_data='main_menu')],
     ])
 
+
+def ai_context_choice_menu(conversation_id: int):
+    """Меню выбора контекста для режима прямого вопроса ИИ."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("♻️ Восстановить прошлый диалог", callback_data=f"ask_ai_restore:{conversation_id}")],
+        [InlineKeyboardButton("🆕 Начать новый диалог", callback_data="ask_ai_new")],
+    ])
+
+
 def rag_settings_menu():
     """Меню настроек RAG"""
     return InlineKeyboardMarkup([

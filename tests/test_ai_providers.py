@@ -95,6 +95,53 @@ def test_manager_passes_model_override_to_any_provider():
     assert provider.last_model == "model-x"
 
 
+def test_manager_logs_telemetry(monkeypatch):
+    class EchoProvider(ai_providers.AIProvider):
+        def __init__(self):
+            super().__init__("echo")
+            self.model = "echo-model"
+
+        def query(self, prompt: str, model=None, **kwargs) -> str:
+            return f"ok:{prompt}:{model or self.model}"
+
+        def query_multimodal(self, prompt: str, image_path=None, model=None, **kwargs) -> str:
+            return "ok-mm"
+
+    captured = {}
+
+    def fake_record_ai_metric(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(ai_providers, "record_ai_metric", fake_record_ai_metric)
+
+    manager = ai_providers.AIProviderManager()
+    manager.register_provider("echo", EchoProvider())
+    response = manager.query(
+        "hello",
+        provider_name="echo",
+        model="m1",
+        telemetry_meta={
+            "feature": "ask_ai_text",
+            "user_telegram_id": "42",
+            "prompt_chars": 5,
+            "prompt_tokens_est": 2,
+            "context_chars": 12,
+            "context_tokens_est": 3,
+            "history_turns_used": 4,
+            "predicted_latency_ms": 7000,
+        },
+    )
+
+    assert response.startswith("ok:hello:m1")
+    assert captured["feature"] == "ask_ai_text"
+    assert captured["user_telegram_id"] == "42"
+    assert captured["provider_name"] == "echo"
+    assert captured["model_name"] == "m1"
+    assert captured["request_kind"] == "text"
+    assert captured["predicted_latency_ms"] == 7000
+    assert captured["status"] == "ok"
+
+
 def test_init_default_providers_registers_configured_apis(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "x-openai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x-anthropic")

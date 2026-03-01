@@ -141,19 +141,17 @@ async def test_handle_audio_transcription_sent_to_ai_in_ai_mode(monkeypatch):
         return None
 
     monkeypatch.setattr(bot_handlers.asyncio, "sleep", _fast_sleep)
+    calls = []
+
+    async def _render_ai_answer_html_with_context(**kwargs):
+        calls.append(kwargs)
+        return "🤖 <b>Ответ:</b>\n\nai audio answer"
+
     monkeypatch.setattr(
         bot_handlers,
-        "create_prompt_with_language",
-        lambda text, _ctx, task=None: f"PROMPT::{text}::{task}",
+        "_render_ai_answer_html_with_context",
+        _render_ai_answer_html_with_context,
     )
-
-    ai_calls = []
-
-    def _ai_query(prompt, provider_name=None, model=None):
-        ai_calls.append((prompt, provider_name, model))
-        return "ai audio answer"
-
-    monkeypatch.setattr(bot_handlers.ai_manager, "query", _ai_query)
 
     class DummyStatusMessage:
         def __init__(self):
@@ -203,13 +201,15 @@ async def test_handle_audio_transcription_sent_to_ai_in_ai_mode(monkeypatch):
     class DummyContext:
         def __init__(self):
             self.bot = DummyBot()
-            self.user_data = {"state": "waiting_ai_query"}
+            self.user_data = {"state": "waiting_ai_query", "ai_conversation_id": 77}
 
     update = DummyUpdate()
     context = DummyContext()
 
     await bot_handlers.handle_audio(update, context)
 
-    assert ai_calls == [("PROMPT::audio to text::answer", "prov", "model")]
-    assert context.user_data["state"] is None
+    assert len(calls) == 1
+    assert calls[0]["query"] == "audio to text"
+    assert calls[0]["feature"] == "ask_ai_audio"
+    assert context.user_data["state"] == "waiting_ai_query"
     assert any("🤖 <b>Ответ:</b>" in text for text in update.message.sent)

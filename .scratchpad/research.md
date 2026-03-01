@@ -1,45 +1,46 @@
-# Research: AI Question Mode + Voice/Audio AI Handoff
+# Research: AI Mode v2 (Telemetry + Context Memory + Progress UX)
 
 Date: 2026-03-01
 Agent: codex (team-lead-orchestrator / architect phase)
 
-## User Request
-1. Fix broken behavior for feature "Задать вопрос ИИ" (currently returns "Добро пожаловать!" repeatedly).
-2. Add behavior: in "Задать вопрос ИИ" mode, when user sends voice/audio, bot must transcribe first and then send transcription text to AI.
-3. Keep other bot functions unchanged.
+## User Request (new)
+1. Confirm whether Open WebUI is currently supported.
+2. For all requests sent to AI, store model/request metrics in DB.
+3. Use metrics to predict request duration; if expected duration > 5s, show progress indicator and remove it after response.
+4. Improve direct AI mode quality for weaker models (30b/70b/120b):
+   - richer dialog context,
+   - first answer must be concise,
+   - ask clarifying question when input is ambiguous.
+5. On re-entering AI mode, ask user to restore previous context or start a new dialog.
+6. Persist/reload context from DB and compress memory due limited context window.
 
-## Current Behavior Findings
-- `frontend/templates/buttons.py` contains reply keyboard button `"🤖 Задать вопрос ИИ"`.
-- `frontend/bot_callbacks.py` has inline callback branch `ask_ai` that sets `context.user_data['state'] = 'waiting_ai_query'`.
-- `frontend/bot_handlers.py::handle_text` does NOT handle text `"🤖 Задать вопрос ИИ"`.
-- In `handle_text`, unknown text with no `kb_id` falls into `else -> handle_start(...)`.
-- Result: pressing reply keyboard button is treated as unknown text, and bot replies with welcome message.
+## Codebase Findings
+- Open WebUI support exists and is production-wired:
+  - `shared/ai_providers.py` contains `OpenWebUIProvider`.
+  - Provider registration key: `open_webui`.
+  - Env vars: `OPEN_WEBUI_BASE_URL`, `OPEN_WEBUI_API_KEY`, `OPEN_WEBUI_MODEL`.
+  - Covered by `tests/test_ai_providers.py`.
+- Direct AI mode is implemented in `frontend/bot_handlers.py` via state `waiting_ai_query`.
+- Voice/audio handoff (`ASR -> AI`) exists for AI mode.
+- Metrics/telemetry for AI requests are not persisted in DB now.
+- Conversation memory for direct AI mode is not persisted; prompts are single-turn (`create_prompt_with_language(..., context=None)`).
+- Current direct prompt says "Ответь подробно", which conflicts with desired concise-first behavior.
 
-## Voice/Audio Pipeline Findings
-- `handle_voice` and `handle_audio` perform ASR and always end with transcription message (or error/timeout).
-- They ignore `context.user_data['state']` and therefore cannot route transcript to AI when in `waiting_ai_query`.
+## Existing Risk Signals from User Transcript
+- Out-of-order/mixed replies likely from overlapping in-flight AI requests per user.
+- Very long responses still possible semantically (even if chunking prevents Telegram hard error).
+- Weak models drift without strict prompt contract + compact structured memory.
 
-## Root Cause
-Primary bug root cause is missing `handle_text` branch for reply-keyboard text `"🤖 Задать вопрос ИИ"`.
-Secondary gap is missing AI-mode routing in voice/audio handlers.
+## Architecture Implications
+- Instrumentation should be centralized in `AIProviderManager.query/query_multimodal` to cover all AI callers.
+- Session memory should be a dedicated feature service, not ad-hoc `context.user_data`.
+- Progress UX should be ephemeral Telegram message, deleted on completion, with >5s predictor trigger.
+- Need per-user concurrency guard for AI requests to avoid stale/late answer interleaving.
 
-## Impacted Components
-- `frontend/bot_handlers.py` (primary logic changes)
-- Tests:
-  - `tests/test_bot_voice.py` (extend with AI-mode case)
-  - `tests/test_bot_audio.py` (extend with AI-mode case)
-  - add/extend text-mode test coverage for ask-ai entry (`handle_text`)
-
-## Constraints / Non-regression Requirements
-- Preserve current transcription-only behavior when NOT in `waiting_ai_query`.
-- Preserve all other menu flows and states.
-- Keep AI provider/model selection behavior as currently wired via `ai_manager.query` and `create_prompt_with_language`.
-
-## Validation Targets
-- Pressing `🤖 Задать вопрос ИИ` sets `state=waiting_ai_query` and prompts for AI question.
-- In `waiting_ai_query`, voice/audio:
-  - ASR runs.
-  - Transcript is sent to AI.
-  - User gets AI answer.
-  - State resets to `None` after successful AI response.
-- Outside `waiting_ai_query`, voice/audio still return transcription as before.
+## Scope Decision
+This is a non-trivial cross-cutting feature touching:
+- frontend AI mode UX/state,
+- shared provider layer telemetry,
+- DB schema + migrations,
+- prompt policy and memory compression,
+- tests/spec/docs.

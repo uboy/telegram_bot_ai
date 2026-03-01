@@ -2,3 +2,10 @@
 {"id":"INFRA-002","title":"Implement safe runtime fixes in code/config/compose","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
 {"id":"INFRA-003","title":"Update docs/spec/traceability for infra and config changes","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-01"}
 {"id":"INFRA-004","title":"Verification: tests/compile/secret scan + docker config sanity","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-01"}
+{"id":"AI-001","title":"Design AI mode v2: telemetry, latency predictor, session memory restore/new, concise-first prompts","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-01"}
+{"id":"AI-002","title":"Implement DB schema + migrations for AI conversations and AI request metrics","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
+{"id":"AI-003","title":"Implement shared services: ai_metrics, ai_conversation_service, ai_prompt_policy","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
+{"id":"AI-004","title":"Integrate direct AI mode UX: restore/new context, progress indicator, concise-first prompts","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
+{"id":"AI-005","title":"Instrument ai_manager query/query_multimodal with telemetry persistence","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
+{"id":"AI-006","title":"Add/adjust tests for telemetry, predictor, session flow, and bot regressions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-01"}
+{"id":"AI-007","title":"Update SPEC/docs/traceability for AI mode v2","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-01"}
