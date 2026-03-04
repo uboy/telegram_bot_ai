@@ -39,6 +39,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - For AI requests, request/model metrics are persisted in DB and used to estimate expected latency.
   - If AI request is predicted (or observed) to exceed 5 seconds, bot shows temporary progress status and removes it after response/error.
   - Admin menu for users/KBs/ingestion/AI settings.
+  - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
   - ASR visibility control: users can toggle technical metadata display in their settings.
   - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
   - **GPU Acceleration: automatic detection and utilization of NVIDIA GPUs (RTX 3090 support) inside Docker containers.**
@@ -98,6 +99,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Bot can register users and requires admin approval for non-admins.
 - Admin can create, list, clear, and delete knowledge bases via bot UI.
 - KB creation flow in admin panel is stateful: after "Создать базу знаний" and name input, bot must call backend create endpoint and return explicit success/failure instead of falling back to welcome screen.
+- Admin KB upload does not require manual file-type selection; bot auto-detects document type, supports multiple files in one flow, validates Telegram file limits, and returns per-file success/failure report.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).
 - RAG query returns an answer plus a list of sources with path/URL and metadata.
 - Inline citations are present when enabled and only reference provided sources.

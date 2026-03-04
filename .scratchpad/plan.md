@@ -1,3 +1,33 @@
+## Plan: Auto-Detect and Batch Document Upload with Report
+
+Date: 2026-03-04
+Status: In progress
+
+### Implementation Checklist
+- [x] Inspect current upload callbacks and document handler.
+- [x] Replace `kb_upload` menu flow with direct “send files” flow.
+- [x] Implement automatic file-type inference helper(s) in bot handler.
+- [x] Implement single + media-group batch ingestion flow with job polling.
+- [x] Implement pending list queue when KB is not selected.
+- [x] Return consolidated report for successful/failed documents.
+
+### Verification Checklist
+- [x] Add regression tests for type inference and batch report behavior.
+- [x] Run focused pytest for new/updated tests.
+- [x] Run `py_compile` for changed Python files.
+- [x] Add extra regression tests for explicit ingestion call and missing `job_id` fallback.
+
+### Documentation Checklist
+- [x] Update `SPEC.md` for new upload behavior and report requirement.
+- [x] Add/Update design spec in `docs/design/*`.
+- [x] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [x] Update `docs/USAGE.md` (admin upload flow).
+
+### Security/Policy Gates
+- [x] No dependency changes expected.
+- [x] Run secret scan before completion.
+- [x] Produce review report in `coordination/reviews/*`.
+
 ## Plan: Fix KB Creation State Machine Regression
 
 Date: 2026-03-04

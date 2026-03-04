@@ -1,0 +1,18 @@
+{
+  "id": "python-telegram-auto-doc-upload-report-2026-03-04",
+  "technology": "python-telegram-bot",
+  "skills": ["developer", "reviewer", "spec-maintainer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "For KB document ingestion UX, do not force manual preselection of file type. Auto-detect type from filename/mime, support pending queues and media-group batches, enforce Telegram file-size limits, and send a per-file processing report based on backend job statuses.",
+  "source_links": [
+    "frontend/bot_handlers.py",
+    "frontend/bot_callbacks.py",
+    "backend/services/ingestion_service.py",
+    "tests/test_bot_document_upload.py",
+    "docs/design/kb-auto-document-upload-v1.md"
+  ],
+  "recorded_on": "2026-03-04",
+  "last_verified_on": "2026-03-04",
+  "verify_after_days": 30,
+  "status": "active"
+}

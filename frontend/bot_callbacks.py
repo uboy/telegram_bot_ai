@@ -23,7 +23,6 @@ from frontend.templates.buttons import (
     user_management_menu,
     knowledge_base_menu,
     kb_actions_menu,
-    document_type_menu,
     confirm_menu,
     n8n_menu,
     rag_settings_menu,
@@ -35,6 +34,7 @@ from frontend.templates.buttons import (
     ai_context_choice_menu,
 )
 from frontend.backend_client import backend_client
+from shared.asr_limits import get_telegram_file_max_bytes
 try:
     from shared.config import ADMIN_IDS, N8N_PUBLIC_URL
 except ImportError:
@@ -1381,16 +1381,36 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             description = kb.get("description") or "Нет описания"
             text = f"📚 База знаний: {name}\n\nОписание: {description}\nФрагментов: {chunks_count}"
             
-            # Проверить, есть ли ожидающий документ для загрузки
-            if 'pending_document' in context.user_data:
-                # Установить базу знаний и загрузить документ
+            # Проверить, есть ли ожидающие документы для загрузки
+            pending_documents = list(context.user_data.pop("pending_documents", []) or [])
+            legacy_pending = context.user_data.pop("pending_document", None)
+            if legacy_pending:
+                pending_documents.append(legacy_pending)
+            if pending_documents:
                 context.user_data['kb_id'] = kb_id
-                pending = context.user_data.pop('pending_document')
-                
-                # Загрузить документ асинхронно через backend
-                from frontend.bot_handlers import load_document_to_kb
-                await safe_edit_message_text(query, "📤 Загружаю документ...")
-                await load_document_to_kb(query, context, pending, kb_id)
+                from frontend.bot_handlers import process_pending_documents_for_kb
+
+                await safe_edit_message_text(
+                    query,
+                    f"📤 Запускаю загрузку отложенных документов: {len(pending_documents)} шт.",
+                )
+                pending_user = UserContext(
+                    telegram_id=str(user.get("telegram_id") or (query.from_user.id if query.from_user else "")),
+                    username=user.get("username"),
+                    full_name=getattr(query.from_user, "full_name", None) if query.from_user else None,
+                    role=(user.get("role") or "admin"),
+                    approved=True,
+                    preferred_provider=user.get("preferred_provider"),
+                    preferred_model=user.get("preferred_model"),
+                    preferred_image_model=user.get("preferred_image_model"),
+                )
+                await process_pending_documents_for_kb(
+                    message=query.message,
+                    context=context,
+                    user=pending_user,
+                    kb_id=kb_id,
+                    pending_payloads=pending_documents,
+                )
                 return
             
             # Проверить, есть ли ожидающий запрос для поиска
@@ -1635,8 +1655,16 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     if data.startswith('kb_upload:'):
         kb_id = int(data.split(':')[1])
         context.user_data['kb_id'] = kb_id
-        context.user_data['upload_mode'] = 'document'
-        await safe_edit_message_text(query, "Выберите тип документа для загрузки:", reply_markup=document_type_menu())
+        context.user_data['upload_mode'] = 'document_auto'
+        context.user_data['state'] = None
+        tg_limit = get_telegram_file_max_bytes()
+        await safe_edit_message_text(
+            query,
+            "📤 Режим загрузки документов\n\n"
+            "Отправьте один или несколько документов, бот сам определит тип и обработает файлы.\n"
+            f"Ограничение Telegram на один файл: ~{tg_limit // (1024 * 1024)} MB.\n"
+            "После обработки бот пришлет детальный отчет по каждому документу.",
+        )
         return
     
     if data.startswith('kb_wiki_crawl:'):
@@ -1957,26 +1985,13 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         if doc_type == 'web':
             context.user_data['state'] = 'waiting_url'
             await safe_edit_message_text(query, "Введите URL веб-страницы:")
-        elif doc_type == 'image':
-            context.user_data['kb_id'] = kb_id
-            await safe_edit_message_text(query, "Отправьте изображение для обработки и добавления в базу знаний:")
-        elif doc_type == 'zip':
+        else:
             context.user_data['kb_id'] = kb_id
             await safe_edit_message_text(
                 query,
-                "📦 Отправьте ZIP архив с документами.\n\n"
-                "Бот автоматически извлечет и обработает все поддерживаемые файлы из архива:\n"
-                "• Markdown (.md)\n"
-                "• Текстовые файлы (.txt)\n"
-                "• Word документы (.docx)\n"
-                "• Excel таблицы (.xlsx)\n"
-                "• PDF файлы (.pdf)\n"
-                "• Изображения (.jpg, .png и др.)\n\n"
-                "После обработки вы получите отчет о загруженных файлах."
+                "Тип файла выбирать больше не нужно.\n"
+                "Отправьте один или несколько документов — бот определит формат автоматически.",
             )
-        else:
-            context.user_data['kb_id'] = kb_id
-            await safe_edit_message_text(query, f"Отправьте файл типа {doc_type}")
         return
     
     # Подтверждение действий

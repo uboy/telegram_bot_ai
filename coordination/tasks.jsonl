@@ -13,3 +13,8 @@
 {"id":"KBBUG-002","title":"Implement waiting_kb_name handling in bot text state machine","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
 {"id":"KBBUG-003","title":"Add regression test and run focused verification for KB creation flow","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
 {"id":"KBBUG-004","title":"Update docs/spec rationale and finalize review report","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}
+{"id":"DOCUPL-001","title":"Research and design auto-detect multi-document upload flow with Telegram limits and result report","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-04"}
+{"id":"DOCUPL-002","title":"Implement frontend upload flow: no type menu, auto-detect, batch processing, pending queue","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
+{"id":"DOCUPL-003","title":"Add regression tests and run focused verification for upload flow/reporting","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
+{"id":"DOCUPL-004","title":"Update spec/design/traceability/usage and produce review artifacts","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}
+{"id":"DOCUPL-005","title":"Add extra ingestion-call diagnostics tests and analyze no-processing incident logs","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}

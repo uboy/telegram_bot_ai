@@ -6,7 +6,7 @@ import os
 import tempfile
 import hashlib
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from shared.database import Session, User, Message, KnowledgeBase, KnowledgeImportLog
@@ -39,13 +39,25 @@ from html import escape
 from frontend.templates.buttons import (
     main_menu, admin_menu, settings_menu, ai_providers_menu,
     user_management_menu, knowledge_base_menu, kb_actions_menu,
-    document_type_menu, confirm_menu, search_options_menu,
+    confirm_menu, search_options_menu,
     asr_models_menu, ai_context_choice_menu
 )
 from shared.config import ADMIN_IDS, AI_PROGRESS_THRESHOLD_SEC
 from shared.n8n_client import n8n_client
 
 # Глобальный session удалён - создаём session локально в функциях
+DOCUMENT_UPLOAD_GROUP_DELAY_SEC = 1.2
+DOCUMENT_JOB_POLL_INTERVAL_SEC = 2.0
+DOCUMENT_JOB_TIMEOUT_SEC = 300.0
+DOCUMENT_JOB_MAX_PARALLEL = 3
+
+
+def _format_bytes_short(size_bytes: int) -> str:
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes} B"
 
 
 async def check_user(update: Update) -> Optional[UserContext]:
@@ -350,6 +362,378 @@ async def reply_html_safe(message, html_text: str, reply_markup=None) -> None:
         await message.reply_text(chunk, **kwargs)
 
 
+def _infer_document_file_type(file_name: str, mime_type: Optional[str] = None) -> Optional[str]:
+    name = (file_name or "").strip().lower()
+    ext = os.path.splitext(name)[1].lstrip(".")
+    mime = (mime_type or "").strip().lower()
+
+    ext_aliases = {
+        "markdown": "md",
+        "jpeg": "jpg",
+        "yml": "txt",
+        "yaml": "txt",
+        "log": "txt",
+        "conf": "txt",
+        "cfg": "txt",
+        "ini": "txt",
+    }
+    if ext in ext_aliases:
+        ext = ext_aliases[ext]
+
+    if ext == "zip":
+        return "zip"
+    if ext and document_loader_manager.get_loader(ext):
+        return ext
+
+    mime_to_type = {
+        "application/pdf": "pdf",
+        "application/zip": "zip",
+        "application/x-zip-compressed": "zip",
+        "application/msword": "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.ms-excel": "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "application/json": "json",
+        "text/markdown": "md",
+        "text/plain": "txt",
+    }
+    if mime in mime_to_type:
+        return mime_to_type[mime]
+    if mime.startswith("text/"):
+        return "txt"
+    return None
+
+
+def _build_document_upload_report(kb_id: int, results: list[dict[str, Any]]) -> str:
+    total = len(results)
+    success = [r for r in results if r.get("status") == "completed"]
+    failed = [r for r in results if r.get("status") != "completed"]
+
+    lines = [
+        f"📄 Отчет по загрузке документов (KB #{kb_id})",
+        f"Всего файлов: {total}",
+        f"Успешно: {len(success)}",
+        f"С ошибкой: {len(failed)}",
+        "",
+    ]
+
+    if success:
+        lines.append("✅ Успешно:")
+        for item in success:
+            f_name = item.get("file_name") or "без имени"
+            f_type = item.get("file_type") or "unknown"
+            chunks = item.get("total_chunks")
+            chunks_part = f", фрагментов: {chunks}" if isinstance(chunks, int) else ""
+            lines.append(f"• {f_name} ({f_type}){chunks_part}")
+        lines.append("")
+
+    if failed:
+        lines.append("❌ Ошибки:")
+        for item in failed:
+            f_name = item.get("file_name") or "без имени"
+            f_type = item.get("file_type") or "unknown"
+            err = item.get("error") or "Неизвестная ошибка"
+            lines.append(f"• {f_name} ({f_type}) — {err}")
+        lines.append("")
+
+    lines.append("Проверьте журнал загрузок в админ-панели для дополнительной диагностики.")
+    return "\n".join(lines)
+
+
+async def _wait_document_job(job_id: int) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + DOCUMENT_JOB_TIMEOUT_SEC
+    while loop.time() < deadline:
+        job = await asyncio.to_thread(backend_client.get_job_status, job_id)
+        status = (job.get("status") or "").lower()
+        if status in {"completed", "failed"}:
+            return job
+        await asyncio.sleep(DOCUMENT_JOB_POLL_INTERVAL_SEC)
+    return {
+        "job_id": job_id,
+        "status": "failed",
+        "error": f"Таймаут ожидания завершения ({int(DOCUMENT_JOB_TIMEOUT_SEC)} сек).",
+    }
+
+
+async def _ingest_single_document_payload(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: UserContext,
+    kb_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    file_id = str(payload.get("file_id") or "")
+    file_name = str(payload.get("file_name") or "document.bin")
+    file_size = int(payload.get("file_size") or 0)
+    mime_type = payload.get("mime_type")
+
+    inferred_type = _infer_document_file_type(file_name, mime_type)
+    logger.info(
+        "document-upload: file=%s size=%s mime=%s inferred_type=%s kb_id=%s",
+        file_name,
+        file_size,
+        mime_type,
+        inferred_type,
+        kb_id,
+    )
+    if not inferred_type:
+        return {
+            "file_name": file_name,
+            "file_type": "unknown",
+            "status": "failed",
+            "error": "Неподдерживаемый тип файла.",
+        }
+
+    limit = get_telegram_file_max_bytes()
+    if file_size > 0 and file_size > limit:
+        return {
+            "file_name": file_name,
+            "file_type": inferred_type,
+            "status": "failed",
+            "error": (
+                f"Файл превышает лимит Telegram: {_format_bytes_short(file_size)} > "
+                f"{_format_bytes_short(limit)}."
+            ),
+        }
+
+    try:
+        tg_file = await context.bot.get_file(file_id)
+        raw = await tg_file.download_as_bytearray()
+        file_bytes = bytes(raw)
+    except Exception as e:  # noqa: BLE001
+        return {
+            "file_name": file_name,
+            "file_type": inferred_type,
+            "status": "failed",
+            "error": f"Не удалось скачать файл из Telegram: {e}",
+        }
+
+    if len(file_bytes) > limit:
+        return {
+            "file_name": file_name,
+            "file_type": inferred_type,
+            "status": "failed",
+            "error": (
+                f"Скачанный файл превышает лимит Telegram: {_format_bytes_short(len(file_bytes))} > "
+                f"{_format_bytes_short(limit)}."
+            ),
+        }
+
+    try:
+        resp = await asyncio.to_thread(
+            backend_client.ingest_document,
+            kb_id,
+            file_name,
+            file_bytes,
+            inferred_type,
+            str(user.telegram_id),
+            user.username,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {
+            "file_name": file_name,
+            "file_type": inferred_type,
+            "status": "failed",
+            "error": f"Ошибка вызова backend ingestion: {e}",
+        }
+
+    job_id_raw = resp.get("job_id")
+    logger.info(
+        "document-upload: backend response file=%s inferred_type=%s job_id=%s summary=%s",
+        file_name,
+        inferred_type,
+        job_id_raw,
+        resp.get("summary"),
+    )
+    if not job_id_raw:
+        return {
+            "file_name": file_name,
+            "file_type": inferred_type,
+            "status": "failed",
+            "error": resp.get("summary") or "Backend не вернул job_id.",
+        }
+
+    try:
+        job_id = int(job_id_raw)
+    except Exception:  # noqa: BLE001
+        job_id = -1
+
+    job = await _wait_document_job(job_id)
+    status = (job.get("status") or "").lower()
+    logger.info("document-upload: job finished file=%s job_id=%s status=%s", file_name, job_id, status)
+    if status == "completed":
+        return {
+            "file_name": file_name,
+            "file_type": inferred_type,
+            "status": "completed",
+            "job_id": job_id,
+            "total_chunks": resp.get("total_chunks"),
+        }
+    return {
+        "file_name": file_name,
+        "file_type": inferred_type,
+        "status": "failed",
+        "job_id": job_id,
+        "error": job.get("error") or "Задача ingestion завершилась с ошибкой.",
+    }
+
+
+async def _process_document_batch_upload(
+    *,
+    message: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: UserContext,
+    kb_id: int,
+    payloads: list[dict[str, Any]],
+) -> None:
+    if not payloads:
+        return
+
+    status_message = await message.reply_text(
+        f"📥 Получено документов: {len(payloads)}. Начинаю обработку..."
+    )
+    semaphore = asyncio.Semaphore(max(1, DOCUMENT_JOB_MAX_PARALLEL))
+
+    async def _run_one(item: dict[str, Any]) -> dict[str, Any]:
+        async with semaphore:
+            return await _ingest_single_document_payload(
+                context=context,
+                user=user,
+                kb_id=kb_id,
+                payload=item,
+            )
+
+    raw_results = await asyncio.gather(*[_run_one(item) for item in payloads], return_exceptions=True)
+    results: list[dict[str, Any]] = []
+    for idx, result in enumerate(raw_results):
+        if isinstance(result, Exception):
+            item = payloads[idx]
+            results.append(
+                {
+                    "file_name": item.get("file_name") or "без имени",
+                    "file_type": _infer_document_file_type(
+                        str(item.get("file_name") or ""),
+                        item.get("mime_type"),
+                    )
+                    or "unknown",
+                    "status": "failed",
+                    "error": f"Необработанное исключение: {result}",
+                }
+            )
+        else:
+            results.append(result)
+
+    await _delete_message_safe(status_message)
+    ok_count = sum(1 for r in results if r.get("status") == "completed")
+    fail_count = len(results) - ok_count
+    logger.info(
+        "document-upload: batch finished kb_id=%s total=%s success=%s failed=%s",
+        kb_id,
+        len(results),
+        ok_count,
+        fail_count,
+    )
+    report_text = _build_document_upload_report(kb_id, results)
+    for chunk in _split_plain_text_for_telegram(report_text, max_len=3900):
+        await message.reply_text(chunk)
+
+
+def _extract_document_payload(message: Any) -> dict[str, Any]:
+    doc = getattr(message, "document", None)
+    file_name = getattr(doc, "file_name", None) or f"document_{getattr(doc, 'file_unique_id', 'unknown')}.bin"
+    return {
+        "file_id": getattr(doc, "file_id", ""),
+        "file_name": file_name,
+        "file_size": int(getattr(doc, "file_size", 0) or 0),
+        "mime_type": getattr(doc, "mime_type", None),
+    }
+
+
+def _get_document_group_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
+    return context.application.bot_data.setdefault("document_upload_groups", {})
+
+
+async def _flush_document_group(
+    *,
+    group_key: str,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    try:
+        await asyncio.sleep(DOCUMENT_UPLOAD_GROUP_DELAY_SEC)
+    except asyncio.CancelledError:
+        return
+
+    groups = _get_document_group_store(context)
+    group = groups.pop(group_key, None)
+    if not group:
+        return
+
+    try:
+        await _process_document_batch_upload(
+            message=group["message"],
+            context=context,
+            user=group["user"],
+            kb_id=int(group["kb_id"]),
+            payloads=list(group["payloads"]),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("Ошибка обработки группы документов %s: %s", group_key, e, exc_info=True)
+        await group["message"].reply_text(f"❌ Ошибка batch-обработки документов: {e}")
+
+
+def _queue_document_in_media_group(
+    *,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: UserContext,
+    kb_id: int,
+    payload: dict[str, Any],
+) -> int:
+    message = update.message
+    media_group_id = getattr(message, "media_group_id", None)
+    if not media_group_id or not update.effective_chat:
+        return 0
+
+    group_key = f"{update.effective_chat.id}:{media_group_id}:{user.telegram_id}:{kb_id}"
+    groups = _get_document_group_store(context)
+    group = groups.get(group_key)
+    if not group:
+        group = {
+            "message": message,
+            "user": user,
+            "kb_id": kb_id,
+            "payloads": [],
+            "task": None,
+        }
+        groups[group_key] = group
+
+    group["message"] = message
+    group["payloads"].append(payload)
+    old_task = group.get("task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+    group["task"] = asyncio.create_task(_flush_document_group(group_key=group_key, context=context))
+    return len(group["payloads"])
+
+
+async def process_pending_documents_for_kb(
+    *,
+    message: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: UserContext,
+    kb_id: int,
+    pending_payloads: list[dict[str, Any]],
+) -> None:
+    await _process_document_batch_upload(
+        message=message,
+        context=context,
+        user=user,
+        kb_id=kb_id,
+        payloads=pending_payloads,
+    )
+
+
 async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT_TYPE, user: UserContext, query: str) -> Tuple[Optional[int], bool]:
     kb_id = context.user_data.get('kb_id')
     if kb_id: return kb_id, False
@@ -646,16 +1030,47 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     doc = update.message.document
-    if not doc: return
-    
-    kb_id = context.user_data.get('kb_id')
-    if not kb_id:
-        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
-        context.user_data['pending_document'] = {'file_id': doc.file_id, 'file_name': doc.file_name}
-        await update.message.reply_text("Выберите БЗ для загрузки:", reply_markup=knowledge_base_menu(kbs))
+    if not doc:
         return
 
-    await update.message.reply_text("🔄 Загружаю документ...")
+    payload = _extract_document_payload(update.message)
+    kb_id_raw = context.user_data.get('kb_id')
+    kb_id = int(kb_id_raw) if kb_id_raw else None
+    if not kb_id:
+        pending = context.user_data.setdefault("pending_documents", [])
+        pending.append(payload)
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+        if not kbs:
+            await update.message.reply_text("❌ Нет доступных баз знаний для загрузки.")
+            return
+        await update.message.reply_text(
+            f"📎 Файл добавлен в очередь ({len(pending)} шт.).\n"
+            "Выберите БЗ, и бот загрузит все ожидающие документы:",
+            reply_markup=knowledge_base_menu(kbs),
+        )
+        return
+
+    queued_in_group = _queue_document_in_media_group(
+        update=update,
+        context=context,
+        user=user,
+        kb_id=kb_id,
+        payload=payload,
+    )
+    if queued_in_group:
+        if queued_in_group == 1:
+            await update.message.reply_text(
+                "📦 Принята группа документов. Дождусь остальных файлов и отправлю единый отчет."
+            )
+        return
+
+    await _process_document_batch_upload(
+        message=update.message,
+        context=context,
+        user=user,
+        kb_id=kb_id,
+        payloads=[payload],
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):

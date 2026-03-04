@@ -412,7 +412,12 @@ class IngestionService:
 
         Логика перенесена из load_document_to_kb в боте.
         """
-        file_type = (file_type or "").lower()
+        file_type = (file_type or "").strip().lower()
+        if not file_type and file_name:
+            inferred_ext = os.path.splitext(file_name)[1].lstrip(".").lower()
+            if inferred_ext == "markdown":
+                inferred_ext = "md"
+            file_type = inferred_ext
         settings = self._get_kb_settings(kb_id)
 
         # Определить пользователя для журнала загрузок

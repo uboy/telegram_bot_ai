@@ -47,3 +47,52 @@
   - Validation scripts referenced by policy were not found in repo:
     - `scripts/validate-review-report.ps1`
     - `scripts/validate-cycle-proof.ps1`
+
+## 2026-03-04 New Task: Auto Document Upload
+- task: improve KB document upload UX/logic
+- classification: non-trivial
+- findings:
+  - `kb_upload` currently forces explicit `document_type_menu`.
+  - `handle_document` does not run backend ingestion and does not produce upload report.
+  - Callback path still imports missing `load_document_to_kb`, so pending-doc flow is inconsistent.
+  - Backend ingestion already supports async per-file jobs and status polling (`/ingestion/document`, `/jobs/{id}`).
+- plan:
+  - remove explicit type menu step for document uploads,
+  - add auto type inference and batch report flow with Telegram size guard,
+  - support pending list before KB selection,
+  - add tests and docs updates.
+- current_step: implementation (DOCUPL-002 in progress).
+
+## 2026-03-04 Auto Upload Completion Snapshot
+- implementation:
+  - `kb_upload` switched to direct file upload mode without type preselection.
+  - Added auto file-type inference and Telegram size-limit validation in bot handler.
+  - Added pending documents queue (list) for cases when KB is selected later.
+  - Added media-group aggregation and batch processing with consolidated report.
+  - Backend ingestion now infers `file_type` from filename when type is omitted.
+- tests:
+  - Added `tests/test_bot_document_upload.py` (inference/report/pending/batch behavior).
+- verification:
+  - `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py backend/services/ingestion_service.py tests/test_bot_document_upload.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`9 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+- docs/spec:
+  - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/USAGE.md`.
+  - Added design doc `docs/design/kb-auto-document-upload-v1.md`.
+  - Added review artifact `coordination/reviews/doc-upload-auto-detect-2026-03-04.md`.
+
+## 2026-03-04 Extra Test + Incident Analysis
+- user feedback:
+  - document looked unprocessed in previous bot version with no visible error.
+- log analysis:
+  - provided backend logs contain no `/api/v1/ingestion/document` calls, so ingestion was not triggered from frontend in that run.
+- additional hardening:
+  - added diagnostic upload logs in `frontend/bot_handlers.py` for inferred type, backend response/job_id, and final batch status.
+- extra regression tests added:
+  - ingestion call is actually made (`test_ingest_single_document_payload_calls_backend_ingestion`),
+  - missing `job_id` now yields explicit failed result (`test_ingest_single_document_payload_reports_missing_job_id`).
+- latest verification:
+  - `python -m py_compile frontend/bot_handlers.py tests/test_bot_document_upload.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py` -> PASS (`6 passed`)
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`11 passed`)
+  - `python scripts/scan_secrets.py` -> PASS

@@ -1,3 +1,37 @@
+## Research: Auto-Detect Multi-Document Upload to KB
+
+Date: 2026-03-04
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User Request
+- Remove explicit file-type selection before upload.
+- Bot must auto-detect uploaded document types.
+- Support uploading multiple documents in one flow.
+- Respect Telegram upload/file limits.
+- Return report with successes/failures for validation.
+
+### Findings
+- Current admin flow still asks explicit type:
+  - `frontend/bot_callbacks.py` (`kb_upload` -> `document_type_menu`).
+- `handle_document` is incomplete and does not launch backend ingestion.
+- Callback still references removed function `load_document_to_kb` (runtime mismatch risk).
+- Backend supports async ingestion per file with job tracking:
+  - `POST /ingestion/document` returns `job_id`.
+  - `/jobs/{id}` exposes completion/failure.
+- Existing loader manager supports many types by extension:
+  - markdown/pdf/docx/xlsx/txt/json/chat/code/image and more.
+- Telegram file size limits are already codified in `shared/asr_limits.py` via `get_telegram_file_max_bytes()` (20 MB) and can be reused for document guard.
+
+### Design Direction
+- Replace “select type first” UX with “send one or several files”.
+- Infer file type from filename/mime in bot handler and send inferred type to backend.
+- Implement batch processing with grouped summary report:
+  - total accepted,
+  - per-file success/failure,
+  - reasons (size, unsupported type, job error, timeout).
+- Support pending queue when KB is not selected yet.
+- Preserve backwards compatibility for old `upload_type:*` callbacks where possible.
+
 ## Research: KB Creation Fails in Admin Panel
 
 Date: 2026-03-04
