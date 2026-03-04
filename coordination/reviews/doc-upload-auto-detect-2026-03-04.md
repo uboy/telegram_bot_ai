@@ -19,7 +19,9 @@
   - validates Telegram file-size limits,
   - supports pending queues and media-group batch upload,
   - polls ingestion jobs and sends per-file success/failure report.
+  - resolves actual `total_chunks` from import log after job completion (instead of async launch response placeholder).
 - Backend ingestion hardened with file-type inference from filename when type omitted.
+- UI labels cleaned up where mojibake `??` appeared in KB settings/code buttons.
 - Automated tests cover:
   - type inference,
   - report formatting with failures,

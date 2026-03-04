@@ -203,6 +203,11 @@ async def test_ingest_single_document_payload_calls_backend_ingestion(monkeypatc
 
     monkeypatch.setattr(bot_handlers.backend_client, "ingest_document", _ingest_document)
     monkeypatch.setattr(bot_handlers.backend_client, "get_job_status", _get_job_status)
+    monkeypatch.setattr(
+        bot_handlers.backend_client,
+        "get_import_log",
+        lambda _kb_id: [{"source_path": "spec.md", "total_chunks": 17}],
+    )
 
     user = UserContext(
         telegram_id="11",
@@ -226,6 +231,7 @@ async def test_ingest_single_document_payload_calls_backend_ingestion(monkeypatc
 
     assert result["status"] == "completed"
     assert result["file_type"] == "md"
+    assert result["total_chunks"] == 17
     assert calls["ingest"] == 1
     assert calls["status"] >= 1
 

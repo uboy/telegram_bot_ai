@@ -440,6 +440,21 @@ def _build_document_upload_report(kb_id: int, results: list[dict[str, Any]]) -> 
     return "\n".join(lines)
 
 
+def _lookup_import_log_chunks(kb_id: int, source_path: str) -> Optional[int]:
+    logs = backend_client.get_import_log(kb_id) or []
+    source_path_norm = (source_path or "").strip()
+    if not source_path_norm:
+        return None
+    for row in logs:
+        row_path = str(row.get("source_path") or "").strip()
+        if row_path == source_path_norm:
+            try:
+                return int(row.get("total_chunks") or 0)
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
 async def _wait_document_job(job_id: int) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + DOCUMENT_JOB_TIMEOUT_SEC
@@ -563,12 +578,21 @@ async def _ingest_single_document_payload(
     status = (job.get("status") or "").lower()
     logger.info("document-upload: job finished file=%s job_id=%s status=%s", file_name, job_id, status)
     if status == "completed":
+        chunks_from_log: Optional[int] = None
+        if inferred_type != "zip":
+            chunks_from_log = await asyncio.to_thread(_lookup_import_log_chunks, kb_id, file_name)
+        chunks_from_response = resp.get("total_chunks")
+        final_chunks: Optional[int] = None
+        if isinstance(chunks_from_log, int):
+            final_chunks = chunks_from_log
+        elif isinstance(chunks_from_response, int) and chunks_from_response > 0:
+            final_chunks = chunks_from_response
         return {
             "file_name": file_name,
             "file_type": inferred_type,
             "status": "completed",
             "job_id": job_id,
-            "total_chunks": resp.get("total_chunks"),
+            "total_chunks": final_chunks,
         }
     return {
         "file_name": file_name,

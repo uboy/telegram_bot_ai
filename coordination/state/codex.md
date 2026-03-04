@@ -96,3 +96,17 @@
   - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py` -> PASS (`6 passed`)
   - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`11 passed`)
   - `python scripts/scan_secrets.py` -> PASS
+
+## 2026-03-04 Runtime Follow-up
+- observed from user logs:
+  - ingestion endpoint + job polling are now called correctly;
+  - report still showed `total_chunks=0`.
+- root cause:
+  - async `/ingestion/document` launch response always returns `total_chunks=0` placeholder.
+- fix:
+  - after `job completed`, upload handler reads actual chunk count from KB import log (`source_path == file_name`).
+  - normalized mojibake `??` labels in KB settings/code buttons.
+- follow-up verification:
+  - `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py frontend/templates/buttons.py tests/test_bot_document_upload.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`11 passed`)
+  - `python scripts/scan_secrets.py` -> PASS

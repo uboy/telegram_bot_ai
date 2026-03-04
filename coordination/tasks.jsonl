@@ -18,3 +18,4 @@
 {"id":"DOCUPL-003","title":"Add regression tests and run focused verification for upload flow/reporting","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
 {"id":"DOCUPL-004","title":"Update spec/design/traceability/usage and produce review artifacts","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}
 {"id":"DOCUPL-005","title":"Add extra ingestion-call diagnostics tests and analyze no-processing incident logs","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
+{"id":"DOCUPL-006","title":"Fix chunk count reporting via import-log and normalize corrupted KB button labels","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}

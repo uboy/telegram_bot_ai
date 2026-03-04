@@ -1501,7 +1501,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
 
         pending = context.user_data.get("pending_ingest") or {}
         if pending.get("kb_id") != kb_id or pending.get("kind") != source_kind:
-            await safe_edit_message_text(query, "?? Нет данных для продолжения загрузки.", reply_markup=kb_actions_menu(kb_id))
+            await safe_edit_message_text(query, "❌ Нет данных для продолжения загрузки.", reply_markup=kb_actions_menu(kb_id))
             return
 
         settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
@@ -1526,7 +1526,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         username = query.from_user.username if query.from_user else ""
 
         if source_kind == "web":
-            await safe_edit_message_text(query, "?? Загружаю веб-страницу...")
+            await safe_edit_message_text(query, "🌐 Загружаю веб-страницу...")
             stats = await asyncio.to_thread(
                 backend_client.ingest_web_page,
                 kb_id=kb_id,
@@ -1538,7 +1538,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             text = f"? Загружено {chunks_added} фрагментов с веб-страницы."
             await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
         elif source_kind == "wiki":
-            await safe_edit_message_text(query, "?? Запускаю рекурсивный обход вики...")
+            await safe_edit_message_text(query, "🔄 Запускаю рекурсивный обход вики...")
             stats = await asyncio.to_thread(
                 backend_client.ingest_wiki_crawl,
                 kb_id=kb_id,
@@ -1560,7 +1560,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             )
             await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
         else:
-            await safe_edit_message_text(query, "?? Неизвестный тип загрузки.", reply_markup=kb_actions_menu(kb_id))
+            await safe_edit_message_text(query, "❌ Неизвестный тип загрузки.", reply_markup=kb_actions_menu(kb_id))
 
         context.user_data.pop("pending_ingest", None)
         return
@@ -1570,10 +1570,10 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         settings_resp = await asyncio.to_thread(backend_client.get_kb_settings, kb_id)
         settings = settings_resp.get("settings") if isinstance(settings_resp, dict) else None
         if not settings:
-            await safe_edit_message_text(query, "?? Не удалось загрузить настройки KB.", reply_markup=kb_actions_menu(kb_id))
+            await safe_edit_message_text(query, "❌ Не удалось загрузить настройки KB.", reply_markup=kb_actions_menu(kb_id))
             return
         text = (
-            f"?? Настройки базы знаний #{kb_id}\n\n"
+            f"⚙️ Настройки базы знаний #{kb_id}\n\n"
             "Нажимайте на кнопки, чтобы переключить режим."
         )
         await safe_edit_message_text(query, text, reply_markup=kb_settings_menu(kb_id, settings))
@@ -1613,7 +1613,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
 
         await safe_edit_message_text(
             query,
-            f"?? Настройки обновлены для KB #{kb_id}.",
+            f"✅ Настройки обновлены для KB #{kb_id}.",
             reply_markup=kb_settings_menu(kb_id, updated_settings),
         )
         return
@@ -1621,9 +1621,9 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     if data.startswith('kb_code:'):
         kb_id = int(data.split(':')[1])
         buttons = [
-            [InlineKeyboardButton("?? Локальный путь", callback_data=f"kb_code_path:{kb_id}")],
-            [InlineKeyboardButton("?? Git URL", callback_data=f"kb_code_git:{kb_id}")],
-            [InlineKeyboardButton("?? Назад", callback_data=f"kb_select:{kb_id}")],
+            [InlineKeyboardButton("📁 Локальный путь", callback_data=f"kb_code_path:{kb_id}")],
+            [InlineKeyboardButton("🔗 Git URL", callback_data=f"kb_code_git:{kb_id}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data=f"kb_select:{kb_id}")],
         ]
         await safe_edit_message_text(
             query,

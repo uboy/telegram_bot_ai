@@ -24,6 +24,7 @@ Type: Behavior improvement (admin upload UX + reliability)
   - pending queue for uploads before KB selection,
   - media-group batch accumulation,
   - backend ingestion job polling and consolidated report generation.
+  - report `total_chunks` is resolved from KB import log after job completion (async launch response always has `total_chunks=0`).
 - `backend/services/ingestion_service.py`:
   - fallback inference of `file_type` from `file_name` if API client omitted type.
 
@@ -34,6 +35,9 @@ Type: Behavior improvement (admin upload UX + reliability)
 ## Verification
 - `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py backend/services/ingestion_service.py tests/test_bot_document_upload.py`
 - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py`
+- Extra checks:
+  - `test_ingest_single_document_payload_calls_backend_ingestion`
+  - `test_ingest_single_document_payload_reports_missing_job_id`
 
 ## Risks
 - Processing many large files concurrently can increase backend load.

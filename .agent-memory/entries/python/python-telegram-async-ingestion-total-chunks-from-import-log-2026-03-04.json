@@ -1,0 +1,17 @@
+{
+  "id": "python-telegram-async-ingestion-total-chunks-from-import-log-2026-03-04",
+  "technology": "python-telegram-bot-backend-ingestion",
+  "skills": ["developer", "reviewer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "In async ingestion flow, launch endpoint returns placeholder totals. Use job status for completion and fetch final per-file chunk count from import log (or store explicit result payload in job model).",
+  "source_links": [
+    "frontend/bot_handlers.py",
+    "backend/api/routes/ingestion.py",
+    "backend/services/indexing_service.py",
+    "tests/test_bot_document_upload.py"
+  ],
+  "recorded_on": "2026-03-04",
+  "last_verified_on": "2026-03-04",
+  "verify_after_days": 30,
+  "status": "active"
+}

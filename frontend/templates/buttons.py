@@ -119,31 +119,31 @@ def kb_settings_menu(kb_id: int, settings: dict):
 
     buttons = [
         [InlineKeyboardButton(
-            f"?? Web: {web_mode}",
+            f"🌐 Web: {web_mode}",
             callback_data=f"kb_setting:{kb_id}:chunking.web.mode:{_next_value(web_mode, mode_options)}",
         )],
         [InlineKeyboardButton(
-            f"?? Wiki: {wiki_mode}",
+            f"📚 Wiki: {wiki_mode}",
             callback_data=f"kb_setting:{kb_id}:chunking.wiki.mode:{_next_value(wiki_mode, mode_options)}",
         )],
         [InlineKeyboardButton(
-            f"?? Markdown: {md_mode}",
+            f"📄 Markdown: {md_mode}",
             callback_data=f"kb_setting:{kb_id}:chunking.markdown.mode:{_next_value(md_mode, mode_options)}",
         )],
         [InlineKeyboardButton(
-            f"?? Code: {code_mode}",
+            f"💻 Code: {code_mode}",
             callback_data=f"kb_setting:{kb_id}:chunking.code.mode:{_next_value(code_mode, code_options)}",
         )],
         [InlineKeyboardButton(
-            f"?? Single-page: {'on' if single_page else 'off'}",
+            f"📑 Single-page: {'on' if single_page else 'off'}",
             callback_data=f"kb_setting:{kb_id}:rag.single_page_mode:{'false' if single_page else 'true'}",
         )],
         [InlineKeyboardButton(
-            f"?? Prompt ingest: {'on' if prompt_ingest else 'off'}",
+            f"✍️ Prompt ingest: {'on' if prompt_ingest else 'off'}",
             callback_data=f"kb_setting:{kb_id}:ui.prompt_on_ingest:{'false' if prompt_ingest else 'true'}",
         )],
-        [InlineKeyboardButton("?? Индексировать код", callback_data=f"kb_code:{kb_id}")],
-        [InlineKeyboardButton("?? Назад", callback_data=f"kb_select:{kb_id}")],
+        [InlineKeyboardButton("💻 Индексировать код", callback_data=f"kb_code:{kb_id}")],
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"kb_select:{kb_id}")],
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -230,8 +230,8 @@ def kb_actions_menu(kb_id: int, show_sources: bool = False):
     buttons = [
         [InlineKeyboardButton("📤 Загрузить документы", callback_data=f"kb_upload:{kb_id}")],
         [InlineKeyboardButton("🌐 Собрать вики по URL", callback_data=f"kb_wiki_crawl:{kb_id}")],
-        [InlineKeyboardButton("?? Настройки KB", callback_data=f"kb_settings:{kb_id}")],
-        [InlineKeyboardButton("?? Индексировать код", callback_data=f"kb_code:{kb_id}")],
+        [InlineKeyboardButton("⚙️ Настройки KB", callback_data=f"kb_settings:{kb_id}")],
+        [InlineKeyboardButton("💻 Индексировать код", callback_data=f"kb_code:{kb_id}")],
         [InlineKeyboardButton("📜 Журнал загрузок", callback_data=f"kb_import_log:{kb_id}")],
         [InlineKeyboardButton("📋 Список источников", callback_data=f"kb_sources:{kb_id}")],
         [InlineKeyboardButton("🗑️ Очистить базу", callback_data=f"kb_clear:{kb_id}")],
