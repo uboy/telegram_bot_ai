@@ -9,3 +9,7 @@
 {"id":"AI-005","title":"Instrument ai_manager query/query_multimodal with telemetry persistence","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-01"}
 {"id":"AI-006","title":"Add/adjust tests for telemetry, predictor, session flow, and bot regressions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-01"}
 {"id":"AI-007","title":"Update SPEC/docs/traceability for AI mode v2","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-01"}
+{"id":"KBBUG-001","title":"Research root cause of KB creation failure in admin panel and draft fix plan","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-04"}
+{"id":"KBBUG-002","title":"Implement waiting_kb_name handling in bot text state machine","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
+{"id":"KBBUG-003","title":"Add regression test and run focused verification for KB creation flow","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
+{"id":"KBBUG-004","title":"Update docs/spec rationale and finalize review report","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}

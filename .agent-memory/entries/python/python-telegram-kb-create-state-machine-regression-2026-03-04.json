@@ -1,0 +1,17 @@
+{
+  "id": "python-telegram-kb-create-state-machine-regression-2026-03-04",
+  "technology": "python-telegram-bot",
+  "skills": ["developer", "reviewer", "spec-maintainer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "State set by callbacks must be mirrored in text handler branches. Missing state branch causes user input to go to fallback path and breaks user flow without explicit error.",
+  "source_links": [
+    "frontend/bot_callbacks.py",
+    "frontend/bot_handlers.py",
+    "tests/test_bot_text_ai_mode.py",
+    "docs/design/kb-create-state-machine-fix-v1.md"
+  ],
+  "recorded_on": "2026-03-04",
+  "last_verified_on": "2026-03-04",
+  "verify_after_days": 30,
+  "status": "active"
+}

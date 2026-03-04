@@ -1,3 +1,28 @@
+## Plan: Fix KB Creation State Machine Regression
+
+Date: 2026-03-04
+Status: In progress
+
+### Implementation Checklist
+- [x] Confirm user-reported reproduction path from logs.
+- [x] Locate callback state assignment (`waiting_kb_name`) and text handler mismatch.
+- [x] Implement `waiting_kb_name` branch in `frontend/bot_handlers.py`.
+- [x] Keep behavior admin-only and robust for empty names/backend failure.
+
+### Verification Checklist
+- [x] Add automated regression test for `waiting_kb_name` -> `create_knowledge_base`.
+- [x] Run focused pytest for bot text handler tests.
+- [x] Run syntax check for changed files.
+
+### Documentation Checklist
+- [x] Evaluate whether SPEC/docs updates are required.
+- [x] Update SPEC/design/traceability/usage docs for the bugfix.
+
+### Security/Policy Gates
+- [x] No new dependencies expected.
+- [x] Run secret scan before completion.
+- [x] Note missing policy validation scripts (`scripts/validate-review-report.ps1`, `scripts/validate-cycle-proof.ps1`).
+
 # Plan: AI Mode v2 (Telemetry + Predictor + Context Sessions)
 
 Date: 2026-03-01

@@ -1,0 +1,21 @@
+{
+  "task_id": "KBBUG-002",
+  "implementation_agent": "codex",
+  "review_agent": "codex-review",
+  "required_commands": [
+    "python -m py_compile frontend/bot_handlers.py tests/test_bot_text_ai_mode.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_bot_text_ai_mode.py",
+    "python scripts/scan_secrets.py"
+  ],
+  "required_artifacts": [
+    ".scratchpad/research.md",
+    ".scratchpad/plan.md",
+    "docs/design/kb-create-state-machine-fix-v1.md",
+    "coordination/reviews/kb-create-state-machine-fix-2026-03-04.md"
+  ],
+  "size_limits": {
+    "max_files_changed": 12,
+    "max_lines_added": 220,
+    "max_lines_deleted": 80
+  }
+}

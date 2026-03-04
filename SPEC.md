@@ -97,6 +97,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 ## Acceptance criteria
 - Bot can register users and requires admin approval for non-admins.
 - Admin can create, list, clear, and delete knowledge bases via bot UI.
+- KB creation flow in admin panel is stateful: after "Создать базу знаний" and name input, bot must call backend create endpoint and return explicit success/failure instead of falling back to welcome screen.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).
 - RAG query returns an answer plus a list of sources with path/URL and metadata.
 - Inline citations are present when enabled and only reference provided sources.

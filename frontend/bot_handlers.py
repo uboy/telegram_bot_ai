@@ -458,6 +458,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
         context.user_data['state'] = None
+    elif state == 'waiting_kb_name' and user.role == 'admin':
+        kb_name = text_input.strip()
+        if not kb_name:
+            await update.message.reply_text("⚠️ Название базы знаний не может быть пустым. Введите название:")
+            return
+
+        created = await asyncio.to_thread(backend_client.create_knowledge_base, kb_name)
+        if created and created.get("id"):
+            await update.message.reply_text(
+                f"✅ База знаний '{kb_name}' создана!",
+                reply_markup=admin_menu(),
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Не удалось создать базу знаний '{kb_name}' через backend.",
+                reply_markup=admin_menu(),
+            )
+        context.user_data['state'] = None
     else:
         kb_id = context.user_data.get('kb_id')
         if kb_id:

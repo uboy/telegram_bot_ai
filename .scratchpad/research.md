@@ -1,3 +1,29 @@
+## Research: KB Creation Fails in Admin Panel
+
+Date: 2026-03-04
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User Symptom
+- In admin panel, after selecting `➕ Создать базу знаний` and entering a KB name (`МВП`, `MVP`), bot responds with `👋 Добро пожаловать!`.
+- Returning to KB list shows old KB only; new KB is not created.
+
+### Root Cause
+- `frontend/bot_callbacks.py` sets `context.user_data['state'] = 'waiting_kb_name'` on callback `kb_create`.
+- `frontend/bot_handlers.py::handle_text` has no branch for `state == 'waiting_kb_name'`.
+- As a result, entered KB name falls through to default branch and calls `handle_start(...)`, which sends `👋 Добро пожаловать!`.
+
+### Impact
+- KB creation flow from Telegram admin UI is broken for all admins.
+- Feature regression: state machine mismatch between callback and text handler.
+
+### Fix Direction
+- Add explicit `waiting_kb_name` branch in `handle_text` for admin users:
+  - validate non-empty KB name,
+  - call backend `create_knowledge_base`,
+  - return success/error message and admin menu,
+  - clear state after handling.
+- Add regression test for `waiting_kb_name` flow.
+
 # Research: AI Mode v2 (Telemetry + Context Memory + Progress UX)
 
 Date: 2026-03-01
