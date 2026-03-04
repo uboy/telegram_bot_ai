@@ -57,6 +57,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Optional reranker with top-N candidates and top-k final results.
   - Fallback keyword search if embeddings unavailable.
   - Context assembly with `SOURCE_ID` tags for inline citations.
+  - For definition-style questions ("что такое", "как определяется", "что включает"), ranking prioritizes explicit definitional fragments.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers.
   - Sanitize command snippets not present in KB context.
@@ -100,6 +101,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Admin can create, list, clear, and delete knowledge bases via bot UI.
 - KB creation flow in admin panel is stateful: after "Создать базу знаний" and name input, bot must call backend create endpoint and return explicit success/failure instead of falling back to welcome screen.
 - Admin KB upload does not require manual file-type selection; bot auto-detects document type, supports multiple files in one flow, validates Telegram file limits, and returns per-file success/failure report.
+- Global admin-level "upload documents" entry is removed; document upload starts from a selected KB only.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).
 - RAG query returns an answer plus a list of sources with path/URL and metadata.
 - Inline citations are present when enabled and only reference provided sources.
@@ -111,6 +113,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Direct AI mode prompt policy enforces concise first reply and clarification-first behavior for ambiguous user input.
 - AI request metrics are persisted for all `ai_manager` calls and include provider/model/latency/status fields.
 - AI mode shows temporary progress status for long requests (>5s predicted or observed) and removes it after completion to keep chat clean.
+- RAG definition-style questions prefer glossary/definition fragments over generic policy mentions when both are present.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
 - ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
 - **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**

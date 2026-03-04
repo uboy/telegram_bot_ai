@@ -28,6 +28,29 @@ Status: In progress
 - [x] Run secret scan before completion.
 - [x] Produce review report in `coordination/reviews/*`.
 
+## Plan: RAG Definition Intent + Admin Upload Navigation
+
+Date: 2026-03-04
+Status: Completed
+
+### Implementation Checklist
+- [x] Analyze current `rag_query` ranking and intent dispatch.
+- [x] Add `DEFINITION` intent and boosts for definition markers.
+- [x] Add `пункт N` reference boost for factoid questions.
+- [x] Remove duplicate global upload button from admin menu.
+- [x] Keep `admin_upload` callback as compatibility redirect.
+
+### Verification Checklist
+- [x] Add regression tests for definition-intent ranking and admin menu button set.
+- [x] Run focused pytest for changed behavior.
+- [x] Run `py_compile` for changed Python files.
+
+### Documentation Checklist
+- [x] Update `SPEC.md`.
+- [x] Add design doc in `docs/design/`.
+- [x] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [x] Update `docs/USAGE.md`.
+
 ## Plan: Fix KB Creation State Machine Regression
 
 Date: 2026-03-04

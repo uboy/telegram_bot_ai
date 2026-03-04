@@ -110,3 +110,20 @@
   - `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py frontend/templates/buttons.py tests/test_bot_document_upload.py` -> PASS
   - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`11 passed`)
   - `python scripts/scan_secrets.py` -> PASS
+
+## 2026-03-04 RAG + Navigation Follow-up
+- user ask:
+  - analyze why definition-style questions get weak answers,
+  - remove duplicate admin upload button/flow.
+- implementation:
+  - added `DEFINITION` intent + ranking boosts in `backend/api/routes/rag.py`.
+  - added `пункт N` boost for question patterns with explicit point references.
+  - removed global `admin_upload` button from `admin_menu`.
+  - kept `admin_upload` callback as compatibility redirect to KB list.
+- tests:
+  - added `tests/test_rag_query_definition_intent.py`.
+  - added `tests/test_buttons_admin_menu.py`.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py frontend/templates/buttons.py frontend/bot_callbacks.py tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`13 passed`)
+  - `python scripts/scan_secrets.py` -> PASS

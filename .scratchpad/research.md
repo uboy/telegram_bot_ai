@@ -32,6 +32,25 @@ Agent: codex (team-lead-orchestrator / architect phase)
 - Support pending queue when KB is not selected yet.
 - Preserve backwards compatibility for old `upload_type:*` callbacks where possible.
 
+## Research: Definition Questions Return Non-Definition Chunks
+
+Date: 2026-03-04
+Agent: codex
+
+### Observed User Symptom
+- Query "Как в документе определяется разметка данных?" returned a policy mention about anonymization instead of explicit definition.
+
+### Findings
+- Retrieval/ranking in `backend/api/routes/rag.py` had intents `HOWTO`/`TROUBLE`/`GENERAL` only.
+- Definition-style Russian queries were treated as `GENERAL`, without dedicated boosts for glossary-like fragments.
+- Query includes many "pointed fact" forms (`пункт N`), which also lacked dedicated ranking boosts.
+- Admin panel had duplicate upload entry (`admin_upload`) and KB-local upload entry, causing UX confusion.
+
+### Fix Direction
+- Introduce `DEFINITION` intent with definition-specific ranking boosts.
+- Add point-reference boost (`пункт N`) across intents.
+- Keep compatibility for stale `admin_upload` callbacks but remove global upload button from admin menu.
+
 ## Research: KB Creation Fails in Admin Panel
 
 Date: 2026-03-04

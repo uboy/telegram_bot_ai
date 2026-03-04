@@ -2482,7 +2482,11 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
         if not kbs:
             await safe_edit_message_text(query, "Сначала создайте базу знаний!", reply_markup=admin_menu())
-        else:
-            await safe_edit_message_text(query, "Выберите базу знаний для загрузки:", reply_markup=knowledge_base_menu(kbs))
+            return
+        await safe_edit_message_text(
+            query,
+            "Выберите базу знаний. Загрузка документов выполняется только внутри выбранной БЗ:",
+            reply_markup=knowledge_base_menu(kbs),
+        )
         return
 

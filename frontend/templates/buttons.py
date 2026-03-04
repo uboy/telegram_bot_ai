@@ -31,7 +31,6 @@ def admin_menu():
         [InlineKeyboardButton("🔧 Настройки ИИ", callback_data='admin_ai')],
         [InlineKeyboardButton("🎙️ Настройки распознавания", callback_data='admin_asr')],
         [InlineKeyboardButton("🔗 Интеграция n8n", callback_data='admin_n8n')],
-        [InlineKeyboardButton("📤 Загрузить документы", callback_data='admin_upload')],
         [InlineKeyboardButton("📊 Аналитика чатов", callback_data='admin_analytics')],
         [InlineKeyboardButton("🔙 Главное меню", callback_data='main_menu')],
     ])

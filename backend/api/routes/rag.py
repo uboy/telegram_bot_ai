@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import logging
 import os
+import re
 
 from backend.api.deps import get_db_dep, require_api_key
 from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource, RAGSummaryQuery, RAGSummaryAnswer
@@ -174,10 +175,23 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 "issue",
                 "stacktrace",
             ]
+            definition_terms = [
+                "что такое",
+                "как определяется",
+                "как в документе определяется",
+                "что называется",
+                "что включает",
+                "определение",
+                "definition",
+                "defined as",
+                "what is",
+            ]
             if any(term in q for term in howto_terms):
                 return "HOWTO"
             if any(term in q for term in trouble_terms):
                 return "TROUBLE"
+            if any(term in q for term in definition_terms):
+                return "DEFINITION"
             return "GENERAL"
 
         def get_doc_id(result: dict) -> str:
@@ -203,6 +217,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             meta = result.get("metadata") or {}
             doc_title = (meta.get("doc_title") or meta.get("title") or "").lower()
             section_title = (meta.get("section_title") or "").lower()
+            section_path = (meta.get("section_path") or "").lower()
             text = (result.get("content") or "").lower()
             q = (query or "").lower()
             source_path = (result.get("source_path") or "").lower()
@@ -231,6 +246,37 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     if "build" in source_path or "build" in doc_title or "build" in section_title:
                         score += 0.5
 
+            if intent == "DEFINITION":
+                definition_markers = (
+                    "называется",
+                    "определяется",
+                    "это ",
+                    "представляет собой",
+                    "этап ",
+                    "совокупность",
+                )
+                if any(m in text for m in definition_markers):
+                    score += 1.2
+                if any(m in section_title for m in ("определ", "глоссар", "термин")):
+                    score += 1.0
+                if any(m in section_path for m in ("определ", "глоссар", "термин")):
+                    score += 0.8
+
+                query_terms = [t for t in re.findall(r"[а-яёa-z0-9]{4,}", q) if t not in {"какие", "какой", "какая", "когда", "документе"}]
+                for term in query_terms[:8]:
+                    if f"{term} -" in text or f"{term} —" in text or f"{term}: " in text:
+                        score += 1.5
+                        break
+
+            point_matches = re.findall(r"пункт[а-я]*\s+(\d+)", q)
+            if point_matches:
+                for point_no in point_matches:
+                    point_token = f"пункт {point_no}"
+                    if point_token in text:
+                        score += 1.5
+                    if point_token in section_title or point_token in section_path:
+                        score += 1.5
+
             return score
 
         def select_docs(intent: str, ranked: List[dict]) -> List[str]:
@@ -245,6 +291,11 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             items = sorted(doc_best.items(), key=lambda x: x[1], reverse=True)
             top_doc, top_score = items[0]
             second_doc, second_score = (items[1] if len(items) > 1 else (None, None))
+
+            if intent == "DEFINITION":
+                if second_doc and (top_score - float(second_score)) < 0.2:
+                    return [top_doc, second_doc]
+                return [top_doc]
 
             if intent != "HOWTO":
                 return [d for d, _ in items[:3]]
