@@ -1413,26 +1413,19 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
                 )
                 return
             
-            # Проверить, есть ли ожидающий запрос для поиска
-            if context.user_data.get('state') == 'waiting_kb_for_query' and 'pending_query' in context.user_data:
-                # Установить базу знаний и выполнить запрос напрямую
+            # Проверить, есть ли ожидающие запросы для поиска
+            pending_queries = context.user_data.get("pending_queries") or []
+            if context.user_data.get('state') == 'waiting_kb_for_query' and (
+                pending_queries or 'pending_query' in context.user_data
+            ):
                 context.user_data['kb_id'] = kb_id
-                pending_query = context.user_data.pop('pending_query')
-                context.user_data['state'] = None
-                
-                await safe_edit_message_text(query, f"🔍 Ищу в базе знаний '{name}'...")
-                
-                from shared.utils import strip_html_tags
-                from frontend.templates.buttons import main_menu
-                from frontend.bot_handlers import perform_rag_query_and_render
-                
+                context.user_data['state'] = 'waiting_query'
+
+                from frontend.bot_handlers import enqueue_pending_queries_for_kb
+
                 tg_id = str(query.from_user.id) if query.from_user else ""
                 username = query.from_user.username if query.from_user else None
                 full_name = getattr(query.from_user, "full_name", None) if query.from_user else None
-                
-                # Берём source-of-truth из backend_user (уже получен в callback_handler),
-                # а preferred_* — из локального кэша (preferred_model/provider переменные выше по стеку)
-                # Здесь user - dict, который мы передали в handle_admin_callbacks
                 user_for_rag = UserContext(
                     telegram_id=tg_id,
                     username=username,
@@ -1443,18 +1436,17 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
                     preferred_model=user.get("preferred_model"),
                     preferred_image_model=user.get("preferred_image_model"),
                 )
-                
-                answer_html, has_answer = await perform_rag_query_and_render(
-                    pending_query, kb_id, user_for_rag
+                queued = await enqueue_pending_queries_for_kb(
+                    context=context,
+                    kb_id=kb_id,
+                    fallback_message=query.message,
+                    fallback_user=user_for_rag,
                 )
-                
-                menu = main_menu(is_admin=(user_for_rag.role == 'admin') if user_for_rag else False)
-                try:
-                    await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
-                except Exception as e:
-                    logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
-                    answer_plain = strip_html_tags(answer_html)
-                    await safe_edit_message_text(query, answer_plain, reply_markup=menu, parse_mode=None)
+                await safe_edit_message_text(
+                    query,
+                    f"✅ База знаний '{name}' выбрана. Запросов в очереди: {queued}.",
+                    reply_markup=kb_actions_menu(kb_id),
+                )
                 return
 
             if context.user_data.get('state') == 'waiting_kb_for_query' and 'pending_summary_query' in context.user_data:

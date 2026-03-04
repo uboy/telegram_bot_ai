@@ -1,21 +1,23 @@
 {
-  "task_id": "RAGNAV-001",
+  "task_id": "RAGSTACK-004",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile backend/api/routes/rag.py frontend/templates/buttons.py frontend/bot_callbacks.py tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py",
-    "python scripts/scan_secrets.py"
+    "python -m py_compile backend/api/routes/rag.py frontend/bot_handlers.py frontend/bot_callbacks.py shared/utils.py scripts/rag_api_smoke_test.py tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py",
+    ".venv\\Scripts\\python.exe scripts/rag_api_smoke_test.py --help",
+    "python scripts/scan_secrets.py",
+    "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
     ".scratchpad/research.md",
     ".scratchpad/plan.md",
-    "docs/design/rag-definition-intent-and-admin-upload-nav-v1.md",
-    "coordination/reviews/rag-definition-intent-and-admin-upload-nav-2026-03-04.md"
+    "docs/design/rag-stack-v2-migration-v1.md",
+    "coordination/reviews/rag-stack-v2-migration-2026-03-04.md"
   ],
   "size_limits": {
-    "max_files_changed": 22,
-    "max_lines_added": 520,
-    "max_lines_deleted": 180
+    "max_files_changed": 30,
+    "max_lines_added": 900,
+    "max_lines_deleted": 260
   }
 }

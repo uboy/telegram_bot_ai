@@ -147,3 +147,63 @@
   - `python -m py_compile backend/api/routes/rag.py tests/test_rag_query_definition_intent.py` -> PASS
   - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`14 passed`)
   - `python scripts/scan_secrets.py` -> PASS
+
+## 2026-03-04 Full RAG Stack Migration Kickoff
+- classification: non-trivial
+- startup ritual:
+  - re-read `coordination/tasks.jsonl` and `coordination/state/codex.md`
+  - synchronized last completed checkpoints
+- user request:
+  - full RAG stack quality upgrade for multi-source ingestion (pdf/docx/markdown/wiki/code/web/image/chat)
+  - add KB query progress indicator (auto-clean)
+  - add KB query queue with ordered replies under each original user message
+  - add backend API testing script
+- findings:
+  - ingestion surface already broad and suitable for stack-v2 retrieval upgrades without source-format regressions
+  - retrieval quality gaps remain for factual/legal numeric questions
+  - bot KB-search currently lacks queue worker/progress UX
+- orchestration artifacts updated:
+  - `coordination/tasks.jsonl` with `RAGSTACK-001..004`
+  - `coordination/cycle-contract.json` switched to `RAGSTACK-001`
+  - `.scratchpad/research.md` and `.scratchpad/plan.md` updated with migration design/checklists
+- in-progress implementation snapshot:
+  - `frontend/bot_handlers.py` has initial queue/progress scaffolding edits in working tree, not yet integrated with callbacks/tests.
+- next step:
+  - finish code-level stack-v2 integration (`rag.py` + `bot_callbacks.py`) and add regression tests + API smoke script.
+
+## 2026-03-04 RAG Stack v2 Completion Snapshot
+- classification: non-trivial
+- implementation:
+  - retrieval v2 in `backend/api/routes/rag.py`:
+    - added `FACTOID` intent,
+    - extended query hints (`fact_terms`, `year_tokens`),
+    - strengthened factual ranking boosts,
+    - widened keyword fallback for legal/numeric/year queries,
+    - tuned context assembly for factoid responses.
+  - KB search UX v2 in `frontend/bot_handlers.py` + `frontend/bot_callbacks.py`:
+    - FIFO queue worker for multiple KB questions,
+    - per-question `reply_to_message_id` answer routing,
+    - temporary progress bar during long KB requests with auto-delete cleanup,
+    - pending query flush when KB is selected.
+  - improved upload diagnostics in `frontend/bot_handlers.py`:
+    - chunk-count lookup now falls back to KB sources when import-log entry is zero/ambiguous.
+  - prompt cleanup in `shared/utils.py`:
+    - RU RAG answer prompt now avoids noisy "Основной ответ/Дополнительно найдено" template output.
+  - added backend smoke runner:
+    - `scripts/rag_api_smoke_test.py`.
+- tests:
+  - added/extended:
+    - `tests/test_rag_query_definition_intent.py` (factoid + metric/year fallback),
+    - `tests/test_bot_text_ai_mode.py` (queue/progress/pending flush coverage).
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py frontend/bot_handlers.py frontend/bot_callbacks.py shared/utils.py scripts/rag_api_smoke_test.py tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py` -> PASS
+  - `.venv\Scripts\python.exe scripts/rag_api_smoke_test.py --help` -> PASS
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec/review:
+  - added `docs/design/rag-stack-v2-migration-v1.md`,
+  - updated `SPEC.md`,
+  - updated `docs/REQUIREMENTS_TRACEABILITY.md`,
+  - updated `docs/USAGE.md`,
+  - added `coordination/reviews/rag-stack-v2-migration-2026-03-04.md`.

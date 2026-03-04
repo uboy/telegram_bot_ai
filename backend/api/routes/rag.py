@@ -173,12 +173,33 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 "defined as",
                 "what is",
             ]
+            factoid_terms = [
+                "кто",
+                "какой",
+                "какие",
+                "какая",
+                "сколько",
+                "как часто",
+                "какой целевой",
+                "целевой показатель",
+                "установлен на",
+                "принимает решение",
+                "механизмы реализации",
+                "основные принципы",
+                "в пункте",
+                "до 2030 года",
+                "what target",
+                "who decides",
+                "how often",
+            ]
             if any(term in q for term in howto_terms):
                 return "HOWTO"
             if any(term in q for term in trouble_terms):
                 return "TROUBLE"
             if any(term in q for term in definition_terms):
                 return "DEFINITION"
+            if any(term in q for term in factoid_terms):
+                return "FACTOID"
             return "GENERAL"
 
         def extract_query_hints(query: str) -> Dict[str, Any]:
@@ -203,9 +224,46 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             if definition_term:
                 definition_term = re.sub(r"^(в документе|в стратегии)\s+", "", definition_term).strip()
                 definition_term = re.sub(r"\s+", " ", definition_term).strip(" ?!.,:;")
+            stop_words = {
+                "что",
+                "как",
+                "когда",
+                "кто",
+                "какой",
+                "какая",
+                "какие",
+                "каких",
+                "какому",
+                "какими",
+                "где",
+                "для",
+                "чего",
+                "чему",
+                "почему",
+                "зачем",
+                "каков",
+                "какова",
+                "каковы",
+                "пункте",
+                "документе",
+                "стратегии",
+                "искусственного",
+                "интеллекта",
+                "развития",
+            }
+            fact_terms = []
+            for token in re.findall(r"[а-яёa-z0-9]{3,}", q):
+                if token in stop_words:
+                    continue
+                if token in fact_terms:
+                    continue
+                fact_terms.append(token)
+            year_tokens = re.findall(r"\b(20\d{2})\b", q)
             return {
                 "point_numbers": point_numbers,
                 "definition_term": definition_term,
+                "fact_terms": fact_terms[:10],
+                "year_tokens": year_tokens,
             }
 
         def get_doc_id(result: dict) -> str:
@@ -237,6 +295,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             source_path = (result.get("source_path") or "").lower()
             hints = hints or {}
             definition_term = (hints.get("definition_term") or "").strip().lower()
+            fact_terms = [str(t).lower() for t in (hints.get("fact_terms") or [])]
+            year_tokens = [str(t) for t in (hints.get("year_tokens") or [])]
 
             if "unit test" in q or "unittest" in q or "tests" in q:
                 if any(t in section_title for t in ("unit test", "unittest", "test")):
@@ -290,6 +350,28 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                         score += 1.5
                         break
 
+            if intent == "FACTOID":
+                fact_hits = 0
+                for term in fact_terms:
+                    if term in text:
+                        fact_hits += 1
+                    if term in section_title or term in section_path:
+                        score += 0.7
+                score += min(2.4, fact_hits * 0.45)
+
+                if "кто" in q and any(marker in text for marker in ("принимает", "определяет", "утверждает", "правительство", "президент")):
+                    score += 1.3
+                if "как часто" in q and any(marker in text for marker in ("ежегод", "ежекварт", "раз в", "не реже", "кажды")):
+                    score += 1.3
+                if any(marker in q for marker in ("целевой", "показатель", "объем", "ввп", "мощност")):
+                    if re.search(r"\b\d+[.,]?\d*\b", text):
+                        score += 1.2
+                    if any(marker in text for marker in ("экзафлопс", "ввп", "процент", "млрд", "трлн", "услуг")):
+                        score += 1.2
+                for y in year_tokens:
+                    if y in text or y in section_title or y in section_path:
+                        score += 0.9
+
             point_matches = hints.get("point_numbers") or re.findall(r"пункт[а-я]*\s+(\d+)", q)
             if point_matches:
                 for point_no in point_matches:
@@ -326,6 +408,14 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     return [top_doc, second_doc]
                 return [top_doc]
 
+            if intent == "FACTOID":
+                selected = [top_doc]
+                if second_doc and (top_score - float(second_score)) < 0.45:
+                    selected.append(second_doc)
+                if len(items) > 2 and (top_score - float(items[2][1])) < 0.25:
+                    selected.append(items[2][0])
+                return selected
+
             if intent != "HOWTO":
                 return [d for d, _ in items[:3]]
 
@@ -342,13 +432,23 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 return []
             point_numbers = hints.get("point_numbers") or []
             definition_term = (hints.get("definition_term") or "").strip()
+            fact_terms = [str(t).strip() for t in (hints.get("fact_terms") or []) if str(t).strip()]
+            year_tokens = [str(y).strip() for y in (hints.get("year_tokens") or []) if str(y).strip()]
             conditions = []
             if intent == "DEFINITION" and definition_term and len(definition_term) >= 3:
                 conditions.append(KnowledgeChunk.content.ilike(f"%{definition_term}%"))
+            if intent == "FACTOID":
+                for term in fact_terms[:8]:
+                    if len(term) >= 3:
+                        conditions.append(KnowledgeChunk.content.ilike(f"%{term}%"))
+                        conditions.append(KnowledgeChunk.chunk_metadata.ilike(f"%{term}%"))
             for point_no in point_numbers:
                 conditions.append(KnowledgeChunk.content.ilike(f"%пункт {point_no}%"))
                 conditions.append(KnowledgeChunk.content.ilike(f"%{point_no}.%"))
                 conditions.append(KnowledgeChunk.chunk_metadata.ilike(f"%{point_no}%"))
+            for year in year_tokens:
+                conditions.append(KnowledgeChunk.content.ilike(f"%{year}%"))
+                conditions.append(KnowledgeChunk.chunk_metadata.ilike(f"%{year}%"))
             if not conditions:
                 return []
 
@@ -385,6 +485,16 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                         fallback_score += 1.5
                     if any(token in section_title for token in ("определ", "термин", "глоссар")):
                         fallback_score += 1.0
+                if intent == "FACTOID":
+                    term_hits = sum(1 for term in fact_terms if term.lower() in text)
+                    fallback_score += min(3.0, term_hits * 0.55)
+                    if any(marker in text for marker in ("утвержда", "принима", "ежегод", "раз в", "показател", "экзафлопс", "ввп", "процент")):
+                        fallback_score += 1.1
+                    if re.search(r"\b\d+[.,]?\d*\b", text):
+                        fallback_score += 0.8
+                    for year in year_tokens:
+                        if year in text:
+                            fallback_score += 0.7
 
                 for point_no in point_numbers:
                     if f"пункт {point_no}" in text:
@@ -416,7 +526,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 )
 
             fallback_results.sort(key=lambda item: float(item.get("fallback_score", 0.0)), reverse=True)
-            return fallback_results[:12]
+            return fallback_results[:20]
 
         def load_doc_chunks(doc_id: str) -> List[dict]:
             rows = (
@@ -570,7 +680,11 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         intent = detect_intent(payload.query)
         query_hints = extract_query_hints(payload.query)
 
-        if kb_id and (intent == "DEFINITION" or query_hints.get("point_numbers")):
+        if kb_id and (
+            intent in {"DEFINITION", "FACTOID"}
+            or query_hints.get("point_numbers")
+            or query_hints.get("year_tokens")
+        ):
             fallback_chunks = fetch_keyword_fallback_chunks(kb_id, query_hints, intent)
             if fallback_chunks:
                 existing_keys = {
@@ -612,6 +726,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             ranked_results.append(r)
         ranked_results.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
 
+        if single_page_mode and intent in {"DEFINITION", "FACTOID"}:
+            top_k_for_context = max(top_k_for_context, min(8, len(ranked_results)))
+
         selected_docs = select_docs(intent, ranked_results)
         filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
         if logger.isEnabledFor(logging.DEBUG):
@@ -620,7 +737,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         # Формируем контекст для LLM
         context_parts: list[str] = []
-        if intent == "HOWTO" and selected_docs:
+        if intent in {"HOWTO", "FACTOID"} and selected_docs:
             token_limit_chars = max(3000, context_length * 5)
             for doc_id in selected_docs:
                 doc_chunks = load_doc_chunks(doc_id)

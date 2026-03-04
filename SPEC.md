@@ -40,6 +40,8 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - If AI request is predicted (or observed) to exceed 5 seconds, bot shows temporary progress status and removes it after response/error.
   - Admin menu for users/KBs/ingestion/AI settings.
   - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
+  - In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
+  - In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
   - ASR visibility control: users can toggle technical metadata display in their settings.
   - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
   - **GPU Acceleration: automatic detection and utilization of NVIDIA GPUs (RTX 3090 support) inside Docker containers.**
@@ -59,6 +61,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Context assembly with `SOURCE_ID` tags for inline citations.
   - For definition-style questions ("что такое", "как определяется", "что включает"), ranking prioritizes explicit definitional fragments.
   - For questions with explicit clause references ("пункт N"), retrieval additionally prioritizes chunks containing numeric section markers (`N.`) and `пункт N`.
+  - For factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers.
   - Sanitize command snippets not present in KB context.
@@ -116,6 +119,9 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - AI mode shows temporary progress status for long requests (>5s predicted or observed) and removes it after completion to keep chat clean.
 - RAG definition-style questions prefer glossary/definition fragments over generic policy mentions when both are present.
 - RAG questions with "пункт N" return the corresponding clause context when it exists in indexed chunks (including numeric markers like `25.`/`26.`).
+- RAG factoid/legal questions (including year/metric queries) return clause-level context when corresponding chunks exist in KB.
+- In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
+- For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
 - ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
 - **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**
@@ -129,6 +135,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Docker Compose starts bot, backend, db, redis, and n8n with externalized data.
 - Smart startup launcher (`scripts/start_stack.py`) starts MySQL profile only when `MYSQL_URL` is configured; otherwise stack runs without `db` service.
 - Supported AI providers are configurable via env and available through unified provider management.
+- Backend includes a runnable RAG API smoke script (`scripts/rag_api_smoke_test.py`) for quick endpoint sanity checks.
 - Any feature/bugfix that changes behavior updates `SPEC.md`, related design spec, and `docs/REQUIREMENTS_TRACEABILITY.md` in the same task.
 
 ## Specification maintenance policy

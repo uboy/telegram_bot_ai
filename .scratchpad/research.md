@@ -77,6 +77,66 @@ Agent: codex (team-lead-orchestrator / architect phase)
   - clear state after handling.
 - Add regression test for `waiting_kb_name` flow.
 
+## Research: Full RAG Stack Migration (v2)
+
+Date: 2026-03-04
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User Request
+- Replace current retrieval stack with a higher-quality modern approach.
+- Keep support for multi-source ingestion:
+  - PDF, DOCX, Markdown, text,
+  - web pages, wiki crawl/git/zip,
+  - codebase path/git,
+  - images and chat exports.
+- Improve UX for KB-search:
+  - visible progress while answer is pending,
+  - auto-clean progress message after reply,
+  - queue multiple user questions and answer in-order under each question.
+- Add API-based backend test script.
+
+### Current Stack Snapshot
+- Ingestion capabilities already broad (document loaders + ingestion API):
+  - file/document: `pdf/docx/doc/xlsx/xls/md/txt/json/chat` + ZIP archive processing,
+  - web/wiki: `/ingestion/web`, `/ingestion/wiki-crawl`, `/ingestion/wiki-git`, `/ingestion/wiki-zip`,
+  - code: `/ingestion/code-path`, `/ingestion/code-git`,
+  - image: `/ingestion/image`.
+- Retrieval baseline:
+  - dense embeddings + FAISS + BM25 + optional cross-encoder rerank (`shared/rag_system.py`),
+  - route-level intent/ranking/context logic in `backend/api/routes/rag.py`.
+- Weak points observed from user transcripts:
+  - factual/pointed legal questions may miss exact clauses,
+  - strict extraction for numeric targets and “кто/как часто/какой показатель” is inconsistent,
+  - KB query UX lacks explicit pending/progress indicator and queue semantics.
+
+### Technical Gaps vs Modern RAG Quality
+- Retrieval strategy is partially modern but lacks full factual query mode:
+  - no explicit factoid intent class,
+  - limited lexical fallback for non-definition factual prompts,
+  - single-page context caps can suppress supporting evidence for legal/strategy docs.
+- Query handling lacks queue worker in KB mode:
+  - concurrent user messages can feel dropped or out-of-order.
+- API-level test harness for end-to-end RAG quality checks is missing.
+
+### v2 Migration Direction (Feasible in current repo)
+1. Retrieval v2 (without disruptive infra migration):
+  - keep existing dense+BM25+rERank core,
+  - add explicit `FACTOID` mode and stronger query-hint extraction,
+  - add generalized lexical fallback candidates (terms + point markers + target metric patterns),
+  - adjust context selection to include enough supporting chunks for factoid/legal answers.
+2. UX v2 for KB search:
+  - async queue per user-session in bot state,
+  - in-order processing worker,
+  - progress bar message while query runs, then delete it,
+  - answer uses `reply_to_message_id` of original user question.
+3. Verification v2:
+  - add regression tests for queue/progress and factoid retrieval,
+  - add backend API smoke script for RAG endpoint scenarios.
+
+### Risk Notes
+- “Full stack replacement” with new vector DB (Qdrant/Weaviate) would require infra/dependency migration, data migration path, and rollout safety controls; high risk for one-step change.
+- Chosen v2 path maximizes quality improvement now while preserving ingestion compatibility and minimizing deployment risk.
+
 # Research: AI Mode v2 (Telemetry + Context Memory + Progress UX)
 
 Date: 2026-03-01

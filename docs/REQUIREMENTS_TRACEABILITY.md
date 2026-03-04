@@ -7,7 +7,7 @@ Source: `SPEC.md` acceptance criteria.
 | AC-01 | User registration + non-admin approval flow | `backend/api/routes/auth.py`, `backend/api/routes/users.py`, `frontend/bot_handlers.py` | `tests/test_auth_and_users_routes.py` | PASS |
 | AC-02 | Admin can create/list/clear/delete KB + upload docs with auto-detect and result report | `backend/api/routes/knowledge.py`, admin callbacks in `frontend/bot_callbacks.py`, upload/state handling in `frontend/bot_handlers.py`, backend fallback in `backend/services/ingestion_service.py`, admin menu in `frontend/templates/buttons.py` | `tests/test_api_routes_contract.py`, `tests/test_bot_text_ai_mode.py::test_handle_text_waiting_kb_name_creates_knowledge_base`, `tests/test_bot_document_upload.py` (including ingestion-call + missing-job-id + import-log chunk count path), `tests/test_buttons_admin_menu.py` | PASS |
 | AC-03 | Admin can ingest docs/web/wiki/image/code | `backend/api/routes/ingestion.py`, `backend/services/ingestion_service.py` | `tests/test_ingestion_routes.py`, `tests/test_indexing_jobs_lifecycle.py` | PASS |
-| AC-04 | RAG query returns answer + sources + metadata (definition questions prioritize definitional chunks; `пункт N` questions prioritize matching clause chunks) | `backend/api/routes/rag.py` (`/rag/query`) | `tests/test_api_routes_contract.py`, `tests/test_rag_quality.py`, `tests/test_rag_query_definition_intent.py` (definition + point fallback) | PASS |
+| AC-04 | RAG query returns answer + sources + metadata (definition + `пункт N` + factoid/year/metric questions prioritize matching clause chunks) | `backend/api/routes/rag.py` (`/rag/query`) | `tests/test_api_routes_contract.py`, `tests/test_rag_quality.py`, `tests/test_rag_query_definition_intent.py` (definition + point + factoid + metric/year fallback) | PASS |
 | AC-05 | Inline citations only from provided sources | `shared/rag_safety.py`, `backend/api/routes/rag.py` | `tests/test_rag_safety.py` | PASS |
 | AC-06 | Command snippets filtered to KB context | `shared/rag_safety.py` | `tests/test_rag_safety.py` | PASS |
 | AC-07 | Web search via DuckDuckGo with source links | `shared/web_search.py`, bot handlers | Manual flow; no dedicated automated test yet | PARTIAL |
@@ -30,6 +30,9 @@ Source: `SPEC.md` acceptance criteria.
 | AC-24 | AI request metrics are stored for all `ai_manager` requests with provider/model/latency/status | `shared/ai_providers.py`, `shared/ai_metrics.py`, `shared/database.py` | `tests/test_ai_providers.py`, `tests/test_ai_metrics.py` | PASS |
 | AC-25 | Long AI requests show temporary progress status (>5s predicted/observed) and remove it after completion | `frontend/bot_handlers.py`, `shared/ai_metrics.py` | `tests/test_bot_text_ai_mode.py`, `tests/test_bot_voice.py`, `tests/test_bot_audio.py` | PASS |
 | AC-26 | Direct AI prompt policy is concise-first and clarification-first for ambiguous prompts | `shared/ai_prompt_policy.py`, `frontend/bot_handlers.py` | `python -m py_compile shared/ai_prompt_policy.py` + bot-flow tests | PASS |
+| AC-27 | KB-search handles multiple user questions in FIFO order and replies under source user messages | `frontend/bot_handlers.py`, `frontend/bot_callbacks.py` | `tests/test_bot_text_ai_mode.py` (`test_process_kb_query_queue_preserves_order`, `test_enqueue_pending_queries_for_kb_flushes_fifo`) | PASS |
+| AC-28 | Long KB-search requests show temporary progress indicator and delete it after completion | `frontend/bot_handlers.py` | `tests/test_bot_text_ai_mode.py` (`test_run_rag_query_with_progress_shows_and_deletes`) | PASS |
+| AC-29 | Backend RAG endpoint has CLI smoke runner for fast API sanity check | `scripts/rag_api_smoke_test.py` | `.venv\Scripts\python.exe scripts/rag_api_smoke_test.py --help` | PASS |
 
 ## Gaps to close
 

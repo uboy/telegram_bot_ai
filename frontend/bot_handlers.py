@@ -50,6 +50,8 @@ DOCUMENT_UPLOAD_GROUP_DELAY_SEC = 1.2
 DOCUMENT_JOB_POLL_INTERVAL_SEC = 2.0
 DOCUMENT_JOB_TIMEOUT_SEC = 300.0
 DOCUMENT_JOB_MAX_PARALLEL = 3
+KB_QUERY_PROGRESS_TICK_SEC = 0.9
+KB_QUERY_PROGRESS_WIDTH = 10
 
 
 def _format_bytes_short(size_bytes: int) -> str:
@@ -178,6 +180,176 @@ async def perform_rag_query_and_render(query: str, kb_id: int, user: UserContext
     ai_answer = await asyncio.to_thread(ai_manager.query, prompt, provider_name=user.preferred_provider, model=user.preferred_model)
     ai_html = format_for_telegram_answer(ai_answer, enable_citations=False)
     return f"🤖 <b>Ответ:</b>\n\n{ai_html}\n\n<i>(Основано на общих знаниях ИИ)</i>", True
+
+
+def _build_kb_progress_text(step: int) -> str:
+    width = max(3, int(KB_QUERY_PROGRESS_WIDTH))
+    cycle = max(1, (width * 2) - 2)
+    pos = step % cycle
+    filled = pos + 1 if pos < width else (cycle - pos + 1)
+    filled = max(1, min(width, filled))
+    bar = ("█" * filled) + ("░" * (width - filled))
+    return f"⏳ Ищу ответ в базе знаний\n[{bar}]"
+
+
+async def _run_rag_query_with_progress(
+    *,
+    message,
+    query: str,
+    kb_id: int,
+    user: UserContext,
+    filters: dict | None = None,
+) -> tuple[str, bool]:
+    threshold_sec = max(0.8, float(AI_PROGRESS_THRESHOLD_SEC))
+    progress_message = None
+    progress_task = None
+    query_task = asyncio.create_task(
+        perform_rag_query_and_render(query=query, kb_id=kb_id, user=user, filters=filters),
+    )
+
+    async def _progress_loop():
+        nonlocal progress_message
+        step = 0
+        while not query_task.done():
+            progress_text = _build_kb_progress_text(step)
+            if progress_message is None:
+                progress_message = await message.reply_text(
+                    progress_text,
+                    reply_to_message_id=getattr(message, "message_id", None),
+                )
+            else:
+                try:
+                    await progress_message.edit_text(progress_text)
+                except Exception:
+                    pass
+            step += 1
+            await asyncio.sleep(KB_QUERY_PROGRESS_TICK_SEC)
+
+    try:
+        try:
+            return await asyncio.wait_for(asyncio.shield(query_task), timeout=threshold_sec)
+        except asyncio.TimeoutError:
+            progress_task = asyncio.create_task(_progress_loop())
+            return await query_task
+    finally:
+        if progress_task:
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        await _delete_message_safe(progress_message)
+
+
+def _get_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> list[dict[str, Any]]:
+    return context.user_data.setdefault("kb_query_queue", [])
+
+
+async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        while True:
+            queue = _get_kb_query_queue(context)
+            if not queue:
+                break
+
+            item = queue.pop(0)
+            message = item.get("message")
+            query = (item.get("query") or "").strip()
+            kb_id = item.get("kb_id")
+            user = item.get("user")
+            filters = item.get("filters") or {}
+            reply_to_message_id = item.get("reply_to_message_id")
+
+            if not message or not query or not kb_id or not isinstance(user, UserContext):
+                continue
+
+            try:
+                html, _ = await _run_rag_query_with_progress(
+                    message=message,
+                    query=query,
+                    kb_id=int(kb_id),
+                    user=user,
+                    filters=filters,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error("KB queue query failed: kb_id=%s query=%r error=%s", kb_id, query, e, exc_info=True)
+                html = (
+                    "❌ <b>Ошибка при поиске в базе знаний.</b>\n\n"
+                    "Попробуйте повторить запрос немного позже."
+                )
+
+            await reply_html_safe(
+                message,
+                html,
+                reply_to_message_id=reply_to_message_id,
+            )
+    finally:
+        context.user_data["kb_query_worker"] = None
+
+
+async def _enqueue_kb_query(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    message,
+    query: str,
+    kb_id: int,
+    user: UserContext,
+    filters: dict | None = None,
+) -> int:
+    queue = _get_kb_query_queue(context)
+    queue.append(
+        {
+            "message": message,
+            "reply_to_message_id": getattr(message, "message_id", None),
+            "query": query,
+            "kb_id": int(kb_id),
+            "user": user,
+            "filters": dict(filters or {}),
+        }
+    )
+    position = len(queue)
+    worker = context.user_data.get("kb_query_worker")
+    if not worker or worker.done():
+        context.user_data["kb_query_worker"] = asyncio.create_task(_process_kb_query_queue(context))
+    return position
+
+
+async def enqueue_pending_queries_for_kb(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    kb_id: int,
+    fallback_message=None,
+    fallback_user: Optional[UserContext] = None,
+) -> int:
+    pending_items = list(context.user_data.pop("pending_queries", []) or [])
+    legacy_query = context.user_data.pop("pending_query", None)
+    if legacy_query:
+        pending_items.insert(0, {"query": legacy_query})
+
+    queued = 0
+    for item in pending_items:
+        query = str(item.get("query") or "").strip()
+        if not query:
+            continue
+        message = item.get("message") or fallback_message
+        user = item.get("user")
+        if not isinstance(user, UserContext):
+            user = fallback_user
+        if not message or not isinstance(user, UserContext):
+            continue
+        filters = item.get("filters") or {}
+        await _enqueue_kb_query(
+            context=context,
+            message=message,
+            query=query,
+            kb_id=kb_id,
+            user=user,
+            filters=filters,
+        )
+        queued += 1
+    return queued
 
 
 async def render_ai_answer_html(query: str, user: UserContext) -> str:
@@ -347,16 +519,19 @@ def _split_plain_text_for_telegram(text: str, max_len: int = 3900) -> list[str]:
     return chunks
 
 
-async def reply_html_safe(message, html_text: str, reply_markup=None) -> None:
+async def reply_html_safe(message, html_text: str, reply_markup=None, reply_to_message_id: Optional[int] = None) -> None:
     """Отправить HTML-ответ, а при превышении лимита — plain text частями."""
+    base_kwargs = {}
+    if reply_to_message_id:
+        base_kwargs["reply_to_message_id"] = reply_to_message_id
     if len(html_text) <= 3900:
-        await message.reply_text(html_text, parse_mode='HTML', reply_markup=reply_markup)
+        await message.reply_text(html_text, parse_mode='HTML', reply_markup=reply_markup, **base_kwargs)
         return
 
     plain_text = strip_html_tags(html_text)
     chunks = _split_plain_text_for_telegram(plain_text, max_len=3900)
     for i, chunk in enumerate(chunks):
-        kwargs = {}
+        kwargs = dict(base_kwargs)
         if i == 0 and reply_markup is not None:
             kwargs["reply_markup"] = reply_markup
         await message.reply_text(chunk, **kwargs)
@@ -445,14 +620,33 @@ def _lookup_import_log_chunks(kb_id: int, source_path: str) -> Optional[int]:
     source_path_norm = (source_path or "").strip()
     if not source_path_norm:
         return None
+    matched_zero_or_unknown: Optional[int] = None
     for row in logs:
         row_path = str(row.get("source_path") or "").strip()
         if row_path == source_path_norm:
             try:
-                return int(row.get("total_chunks") or 0)
+                chunks = int(row.get("total_chunks") or 0)
+                if chunks > 0:
+                    return chunks
+                if matched_zero_or_unknown is None:
+                    matched_zero_or_unknown = chunks
             except Exception:  # noqa: BLE001
-                return None
-    return None
+                matched_zero_or_unknown = None
+                break
+
+    # Fallback: сверяем фактическое количество чанков по агрегированному списку источников.
+    # Это снижает риск ложного "0", если в import-log попала неполная запись.
+    try:
+        sources = backend_client.list_knowledge_sources(kb_id) or []
+        for src in sources:
+            src_path = str(src.get("source_path") or "").strip()
+            if src_path != source_path_norm:
+                continue
+            return int(src.get("chunks_count") or 0)
+    except Exception:
+        pass
+
+    return matched_zero_or_unknown
 
 
 async def _wait_document_job(job_id: int) -> dict[str, Any]:
@@ -765,9 +959,24 @@ async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT
     if not kbs:
         await update.message.reply_text("❌ Нет баз знаний.")
         return None, True
-    context.user_data['pending_query'] = query
+    pending_queries = context.user_data.setdefault("pending_queries", [])
+    pending_queries.append(
+        {
+            "query": query,
+            "message": update.message,
+            "user": user,
+            "filters": dict(context.user_data.get("rag_filters") or {}),
+        }
+    )
     context.user_data['state'] = 'waiting_kb_for_query'
-    await update.message.reply_text("📚 Выберите базу знаний:", reply_markup=knowledge_base_menu(kbs))
+    if len(pending_queries) == 1:
+        await update.message.reply_text("📚 Выберите базу знаний:", reply_markup=knowledge_base_menu(kbs))
+    else:
+        await update.message.reply_text(
+            f"🕒 Запрос добавлен в очередь ({len(pending_queries)}).\n"
+            "Выберите базу знаний для запуска поиска:",
+            reply_markup=knowledge_base_menu(kbs),
+        )
     return None, True
 
 
@@ -816,10 +1025,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == 'waiting_query':
         kb_id, prompted = await _ensure_kb_or_ask_select(update, context, user, text_input)
-        if prompted: return
-        html, _ = await perform_rag_query_and_render(text_input, kb_id, user)
-        await update.message.reply_text(html, parse_mode='HTML')
-        context.user_data['state'] = None
+        if prompted:
+            return
+        queue_pos = await _enqueue_kb_query(
+            context=context,
+            message=update.message,
+            query=text_input,
+            kb_id=int(kb_id),
+            user=user,
+            filters=context.user_data.get("rag_filters") or {},
+        )
+        if queue_pos > 1:
+            await update.message.reply_text(f"🕒 Запрос добавлен в очередь: {queue_pos}.")
+    elif state == 'waiting_kb_for_query':
+        pending_queries = context.user_data.setdefault("pending_queries", [])
+        pending_queries.append(
+            {
+                "query": text_input,
+                "message": update.message,
+                "user": user,
+                "filters": dict(context.user_data.get("rag_filters") or {}),
+            }
+        )
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+        if not kbs:
+            await update.message.reply_text("❌ Нет баз знаний.")
+            return
+        await update.message.reply_text(
+            f"🕒 Запрос добавлен в очередь ({len(pending_queries)}).\n"
+            "Выберите базу знаний для запуска поиска:",
+            reply_markup=knowledge_base_menu(kbs),
+        )
     elif state == 'waiting_ai_query':
         if not text_input:
             await update.message.reply_text("⚠️ Введите непустой вопрос для ИИ.")
@@ -887,8 +1123,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         kb_id = context.user_data.get('kb_id')
         if kb_id:
-            html, _ = await perform_rag_query_and_render(text_input, kb_id, user)
-            await update.message.reply_text(html, parse_mode='HTML')
+            queue_pos = await _enqueue_kb_query(
+                context=context,
+                message=update.message,
+                query=text_input,
+                kb_id=int(kb_id),
+                user=user,
+                filters=context.user_data.get("rag_filters") or {},
+            )
+            if queue_pos > 1:
+                await update.message.reply_text(f"🕒 Запрос добавлен в очередь: {queue_pos}.")
         else:
             await handle_start(update, context)
 

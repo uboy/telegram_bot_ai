@@ -76,6 +76,44 @@ Status: In progress
 - [x] Run secret scan before completion.
 - [x] Note missing policy validation scripts (`scripts/validate-review-report.ps1`, `scripts/validate-cycle-proof.ps1`).
 
+## Plan: RAG Stack v2 Migration + KB Query UX Queue
+
+Date: 2026-03-04
+Status: Completed
+
+### Implementation Checklist
+- [x] Complete research snapshot for current ingestion/retrieval capabilities.
+- [x] Define migration direction for high-quality retrieval without breaking current ingestion matrix.
+- [x] Implement retrieval v2 in `backend/api/routes/rag.py`:
+  - [x] add `FACTOID` intent and enhanced query hints.
+  - [x] generalize keyword fallback for pointed factual/legal/metric queries.
+  - [x] tune doc/context selection for non-howto factual queries.
+- [x] Implement KB-search UX v2 in bot:
+  - [x] progress bar message with auto-delete after response.
+  - [x] queue multiple KB queries, process in-order.
+  - [x] answer using `reply_to_message_id` under original user question.
+  - [x] integrate queued pending queries when KB is selected from menu.
+- [x] Add backend API smoke script for `/api/v1/rag/query`.
+
+### Verification Checklist
+- [x] Add/extend regression tests for RAG factoid retrieval.
+- [x] Add/extend regression tests for KB query queue/progress behavior.
+- [x] Run focused pytest suite for touched areas.
+- [x] Run `py_compile` for touched Python modules.
+- [x] Run secret scan.
+- [x] Run policy docs gate.
+
+### Documentation Checklist
+- [x] Add design doc `docs/design/rag-stack-v2-migration-v1.md`.
+- [x] Update `SPEC.md` for RAG v2 + KB queue/progress UX + API smoke script.
+- [x] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [x] Update `docs/USAGE.md` with new KB-search behavior and smoke script usage.
+- [x] Add review report artifact.
+
+### Security/Policy Gates
+- [x] No dependency changes planned by default (if changed, run dependency security scan per policy).
+- [x] Keep rollback plan documented for retrieval logic and UX behavior toggles.
+
 # Plan: AI Mode v2 (Telemetry + Predictor + Context Sessions)
 
 Date: 2026-03-01

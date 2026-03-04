@@ -145,3 +145,72 @@ def test_rag_query_point_uses_keyword_fallback_chunk(monkeypatch):
     result = rag_query(payload, db=DummyDB(chunk_rows=[point_chunk]))
 
     assert "25. Целями развития искусственного интеллекта" in result.answer
+
+
+def test_rag_query_factoid_uses_keyword_fallback_chunk(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):
+        return [
+            {
+                "content": "В документе есть общий раздел о реализации стратегии.",
+                "metadata": {"section_title": "Обзор", "section_path": "пункт 40"},
+                "source_path": "doc://policy",
+                "source_type": "pdf",
+                "rerank_score": 0.88,
+                "distance": 0.12,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    fact_chunk = DummyChunkRow(
+        content=(
+            "Решение о корректировке Стратегии принимается Президентом Российской Федерации "
+            "не реже одного раза в 6 лет."
+        ),
+        metadata={"section_title": "Корректировка стратегии", "section_path": "пункт 50"},
+    )
+    payload = RAGQuery(
+        query="Кто и как часто принимает решение о корректировке стратегии?",
+        knowledge_base_id=1,
+    )
+    result = rag_query(payload, db=DummyDB(chunk_rows=[fact_chunk]))
+
+    assert "принимается Президентом Российской Федерации" in result.answer
+    assert "не реже одного раза в 6 лет" in result.answer
+
+
+def test_rag_query_factoid_target_metric_with_year(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):
+        return [
+            {
+                "content": "В документе есть общий раздел о реализации стратегии.",
+                "metadata": {"section_title": "Обзор", "section_path": "пункт 40"},
+                "source_path": "doc://policy",
+                "source_type": "pdf",
+                "rerank_score": 0.86,
+                "distance": 0.14,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    metric_chunk = DummyChunkRow(
+        content=(
+            "Целевой ежегодный объем оказания услуг в области решений с использованием технологий "
+            "искусственного интеллекта установлен на уровне не менее 60 млрд рублей к 2030 году."
+        ),
+        metadata={"section_title": "Целевые показатели", "section_path": "пункт 31"},
+    )
+    payload = RAGQuery(
+        query="Какой целевой ежегодный объем услуг по решениям в области ИИ установлен на 2030 год?",
+        knowledge_base_id=1,
+    )
+    result = rag_query(payload, db=DummyDB(chunk_rows=[metric_chunk]))
+
+    assert "не менее 60 млрд рублей к 2030 году" in result.answer
