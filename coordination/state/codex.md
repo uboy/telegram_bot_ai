@@ -127,3 +127,23 @@
   - `python -m py_compile backend/api/routes/rag.py frontend/templates/buttons.py frontend/bot_callbacks.py tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py` -> PASS
   - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`13 passed`)
   - `python scripts/scan_secrets.py` -> PASS
+
+## 2026-03-04 RAG Clause Retrieval Follow-up
+- user evidence:
+  - definition/point queries still returned "контекст не найден" despite source PDF containing target sections.
+- root cause:
+  - semantic + rerank candidates can miss exact numeric clauses (`25.`, `26.`) and exact glossary definitions in some runs.
+- implementation:
+  - added query hints extraction (`definition_term`, `point_numbers`) in `backend/api/routes/rag.py`.
+  - added SQL keyword fallback candidates from `knowledge_chunks` for:
+    - definition term exact matches,
+    - `пункт N` and numeric section markers (`N.`).
+  - strengthened ranking boosts for exact definition term and numbered clause markers.
+  - made rerank threshold guard apply only when rerank scores are actually present.
+- tests:
+  - extended `tests/test_rag_query_definition_intent.py` with
+    `test_rag_query_point_uses_keyword_fallback_chunk`.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_query_definition_intent.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py tests/test_bot_text_ai_mode.py` -> PASS (`14 passed`)
+  - `python scripts/scan_secrets.py` -> PASS

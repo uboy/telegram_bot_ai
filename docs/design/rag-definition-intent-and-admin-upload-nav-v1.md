@@ -13,6 +13,9 @@ Type: Retrieval quality + UX fix
   - section metadata hints (`определ*`, `термин*`, `глоссар*`),
   - term-pattern hints (`<term> -`, `<term> —`, `<term>:`).
 - Add additional boost for queries referencing specific points (`пункт N`) when chunk text/section contains the same point.
+- Add keyword fallback retrieval from SQL chunks for definition/point queries:
+  - for definitions: include chunks containing exact target term,
+  - for point queries: include chunks matching `пункт N` and numeric section markers (`N.`).
 - For `DEFINITION`, document selection prioritizes strongest definition-bearing document(s).
 
 ## Problem 2: Duplicate Upload Entry Points

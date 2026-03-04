@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import json
@@ -140,20 +141,6 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 )
             logger.debug("RAG top results preview: %s", top_preview)
 
-        if not results:
-            # Нет релевантных фрагментов в БЗ – честно говорим, что ответа нет
-            return RAGAnswer(answer="", sources=[])
-
-        # Анти-галлюцинации: если есть reranker и все score ниже порога – считаем, что ответа нет
-        try:
-            best_score = max(float(r.get("rerank_score", 0.0)) for r in results)
-            if min_rerank_score > 0.0 and best_score < min_rerank_score:
-                logger.debug("Best rerank score %f below threshold %f", best_score, min_rerank_score)
-                return RAGAnswer(answer="", sources=[])
-        except (ValueError, TypeError) as e:
-            logger.warning("Error calculating best rerank score: %s", e, exc_info=True)
-            # Продолжаем обработку, если не удалось вычислить best_score
-
         def detect_intent(query: str) -> str:
             q = (query or "").lower()
             howto_terms = [
@@ -194,6 +181,33 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 return "DEFINITION"
             return "GENERAL"
 
+        def extract_query_hints(query: str) -> Dict[str, Any]:
+            q = re.sub(r"\s+", " ", (query or "").lower()).strip()
+            point_numbers = re.findall(r"пункт[а-я]*\s+(\d+)", q)
+            definition_term = ""
+            prefixes = (
+                "как в документе определяется ",
+                "как определяется ",
+                "что такое ",
+                "что называется ",
+                "что включает ",
+            )
+            for prefix in prefixes:
+                if q.startswith(prefix):
+                    definition_term = q[len(prefix):].strip(" ?!.,:;")
+                    break
+            if not definition_term:
+                m = re.search(r"определ[а-я]*\s+([а-яёa-z0-9\-\s]{3,})$", q)
+                if m:
+                    definition_term = (m.group(1) or "").strip(" ?!.,:;")
+            if definition_term:
+                definition_term = re.sub(r"^(в документе|в стратегии)\s+", "", definition_term).strip()
+                definition_term = re.sub(r"\s+", " ", definition_term).strip(" ?!.,:;")
+            return {
+                "point_numbers": point_numbers,
+                "definition_term": definition_term,
+            }
+
         def get_doc_id(result: dict) -> str:
             source_path = result.get("source_path") or ""
             if source_path:
@@ -212,7 +226,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             except (TypeError, ValueError):
                 return 0.0
 
-        def apply_boosts(query: str, result: dict, intent: str) -> float:
+        def apply_boosts(query: str, result: dict, intent: str, hints: Optional[Dict[str, Any]] = None) -> float:
             score = base_score(result)
             meta = result.get("metadata") or {}
             doc_title = (meta.get("doc_title") or meta.get("title") or "").lower()
@@ -221,6 +235,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             text = (result.get("content") or "").lower()
             q = (query or "").lower()
             source_path = (result.get("source_path") or "").lower()
+            hints = hints or {}
+            definition_term = (hints.get("definition_term") or "").strip().lower()
 
             if "unit test" in q or "unittest" in q or "tests" in q:
                 if any(t in section_title for t in ("unit test", "unittest", "test")):
@@ -262,13 +278,19 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 if any(m in section_path for m in ("определ", "глоссар", "термин")):
                     score += 0.8
 
+                if definition_term:
+                    if definition_term in text:
+                        score += 2.2
+                    if definition_term in section_title or definition_term in section_path:
+                        score += 1.0
+
                 query_terms = [t for t in re.findall(r"[а-яёa-z0-9]{4,}", q) if t not in {"какие", "какой", "какая", "когда", "документе"}]
                 for term in query_terms[:8]:
                     if f"{term} -" in text or f"{term} —" in text or f"{term}: " in text:
                         score += 1.5
                         break
 
-            point_matches = re.findall(r"пункт[а-я]*\s+(\d+)", q)
+            point_matches = hints.get("point_numbers") or re.findall(r"пункт[а-я]*\s+(\d+)", q)
             if point_matches:
                 for point_no in point_matches:
                     point_token = f"пункт {point_no}"
@@ -276,6 +298,13 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                         score += 1.5
                     if point_token in section_title or point_token in section_path:
                         score += 1.5
+                    if re.search(rf"(?:^|\s){re.escape(point_no)}\.", text):
+                        score += 2.0
+                    if re.search(rf"(?:^|\s){re.escape(point_no)}\.", section_title) or re.search(
+                        rf"(?:^|\s){re.escape(point_no)}\.",
+                        section_path,
+                    ):
+                        score += 1.2
 
             return score
 
@@ -303,6 +332,91 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             if second_doc and (top_score - float(second_score)) < 0.3:
                 return [top_doc, second_doc]
             return [top_doc]
+
+        def fetch_keyword_fallback_chunks(
+            kb_id_value: Optional[int],
+            hints: Dict[str, Any],
+            intent: str,
+        ) -> List[dict]:
+            if not kb_id_value:
+                return []
+            point_numbers = hints.get("point_numbers") or []
+            definition_term = (hints.get("definition_term") or "").strip()
+            conditions = []
+            if intent == "DEFINITION" and definition_term and len(definition_term) >= 3:
+                conditions.append(KnowledgeChunk.content.ilike(f"%{definition_term}%"))
+            for point_no in point_numbers:
+                conditions.append(KnowledgeChunk.content.ilike(f"%пункт {point_no}%"))
+                conditions.append(KnowledgeChunk.content.ilike(f"%{point_no}.%"))
+                conditions.append(KnowledgeChunk.chunk_metadata.ilike(f"%{point_no}%"))
+            if not conditions:
+                return []
+
+            rows = (
+                db.query(KnowledgeChunk)
+                .filter(KnowledgeChunk.knowledge_base_id == kb_id_value)
+                .filter(KnowledgeChunk.is_deleted == False)
+                .filter(or_(*conditions))
+                .limit(40)
+                .all()
+            )
+            if not rows:
+                return []
+
+            fallback_results = []
+            for row in rows:
+                content = row.content or ""
+                if len(content.strip()) < 20:
+                    continue
+                try:
+                    meta = json.loads(row.chunk_metadata) if row.chunk_metadata else {}
+                except Exception:
+                    meta = {}
+
+                text = content.lower()
+                section_title = (meta.get("section_title") or "").lower()
+                section_path = (meta.get("section_path") or "").lower()
+                fallback_score = 0.0
+
+                if definition_term and definition_term.lower() in text:
+                    fallback_score += 3.0
+                if intent == "DEFINITION":
+                    if any(marker in text for marker in (" - ", " — ", ": ", "называется", "определяется", "представляет собой")):
+                        fallback_score += 1.5
+                    if any(token in section_title for token in ("определ", "термин", "глоссар")):
+                        fallback_score += 1.0
+
+                for point_no in point_numbers:
+                    if f"пункт {point_no}" in text:
+                        fallback_score += 2.0
+                    if re.search(rf"(?:^|\s){re.escape(point_no)}\.", text):
+                        fallback_score += 2.5
+                    if f"пункт {point_no}" in section_title or f"пункт {point_no}" in section_path:
+                        fallback_score += 2.0
+                    if re.search(rf"(?:^|\s){re.escape(point_no)}\.", section_title) or re.search(
+                        rf"(?:^|\s){re.escape(point_no)}\.",
+                        section_path,
+                    ):
+                        fallback_score += 1.2
+
+                if fallback_score <= 0.0:
+                    continue
+
+                distance = -0.1 - min(fallback_score, 4.0) / 10.0
+                fallback_results.append(
+                    {
+                        "id": row.id,
+                        "content": content,
+                        "metadata": meta,
+                        "source_type": row.source_type,
+                        "source_path": row.source_path,
+                        "distance": distance,
+                        "fallback_score": fallback_score,
+                    }
+                )
+
+            fallback_results.sort(key=lambda item: float(item.get("fallback_score", 0.0)), reverse=True)
+            return fallback_results[:12]
 
         def load_doc_chunks(doc_id: str) -> List[dict]:
             rows = (
@@ -454,11 +568,47 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             return context_parts
 
         intent = detect_intent(payload.query)
+        query_hints = extract_query_hints(payload.query)
+
+        if kb_id and (intent == "DEFINITION" or query_hints.get("point_numbers")):
+            fallback_chunks = fetch_keyword_fallback_chunks(kb_id, query_hints, intent)
+            if fallback_chunks:
+                existing_keys = {
+                    ((r.get("source_path") or ""), (r.get("content") or "")[:200])
+                    for r in results
+                }
+                added = 0
+                for chunk in fallback_chunks:
+                    key = ((chunk.get("source_path") or ""), (chunk.get("content") or "")[:200])
+                    if key in existing_keys:
+                        continue
+                    results.append(chunk)
+                    existing_keys.add(key)
+                    added += 1
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("RAG keyword fallback added %d chunks (intent=%s, hints=%s)", added, intent, query_hints)
+
+        if not results:
+            return RAGAnswer(answer="", sources=[])
+
+        # Анти-галлюцинации: если есть reranker и все score ниже порога – считаем, что ответа нет
+        rerank_scores = []
+        for item in results:
+            if item.get("rerank_score") is None:
+                continue
+            try:
+                rerank_scores.append(float(item.get("rerank_score")))
+            except (ValueError, TypeError):
+                continue
+        if min_rerank_score > 0.0 and rerank_scores and max(rerank_scores) < min_rerank_score:
+            logger.debug("Best rerank score %f below threshold %f", max(rerank_scores), min_rerank_score)
+            return RAGAnswer(answer="", sources=[])
+
         ranked_results: List[dict] = []
         for r in results:
             doc_id = get_doc_id(r)
             r["doc_id"] = doc_id
-            r["rank_score"] = apply_boosts(payload.query, r, intent)
+            r["rank_score"] = apply_boosts(payload.query, r, intent, query_hints)
             ranked_results.append(r)
         ranked_results.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
 

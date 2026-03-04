@@ -22,3 +22,4 @@
 {"id":"RAGNAV-001","title":"Improve RAG definition-intent retrieval and remove duplicate admin upload entry point","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
 {"id":"RAGNAV-002","title":"Add regression tests for definition-intent ranking and admin menu upload navigation","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
 {"id":"RAGNAV-003","title":"Update spec/design/traceability for RAG definition intent and admin upload navigation","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}
+{"id":"RAGNAV-004","title":"Add keyword fallback for clause-number queries and regression test for point-based retrieval","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}

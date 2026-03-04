@@ -58,6 +58,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Fallback keyword search if embeddings unavailable.
   - Context assembly with `SOURCE_ID` tags for inline citations.
   - For definition-style questions ("что такое", "как определяется", "что включает"), ranking prioritizes explicit definitional fragments.
+  - For questions with explicit clause references ("пункт N"), retrieval additionally prioritizes chunks containing numeric section markers (`N.`) and `пункт N`.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers.
   - Sanitize command snippets not present in KB context.
@@ -114,6 +115,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - AI request metrics are persisted for all `ai_manager` calls and include provider/model/latency/status fields.
 - AI mode shows temporary progress status for long requests (>5s predicted or observed) and removes it after completion to keep chat clean.
 - RAG definition-style questions prefer glossary/definition fragments over generic policy mentions when both are present.
+- RAG questions with "пункт N" return the corresponding clause context when it exists in indexed chunks (including numeric markers like `25.`/`26.`).
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
 - ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
 - **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**
