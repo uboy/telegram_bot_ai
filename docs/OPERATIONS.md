@@ -138,6 +138,8 @@ Use comparator script against two running backend instances:
 For the default docker-compose stack, use wrapper script:
 - `bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10`
 - report path (host): `./data/rag_compare_report.json`
+- auto-prepare test KB from `test.pdf` in repo root:
+  - `bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10`
 
 ## Container Runtime Notes
 

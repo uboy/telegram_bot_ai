@@ -39,6 +39,9 @@
 
 # Docker stack one-command legacy vs v4 compare
 bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10
+
+# Docker stack with automatic test KB recreation + test.pdf ingestion
+bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
 ```
 
 ## CI Smoke Recommendation

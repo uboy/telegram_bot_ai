@@ -181,3 +181,9 @@ bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10
 ```bash
 bash scripts/run_rag_compare_stack.sh --kb-id 1 --max-source-hit-drop 0.10
 ```
+
+Подготовить тестовую БЗ автоматически (удалить старую с тем же именем, создать заново и загрузить `test.pdf` из корня проекта):
+
+```bash
+bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
+```
