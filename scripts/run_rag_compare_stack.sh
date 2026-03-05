@@ -242,7 +242,7 @@ if [[ "${V4_RAG_DEVICE,,}" == cpu* ]]; then
   # Prevent accidental GPU allocation when compare is running side-by-side.
   V4_EXTRA_ENV+=(-e CUDA_VISIBLE_DEVICES=)
 fi
-docker run -d --rm \
+docker run -d \
   --name "$V4_CONTAINER" \
   --network "container:${LEGACY_CONTAINER}" \
   --volumes-from "$LEGACY_CONTAINER" \
