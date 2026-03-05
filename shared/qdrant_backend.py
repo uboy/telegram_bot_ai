@@ -174,3 +174,27 @@ class QdrantBackend:
 
     def delete_kb(self, kb_id: int) -> None:
         self.delete_by_filter(kb_id=kb_id)
+
+    def count_points(
+        self,
+        *,
+        kb_id: int,
+        source_type: str | None = None,
+        source_path: str | None = None,
+        exact: bool = True,
+    ) -> int:
+        must = [{"key": "kb_id", "match": {"value": int(kb_id)}}]
+        if source_type:
+            must.append({"key": "source_type", "match": {"value": source_type}})
+        if source_path:
+            must.append({"key": "source_path", "match": {"value": source_path}})
+        payload = {
+            "exact": bool(exact),
+            "filter": {"must": must},
+        }
+        data = self._request("POST", f"/collections/{self.collection}/points/count", payload)
+        result = data.get("result") or {}
+        try:
+            return int(result.get("count") or 0)
+        except Exception:
+            return 0

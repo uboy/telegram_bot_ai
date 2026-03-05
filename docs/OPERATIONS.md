@@ -68,6 +68,26 @@ python scripts/start_stack.py --dry-run
 
 After changing any RAG backend env vars, restart `backend` and `bot` services.
 
+## Index Outbox Worker
+
+When `RAG_BACKEND=qdrant`, backend starts async index-sync worker:
+- consumes `index_outbox_events`,
+- retries transient failures with backoff,
+- moves exhausted events to dead-letter status,
+- periodically writes SQL-vs-Qdrant drift snapshots into `index_sync_audit`.
+
+Main knobs:
+- `RAG_INDEX_OUTBOX_WORKER_ENABLED`
+- `RAG_INDEX_OUTBOX_POLL_INTERVAL_SEC`
+- `RAG_INDEX_OUTBOX_BATCH_SIZE`
+- `RAG_INDEX_OUTBOX_MAX_ATTEMPTS`
+- `RAG_INDEX_OUTBOX_RETRY_BASE_SEC`
+- `RAG_INDEX_OUTBOX_RETRY_MAX_SEC`
+- `RAG_INDEX_DRIFT_AUDIT_INTERVAL_SEC`
+- `RAG_INDEX_DRIFT_MAX_KBS`
+- `RAG_INDEX_DRIFT_WARNING_RATIO`
+- `RAG_INDEX_DRIFT_CRITICAL_RATIO`
+
 ## Container Runtime Notes
 
 - Redis: on some Docker runtimes container-level `sysctls` are not allowed.  
@@ -96,6 +116,13 @@ After changing any RAG backend env vars, restart `backend` and `bot` services.
   - capture `request_id` from `/api/v1/rag/query` response
   - inspect `/api/v1/rag/diagnostics/{request_id}` for candidate trace
   - if Qdrant errors spike, switch `RAG_BACKEND=legacy` and restart services
+  - check `degraded_mode`/`degraded_reason` in diagnostics for dense-channel degradation markers
+
+- Outbox backlog/drift incident:
+  - inspect outbox statuses in `index_outbox_events` (`pending`, `processing`, `dead`)
+  - inspect latest drift rows in `index_sync_audit` for `warning`/`critical` status
+  - if backlog grows with repeated Qdrant errors, temporarily switch `RAG_BACKEND=legacy`
+  - after backend recovery, replay pending events (worker retries automatically)
 
 - Analytics failures:
   - inspect digest/import status endpoints

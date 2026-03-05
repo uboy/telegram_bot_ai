@@ -51,6 +51,7 @@ Most ingestion endpoints return `job_id` for async processing.
 ## RAG
 
 - `POST /rag/query`
+- `GET /rag/diagnostics/{request_id}`
 - `POST /rag/summary`
 - `POST /rag/reload-models`
 
@@ -58,6 +59,11 @@ Most ingestion endpoints return `job_id` for async processing.
 - `summary`
 - `faq`
 - `instructions`
+
+`GET /rag/diagnostics/{request_id}` returns:
+- request metadata (`intent`, `hints`, `filters`, `latency_ms`, `backend_name`)
+- degraded markers (`degraded_mode`, `degraded_reason`)
+- top candidate diagnostics (`origin`, `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`)
 
 ## ASR
 

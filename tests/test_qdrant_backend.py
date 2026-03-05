@@ -93,3 +93,27 @@ def test_qdrant_ensure_collection_uses_cached_vector_size(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0][0].upper() == "GET"
+
+
+def test_qdrant_count_points_uses_filter(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, json=None, headers=None, timeout=0):  # noqa: ARG001
+        captured["method"] = method
+        captured["url"] = url
+        captured["payload"] = json
+        return DummyResponse(200, {"result": {"count": 17}})
+
+    monkeypatch.setattr("shared.qdrant_backend.requests.request", fake_request)
+    backend = QdrantBackend(url="http://qdrant:6333", collection="kb_chunks")
+
+    count = backend.count_points(kb_id=5, source_type="pdf", source_path="doc://policy")
+
+    assert count == 17
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/collections/kb_chunks/points/count")
+    must = captured["payload"]["filter"]["must"]
+    assert must[0]["key"] == "kb_id"
+    assert must[0]["match"]["value"] == 5
+    assert any(item["key"] == "source_type" and item["match"]["value"] == "pdf" for item in must)
+    assert any(item["key"] == "source_path" and item["match"]["value"] == "doc://policy" for item in must)

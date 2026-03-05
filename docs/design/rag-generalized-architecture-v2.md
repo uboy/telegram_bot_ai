@@ -550,6 +550,25 @@ Implemented in this cycle:
 5. Verification:
 - focused tests and policy/secret checks executed (see review report in `coordination/reviews`).
 
+## 25) Implementation snapshot (Phase B completed on 2026-03-05)
+
+Implemented in this cycle:
+1. Async outbox consumer worker added:
+- backend service `backend/services/index_outbox_worker.py`,
+- startup wiring in `backend/app.py`,
+- configurable retry/backoff/dead-letter policy.
+2. Drift audit loop implemented:
+- periodic SQL-vs-Qdrant count audit,
+- writes snapshots to `index_sync_audit`,
+- warning/critical thresholds via env config.
+3. Qdrant adapter extended:
+- added `count_points(...)` for audit/filterable point counting.
+4. Retrieval diagnostics upgraded:
+- `rag_query` now persists `degraded_mode` and `degraded_reason`,
+- diagnostics API returns channel/fusion/rerank delta fields from candidate logs.
+5. Verification:
+- focused runtime + regression tests passed for worker lifecycle, diagnostics fields, and Qdrant count API.
+
 ## Approval
 
 REVIEW REQUIRED — Reply "APPROVED:v1" or "CHANGES:<bullets>"

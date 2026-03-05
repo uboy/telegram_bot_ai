@@ -354,3 +354,35 @@
   - `python scripts/ci_policy_gate.py --working-tree` -> PASS
 - next step:
   - proceed with Phase B (outbox consumer worker + drift audit job + degraded-mode signaling in API path).
+
+## 2026-03-05 Phase B completion snapshot
+- task: RAGOUT-007..010
+- classification: non-trivial (implementation + review cycle)
+- implementation:
+  - Added async outbox consumer worker `backend/services/index_outbox_worker.py`:
+    - pending claim processing loop,
+    - UPSERT/DELETE_SOURCE/DELETE_KB handling,
+    - retry/backoff and dead-letter transitions.
+  - Wired worker startup in backend app (`backend/app.py`).
+  - Extended Qdrant adapter with count API (`shared/qdrant_backend.py::count_points`) for drift checks.
+  - Added periodic drift audit (`index_sync_audit`) between SQL active embedding chunks and Qdrant point counts.
+  - Extended RAG diagnostics persistence/response:
+    - query log now stores `degraded_mode`, `degraded_reason`,
+    - candidate logs/response include `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`.
+  - Added Phase B config/env knobs in `shared/config.py` and `env.template`.
+- tests:
+  - Added `tests/test_index_outbox_worker.py`.
+  - Extended `tests/test_qdrant_backend.py` (count API).
+  - Extended `tests/test_rag_diagnostics.py` (degraded + channel/fusion fields).
+- verification:
+  - `python -m py_compile backend/services/index_outbox_worker.py backend/api/routes/rag.py backend/schemas/rag.py shared/qdrant_backend.py tests/test_qdrant_backend.py tests/test_rag_diagnostics.py tests/test_index_outbox_worker.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_qdrant_backend.py tests/test_rag_diagnostics.py tests/test_index_outbox_worker.py` -> PASS (`12 passed`)
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_api_routes_contract.py tests/test_security_api_key.py tests/test_ingestion_outbox.py tests/test_index_outbox_service.py tests/test_indexing_jobs_lifecycle.py` -> PASS (`12 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec:
+  - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-generalized-architecture-v2.md`.
+  - Updated `docs/OPERATIONS.md`, `docs/API_REFERENCE.md`, `docs/CONFIGURATION.md`, `docs/USAGE.md`.
+  - Added review artifact `coordination/reviews/rag-outbox-phase-b-2026-03-05.md`.
+- next step:
+  - move to next architecture phase (retention worker + eval orchestration) after user confirmation.

@@ -72,6 +72,32 @@ def _metric_to_str(value: Any) -> Optional[str]:
         return text[:32] if text else None
 
 
+def _derive_degraded_mode(
+    *,
+    backend_name: Optional[str],
+    candidates: Optional[List[Dict[str, Any]]],
+) -> tuple[bool, Optional[str]]:
+    backend = (backend_name or "").strip().lower()
+    if backend != "qdrant":
+        return False, None
+
+    origins: List[str] = []
+    for row in candidates or []:
+        if not isinstance(row, dict):
+            continue
+        origin = (row.get("origin") or "").strip().lower()
+        if origin:
+            origins.append(origin)
+
+    if not origins:
+        return False, None
+    if any(origin == "qdrant" for origin in origins):
+        return False, None
+    if any(origin in {"bm25", "keyword", "legacy"} for origin in origins):
+        return True, "qdrant_unavailable_or_empty"
+    return True, "dense_channel_unavailable"
+
+
 def _persist_retrieval_logs(
     *,
     db: Session,
@@ -85,6 +111,8 @@ def _persist_retrieval_logs(
     total_selected: int,
     latency_ms: int,
     backend_name: Optional[str],
+    degraded_mode: bool = False,
+    degraded_reason: Optional[str] = None,
     candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     # Test doubles may pass lightweight DB stubs without persistence APIs.
@@ -103,6 +131,8 @@ def _persist_retrieval_logs(
                 total_selected=max(0, int(total_selected or 0)),
                 latency_ms=max(0, int(latency_ms or 0)),
                 backend_name=(backend_name or "")[:32] or None,
+                degraded_mode=bool(degraded_mode),
+                degraded_reason=(degraded_reason or "")[:120] or None,
             )
         )
         for rank, candidate in enumerate((candidates or [])[:20], start=1):
@@ -120,6 +150,13 @@ def _persist_retrieval_logs(
                     distance=_metric_to_str(candidate.get("distance") if isinstance(candidate, dict) else None),
                     rerank_score=_metric_to_str(candidate.get("rerank_score") if isinstance(candidate, dict) else None),
                     origin=((candidate.get("origin") or "")[:32] if isinstance(candidate, dict) else ""),
+                    channel=((candidate.get("channel") or candidate.get("origin") or "")[:32] if isinstance(candidate, dict) else ""),
+                    channel_rank=(rank if isinstance(candidate, dict) else None),
+                    fusion_rank=(rank if isinstance(candidate, dict) else None),
+                    fusion_score=_metric_to_str(
+                        candidate.get("fusion_score", candidate.get("rank_score")) if isinstance(candidate, dict) else None
+                    ),
+                    rerank_delta=_metric_to_str(candidate.get("rerank_delta") if isinstance(candidate, dict) else None),
                     metadata_json=metadata_json,
                     content_preview=content_preview,
                 )
@@ -936,6 +973,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     logger.debug("RAG keyword fallback added %d chunks (intent=%s, hints=%s)", added, intent, query_hints)
 
         if not results:
+            degraded_mode, degraded_reason = _derive_degraded_mode(
+                backend_name=backend_name,
+                candidates=results,
+            )
             _persist_retrieval_logs(
                 db=db,
                 request_id=request_id,
@@ -948,6 +989,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 total_selected=0,
                 latency_ms=int((perf_counter() - t0) * 1000),
                 backend_name=backend_name,
+                degraded_mode=degraded_mode,
+                degraded_reason=degraded_reason,
                 candidates=[],
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -963,6 +1006,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 continue
         if min_rerank_score > 0.0 and rerank_scores and max(rerank_scores) < min_rerank_score:
             logger.debug("Best rerank score %f below threshold %f", max(rerank_scores), min_rerank_score)
+            degraded_mode, degraded_reason = _derive_degraded_mode(
+                backend_name=backend_name,
+                candidates=results,
+            )
             _persist_retrieval_logs(
                 db=db,
                 request_id=request_id,
@@ -975,6 +1022,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 total_selected=0,
                 latency_ms=int((perf_counter() - t0) * 1000),
                 backend_name=backend_name,
+                degraded_mode=degraded_mode,
+                degraded_reason=degraded_reason,
                 candidates=results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1030,6 +1079,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         if not context_parts:
             logger.warning("No valid context parts extracted from results")
+            degraded_mode, degraded_reason = _derive_degraded_mode(
+                backend_name=backend_name,
+                candidates=filtered_results,
+            )
             _persist_retrieval_logs(
                 db=db,
                 request_id=request_id,
@@ -1042,6 +1095,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 total_selected=len(filtered_results),
                 latency_ms=int((perf_counter() - t0) * 1000),
                 backend_name=backend_name,
+                degraded_mode=degraded_mode,
+                degraded_reason=degraded_reason,
                 candidates=filtered_results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1125,6 +1180,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     logger.warning("Error creating debug chunk: %s", e, exc_info=True)
                     continue
 
+        degraded_mode, degraded_reason = _derive_degraded_mode(
+            backend_name=backend_name,
+            candidates=filtered_results,
+        )
         _persist_retrieval_logs(
             db=db,
             request_id=request_id,
@@ -1137,6 +1196,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             total_selected=len(filtered_results),
             latency_ms=int((perf_counter() - t0) * 1000),
             backend_name=backend_name,
+            degraded_mode=degraded_mode,
+            degraded_reason=degraded_reason,
             candidates=filtered_results,
         )
         return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id, debug_chunks=debug_chunks)
@@ -1151,6 +1212,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             e,
             exc_info=True,
         )
+        degraded_mode, degraded_reason = _derive_degraded_mode(
+            backend_name=backend_name,
+            candidates=(filtered_results or results),
+        )
         _persist_retrieval_logs(
             db=db,
             request_id=request_id,
@@ -1163,6 +1228,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             total_selected=len(filtered_results),
             latency_ms=int((perf_counter() - t0) * 1000),
             backend_name=backend_name,
+            degraded_mode=degraded_mode,
+            degraded_reason=degraded_reason,
             candidates=filtered_results or results,
         )
         return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1195,6 +1262,11 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
                 distance=getattr(row, "distance", None),
                 rerank_score=getattr(row, "rerank_score", None),
                 origin=getattr(row, "origin", None),
+                channel=getattr(row, "channel", None),
+                channel_rank=getattr(row, "channel_rank", None),
+                fusion_rank=getattr(row, "fusion_rank", None),
+                fusion_score=getattr(row, "fusion_score", None),
+                rerank_delta=getattr(row, "rerank_delta", None),
                 metadata=meta_obj,
                 content_preview=getattr(row, "content_preview", None),
             )
@@ -1209,6 +1281,8 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
         total_candidates=int(query_log.total_candidates or 0),
         total_selected=int(query_log.total_selected or 0),
         latency_ms=int(query_log.latency_ms or 0),
+        degraded_mode=bool(getattr(query_log, "degraded_mode", False)),
+        degraded_reason=getattr(query_log, "degraded_reason", None),
         hints=_safe_json_loads(query_log.hints_json),
         filters=_safe_json_loads(query_log.filters_json),
         candidates=candidates,

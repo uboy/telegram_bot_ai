@@ -101,6 +101,45 @@ try:
 except ValueError:
     QDRANT_TIMEOUT_SEC = 10.0
 
+# RAG index outbox worker (Phase B)
+RAG_INDEX_OUTBOX_WORKER_ENABLED = os.getenv("RAG_INDEX_OUTBOX_WORKER_ENABLED", "true").lower() == "true"
+try:
+    RAG_INDEX_OUTBOX_POLL_INTERVAL_SEC = float(os.getenv("RAG_INDEX_OUTBOX_POLL_INTERVAL_SEC", "2"))
+except ValueError:
+    RAG_INDEX_OUTBOX_POLL_INTERVAL_SEC = 2.0
+try:
+    RAG_INDEX_OUTBOX_BATCH_SIZE = int(os.getenv("RAG_INDEX_OUTBOX_BATCH_SIZE", "50"))
+except ValueError:
+    RAG_INDEX_OUTBOX_BATCH_SIZE = 50
+try:
+    RAG_INDEX_OUTBOX_MAX_ATTEMPTS = int(os.getenv("RAG_INDEX_OUTBOX_MAX_ATTEMPTS", "6"))
+except ValueError:
+    RAG_INDEX_OUTBOX_MAX_ATTEMPTS = 6
+try:
+    RAG_INDEX_OUTBOX_RETRY_BASE_SEC = int(os.getenv("RAG_INDEX_OUTBOX_RETRY_BASE_SEC", "5"))
+except ValueError:
+    RAG_INDEX_OUTBOX_RETRY_BASE_SEC = 5
+try:
+    RAG_INDEX_OUTBOX_RETRY_MAX_SEC = int(os.getenv("RAG_INDEX_OUTBOX_RETRY_MAX_SEC", "300"))
+except ValueError:
+    RAG_INDEX_OUTBOX_RETRY_MAX_SEC = 300
+try:
+    RAG_INDEX_DRIFT_AUDIT_INTERVAL_SEC = float(os.getenv("RAG_INDEX_DRIFT_AUDIT_INTERVAL_SEC", "300"))
+except ValueError:
+    RAG_INDEX_DRIFT_AUDIT_INTERVAL_SEC = 300.0
+try:
+    RAG_INDEX_DRIFT_MAX_KBS = int(os.getenv("RAG_INDEX_DRIFT_MAX_KBS", "200"))
+except ValueError:
+    RAG_INDEX_DRIFT_MAX_KBS = 200
+try:
+    RAG_INDEX_DRIFT_WARNING_RATIO = float(os.getenv("RAG_INDEX_DRIFT_WARNING_RATIO", "0.0005"))
+except ValueError:
+    RAG_INDEX_DRIFT_WARNING_RATIO = 0.0005
+try:
+    RAG_INDEX_DRIFT_CRITICAL_RATIO = float(os.getenv("RAG_INDEX_DRIFT_CRITICAL_RATIO", "0.001"))
+except ValueError:
+    RAG_INDEX_DRIFT_CRITICAL_RATIO = 0.001
+
 # n8n Integration
 # Если N8N_BASE_URL не установлен или пустой, считаем что n8n отключен
 N8N_BASE_URL_RAW = os.getenv("N8N_BASE_URL", "").strip()

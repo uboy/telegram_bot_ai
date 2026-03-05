@@ -121,4 +121,5 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/diagnostics/<req
 В ответе будут:
 - intent/hints/filters запроса,
 - количество кандидатов и выбранных фрагментов,
-- latency и top-кандидаты с метаданными.
+- latency и признаки деградации (`degraded_mode`, `degraded_reason`),
+- top-кандидаты с channel/fusion/rerank метриками и метаданными.

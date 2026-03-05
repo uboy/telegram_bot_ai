@@ -49,6 +49,11 @@ class RAGDiagnosticsCandidate(BaseModel):
     distance: Optional[str] = None
     rerank_score: Optional[str] = None
     origin: Optional[str] = None
+    channel: Optional[str] = None
+    channel_rank: Optional[int] = None
+    fusion_rank: Optional[int] = None
+    fusion_score: Optional[str] = None
+    rerank_delta: Optional[str] = None
     metadata: Optional[Dict] = None
     content_preview: Optional[str] = None
 
@@ -62,6 +67,8 @@ class RAGDiagnosticsResponse(BaseModel):
     total_candidates: int = 0
     total_selected: int = 0
     latency_ms: int = 0
+    degraded_mode: bool = False
+    degraded_reason: Optional[str] = None
     hints: Optional[Dict] = None
     filters: Optional[Dict] = None
     candidates: List[RAGDiagnosticsCandidate] = []

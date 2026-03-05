@@ -122,6 +122,35 @@ def test_rag_query_persists_request_id_and_retrieval_logs(monkeypatch):
     assert len(db.retrieval_candidate_logs) >= 1
     assert db.retrieval_query_logs[0].request_id == result.request_id
     assert db.retrieval_query_logs[0].backend_name == "qdrant"
+    assert db.retrieval_query_logs[0].degraded_mode is False
+
+
+def test_rag_query_marks_degraded_on_qdrant_fallback(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
+        return [
+            {
+                "content": "Найдено только через keyword fallback.",
+                "metadata": {"section_title": "Fallback"},
+                "source_path": "doc://fallback",
+                "source_type": "pdf",
+                "rerank_score": 0.81,
+                "distance": 0.2,
+                "origin": "bm25",
+            }
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search), "retrieval_backend": "qdrant"})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: "Ответ")})())
+
+    db = DummyDB()
+    payload = RAGQuery(query="вопрос", knowledge_base_id=1)
+    rag_query(payload, db=db)
+
+    assert len(db.retrieval_query_logs) == 1
+    assert db.retrieval_query_logs[0].degraded_mode is True
+    assert db.retrieval_query_logs[0].degraded_reason == "qdrant_unavailable_or_empty"
 
 
 def test_rag_diagnostics_returns_candidates():
@@ -138,6 +167,8 @@ def test_rag_diagnostics_returns_candidates():
             total_selected=2,
             latency_ms=123,
             backend_name="qdrant",
+            degraded_mode=True,
+            degraded_reason="qdrant_unavailable_or_empty",
         )
     )
     db.retrieval_candidate_logs.append(
@@ -149,6 +180,11 @@ def test_rag_diagnostics_returns_candidates():
             distance="-0.721500",
             rerank_score="0.912300",
             origin="qdrant",
+            channel="qdrant",
+            channel_rank=1,
+            fusion_rank=1,
+            fusion_score="0.981200",
+            rerank_delta="0.034100",
             metadata_json=json.dumps({"section_path": "25"}, ensure_ascii=False),
             content_preview="25. Целями развития искусственного интеллекта...",
         )
@@ -159,8 +195,12 @@ def test_rag_diagnostics_returns_candidates():
     assert result.request_id == "req-1"
     assert result.intent == "FACTOID"
     assert result.total_candidates == 5
+    assert result.degraded_mode is True
+    assert result.degraded_reason == "qdrant_unavailable_or_empty"
     assert len(result.candidates) == 1
     assert result.candidates[0].metadata == {"section_path": "25"}
+    assert result.candidates[0].channel == "qdrant"
+    assert result.candidates[0].fusion_rank == 1
 
 
 def test_rag_diagnostics_not_found():

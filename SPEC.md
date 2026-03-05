@@ -60,6 +60,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Embeddings with sentence-transformers; Qdrant for dense retrieval in production mode (`RAG_BACKEND=qdrant`).
   - Legacy in-process FAISS path remains available as rollback mode (`RAG_BACKEND=legacy`).
   - Index sync foundation uses idempotent SQL outbox events (`index_outbox_events`) to support retry-safe delivery into retrieval index backend.
+  - Backend outbox worker consumes pending index events with retry/backoff + dead-letter handling and writes periodic drift snapshots into `index_sync_audit`.
   - Optional reranker with top-N candidates and top-k final results.
   - Fallback keyword search if embeddings unavailable.
   - Context assembly with `SOURCE_ID` tags for inline citations.
@@ -127,6 +128,8 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - RAG factoid/legal questions (including year/metric queries) return clause-level context when corresponding chunks exist in KB.
 - RAG query response includes `request_id`, and retrieval diagnostics are available via `GET /api/v1/rag/diagnostics/{request_id}`.
 - Ingestion emits idempotent index outbox events for non-empty chunk upserts, enabling retry-safe index synchronization without duplicate writes.
+- Outbox worker processes queued index events asynchronously with bounded retries/dead-letter transition, and periodic drift audit records SQL-vs-Qdrant divergence in `index_sync_audit`.
+- Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and channel/fusion ranking fields for top candidates.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

@@ -41,3 +41,7 @@
 {"id":"RAGOUT-004","title":"Update design/spec/traceability and produce review artifact for Phase A outbox cycle","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-005","title":"Audit Phase A implementation against checklist, detect miswired outbox calls, and apply corrective fixes","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-006","title":"Re-run regression suite after outbox call fixes and confirm no unintended deletions/regressions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-007","title":"Implement Phase B async outbox consumer worker with retry/backoff/dead-letter lifecycle and startup wiring","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-008","title":"Implement Phase B drift audit loop (SQL vs Qdrant) and degraded-mode diagnostics persistence in RAG API","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-009","title":"Add focused tests for outbox worker lifecycle, drift audit statuses, qdrant count API, and degraded diagnostics fields","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-010","title":"Sync spec/design/traceability/ops docs and produce Phase B review artifact with verification evidence","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
