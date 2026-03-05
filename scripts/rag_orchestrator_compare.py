@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -52,11 +53,46 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--kb-id", type=int, default=None, help="Knowledge base id. If omitted, first KB from legacy endpoint is used")
     parser.add_argument("--cases-file", default="tests/rag_eval.yaml", help="YAML/JSON file with test cases")
     parser.add_argument("--timeout-sec", type=float, default=20.0)
+    parser.add_argument("--connect-retries", type=int, default=60, help="Network retry attempts for HTTP calls")
+    parser.add_argument("--retry-sleep-sec", type=float, default=1.0, help="Sleep between retry attempts")
     parser.add_argument("--max-cases", type=int, default=0, help="Optional max number of cases (>0)")
     parser.add_argument("--max-source-hit-drop", type=float, default=-1.0, help="Fail if v4 source-hit drops by more than this absolute value (e.g. 0.1)")
     parser.add_argument("--json-out", default="", help="Optional path to write comparison JSON")
     parser.add_argument("--print-json", action="store_true")
     return parser.parse_args()
+
+
+def _request_with_retries(
+    *,
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    timeout_sec: float,
+    connect_retries: int,
+    retry_sleep_sec: float,
+    **kwargs,
+) -> requests.Response:
+    attempts = max(1, int(connect_retries))
+    sleep_sec = max(0.0, float(retry_sleep_sec))
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return requests.request(
+                method,
+                url,
+                headers=headers,
+                timeout=timeout_sec,
+                **kwargs,
+            )
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"HTTP retry loop failed without exception for {method} {url}")
 
 
 def _load_cases(path: str) -> List[EvalCase]:
@@ -105,8 +141,21 @@ def _load_cases(path: str) -> List[EvalCase]:
     return out
 
 
-def _resolve_kb_id(base_api: str, headers: Dict[str, str], timeout_sec: float) -> int:
-    resp = requests.get(f"{base_api}/knowledge-bases/", headers=headers, timeout=timeout_sec)
+def _resolve_kb_id(
+    base_api: str,
+    headers: Dict[str, str],
+    timeout_sec: float,
+    connect_retries: int,
+    retry_sleep_sec: float,
+) -> int:
+    resp = _request_with_retries(
+        method="GET",
+        url=f"{base_api}/knowledge-bases/",
+        headers=headers,
+        timeout_sec=timeout_sec,
+        connect_retries=connect_retries,
+        retry_sleep_sec=retry_sleep_sec,
+    )
     resp.raise_for_status()
     payload = resp.json()
     if not isinstance(payload, list) or not payload:
@@ -138,12 +187,40 @@ def _run_case(
     kb_id: int,
     case: EvalCase,
     timeout_sec: float,
+    connect_retries: int,
+    retry_sleep_sec: float,
 ) -> Dict[str, Any]:
     payload = {
         "query": case.query,
         "knowledge_base_id": kb_id,
     }
-    response = requests.post(f"{base_api}/rag/query", headers=headers, json=payload, timeout=timeout_sec)
+    try:
+        response = _request_with_retries(
+            method="POST",
+            url=f"{base_api}/rag/query",
+            headers=headers,
+            timeout_sec=timeout_sec,
+            connect_retries=connect_retries,
+            retry_sleep_sec=retry_sleep_sec,
+            json=payload,
+        )
+    except requests.exceptions.RequestException as exc:
+        return {
+            "case_id": case.case_id,
+            "query": case.query,
+            "ok": False,
+            "http_status": 0,
+            "error": str(exc)[:500],
+            "answer_len": 0,
+            "source_hit": False,
+            "snippet_hits": 0,
+            "snippet_total": len(case.expected_snippets),
+            "request_id": None,
+            "orchestrator_mode": None,
+            "degraded_mode": None,
+            "total_selected": None,
+        }
+
     if response.status_code != 200:
         return {
             "case_id": case.case_id,
@@ -180,7 +257,14 @@ def _run_case(
     total_selected = None
     if request_id:
         try:
-            diag = requests.get(f"{base_api}/rag/diagnostics/{request_id}", headers=headers, timeout=timeout_sec)
+            diag = _request_with_retries(
+                method="GET",
+                url=f"{base_api}/rag/diagnostics/{request_id}",
+                headers=headers,
+                timeout_sec=timeout_sec,
+                connect_retries=min(max(1, connect_retries), 5),
+                retry_sleep_sec=retry_sleep_sec,
+            )
             if diag.status_code == 200:
                 diag_data = diag.json() if diag.content else {}
                 mode_raw = diag_data.get("orchestrator_mode")
@@ -243,6 +327,8 @@ def _run_mode(
     kb_id: int,
     cases: List[EvalCase],
     timeout_sec: float,
+    connect_retries: int,
+    retry_sleep_sec: float,
 ) -> Dict[str, Any]:
     rows = [
         _run_case(
@@ -251,6 +337,8 @@ def _run_mode(
             kb_id=kb_id,
             case=case,
             timeout_sec=timeout_sec,
+            connect_retries=connect_retries,
+            retry_sleep_sec=retry_sleep_sec,
         )
         for case in cases
     ]
@@ -298,7 +386,17 @@ def main() -> int:
         cases = _load_cases(args.cases_file)
         if int(args.max_cases or 0) > 0:
             cases = cases[: int(args.max_cases)]
-        kb_id = int(args.kb_id) if args.kb_id else _resolve_kb_id(legacy_api, legacy_headers, args.timeout_sec)
+        kb_id = (
+            int(args.kb_id)
+            if args.kb_id
+            else _resolve_kb_id(
+                legacy_api,
+                legacy_headers,
+                args.timeout_sec,
+                args.connect_retries,
+                args.retry_sleep_sec,
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"[FAIL] setup error: {exc}")
         return 2
@@ -312,6 +410,8 @@ def main() -> int:
         kb_id=kb_id,
         cases=cases,
         timeout_sec=args.timeout_sec,
+        connect_retries=args.connect_retries,
+        retry_sleep_sec=args.retry_sleep_sec,
     )
     v4_report = _run_mode(
         mode_name="v4",
@@ -320,6 +420,8 @@ def main() -> int:
         kb_id=kb_id,
         cases=cases,
         timeout_sec=args.timeout_sec,
+        connect_retries=args.connect_retries,
+        retry_sleep_sec=args.retry_sleep_sec,
     )
 
     legacy_summary = legacy_report.get("summary", {})

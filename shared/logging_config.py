@@ -20,9 +20,19 @@ from logging.handlers import RotatingFileHandler
 LOG_DIR = os.getenv("BOT_LOG_DIR", "data/logs")
 LOG_FILE = os.path.join(LOG_DIR, "bot.log")
 
+def _parse_int_env(name: str, default: int) -> int:
+    """Parse integer env value and tolerate inline comments in .env-style values."""
+    raw = os.getenv(name, str(default))
+    candidate = str(raw).split("#", 1)[0].strip()
+    try:
+        return int(candidate)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 # Параметры ротации из переменных окружения
-LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "10485760"))  # 10 MB по умолчанию
-LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "5"))  # 5 файлов по умолчанию
+LOG_MAX_BYTES = _parse_int_env("LOG_MAX_BYTES", 10485760)  # 10 MB по умолчанию
+LOG_BACKUP_COUNT = _parse_int_env("LOG_BACKUP_COUNT", 5)  # 5 файлов по умолчанию
 
 
 def setup_logging() -> logging.Logger:

@@ -191,3 +191,9 @@ bash scripts/run_rag_compare_stack.sh --kb-id 1 --max-source-hit-drop 0.10
 ```bash
 bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
 ```
+
+Если `v4` поднимается медленно (первичная загрузка моделей), увеличьте сетевые retry comparator:
+
+```bash
+bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --connect-retries 180 --retry-sleep-sec 1.5 --max-source-hit-drop 0.10
+```

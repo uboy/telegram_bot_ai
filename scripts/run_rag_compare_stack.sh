@@ -27,6 +27,8 @@ TEST_PDF_HOST="test.pdf"
 TEST_PDF_CONTAINER="/tmp/rag_compare_test.pdf"
 JOB_TIMEOUT_SEC="600"
 JOB_POLL_SEC="2"
+COMPARE_CONNECT_RETRIES="120"
+COMPARE_RETRY_SLEEP_SEC="1.0"
 
 usage() {
   cat <<'EOF'
@@ -47,6 +49,8 @@ Options:
   --test-pdf <path>              Host path to PDF for --prepare-test-kb (default: test.pdf)
   --job-timeout-sec <sec>        Wait timeout for ingestion job (default: 600)
   --job-poll-sec <sec>           Poll interval for ingestion job (default: 2)
+  --connect-retries <int>        HTTP connect retries for comparator (default: 120)
+  --retry-sleep-sec <float>      Sleep between comparator retries (default: 1.0)
   --cases-file <path>            Host path to eval cases file (default: tests/rag_eval.yaml)
   --report-path <path>           Container report path (default: /app/data/rag_compare_report.json)
   --max-source-hit-drop <float>  Fail if v4 source_hit drops more than value (default: 0.10)
@@ -117,6 +121,14 @@ while [[ $# -gt 0 ]]; do
       JOB_POLL_SEC="$2"
       shift 2
       ;;
+    --connect-retries)
+      COMPARE_CONNECT_RETRIES="$2"
+      shift 2
+      ;;
+    --retry-sleep-sec)
+      COMPARE_RETRY_SLEEP_SEC="$2"
+      shift 2
+      ;;
     --cases-file)
       CASES_FILE_HOST="$2"
       shift 2
@@ -162,6 +174,23 @@ resolve_compose_cmd() {
 }
 
 DOCKER_COMPOSE_CMD=()
+
+read_env_int_from_file() {
+  local key="$1"
+  local default_val="$2"
+  local raw=""
+
+  if [[ -f .env ]]; then
+    raw="$(grep -E "^${key}=" .env | tail -n1 | cut -d'=' -f2- || true)"
+  fi
+  raw="${raw%%#*}"
+  raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$raw"
+  else
+    printf '%s' "$default_val"
+  fi
+}
 
 if [[ ! -f .env ]]; then
   echo "ERROR: .env not found in current directory" >&2
@@ -212,6 +241,14 @@ if ! [[ "$JOB_POLL_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "ERROR: --job-poll-sec must be numeric (got '$JOB_POLL_SEC')" >&2
   exit 2
 fi
+if ! [[ "$COMPARE_CONNECT_RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --connect-retries must be integer (got '$COMPARE_CONNECT_RETRIES')" >&2
+  exit 2
+fi
+if ! [[ "$COMPARE_RETRY_SLEEP_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "ERROR: --retry-sleep-sec must be numeric (got '$COMPARE_RETRY_SLEEP_SEC')" >&2
+  exit 2
+fi
 
 if [[ "$PREPARE_TEST_KB" == "true" && ! -f "$TEST_PDF_HOST" ]]; then
   echo "ERROR: test PDF not found on host: $TEST_PDF_HOST" >&2
@@ -237,6 +274,9 @@ print_v4_diagnostics() {
 
 echo "[INFO] starting v4 container: $V4_CONTAINER"
 echo "[INFO] v4 RAG device: $V4_RAG_DEVICE"
+LOG_MAX_BYTES_CLEAN="$(read_env_int_from_file LOG_MAX_BYTES 10485760)"
+LOG_BACKUP_COUNT_CLEAN="$(read_env_int_from_file LOG_BACKUP_COUNT 5)"
+echo "[INFO] v4 logging env: LOG_MAX_BYTES=$LOG_MAX_BYTES_CLEAN LOG_BACKUP_COUNT=$LOG_BACKUP_COUNT_CLEAN"
 V4_EXTRA_ENV=()
 if [[ "${V4_RAG_DEVICE,,}" == cpu* ]]; then
   # Prevent accidental GPU allocation when compare is running side-by-side.
@@ -249,6 +289,8 @@ docker run -d \
   --env-file .env \
   -e RAG_ORCHESTRATOR_V4=true \
   -e RAG_DEVICE="$V4_RAG_DEVICE" \
+  -e LOG_MAX_BYTES="$LOG_MAX_BYTES_CLEAN" \
+  -e LOG_BACKUP_COUNT="$LOG_BACKUP_COUNT_CLEAN" \
   "${V4_EXTRA_ENV[@]}" \
   "$IMAGE_NAME" \
   uvicorn backend.app:app --host 0.0.0.0 --port "$V4_PORT" --workers 1 >/dev/null
@@ -369,6 +411,8 @@ CMD=(
   --legacy-base-url http://127.0.0.1:8000
   --v4-base-url "http://127.0.0.1:${V4_PORT}"
   --api-prefix "$API_PREFIX"
+  --connect-retries "$COMPARE_CONNECT_RETRIES"
+  --retry-sleep-sec "$COMPARE_RETRY_SLEEP_SEC"
   --cases-file /tmp/rag_eval.yaml
   --json-out "$REPORT_PATH_CONTAINER"
   --max-source-hit-drop "$MAX_DROP"

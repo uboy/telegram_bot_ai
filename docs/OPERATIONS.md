@@ -143,6 +143,8 @@ For the default docker-compose stack, use wrapper script:
   - `bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10`
 - by default temporary `v4` is started with `RAG_DEVICE=cpu`; override if needed:
   - `bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10`
+- comparator network retry tuning (useful on first cold model load):
+  - `bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --connect-retries 180 --retry-sleep-sec 1.5 --max-source-hit-drop 0.10`
 
 ## Container Runtime Notes
 

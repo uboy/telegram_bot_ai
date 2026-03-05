@@ -45,6 +45,9 @@ bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --ma
 
 # Override v4 device if you intentionally want GPU for the temporary v4 container
 bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10
+
+# Increase comparator HTTP retries when v4 cold-start is slow
+bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --connect-retries 180 --retry-sleep-sec 1.5 --max-source-hit-drop 0.10
 ```
 
 Note: wrapper auto-starts `backend redis qdrant` when `telegram_rag_backend` is not running.
