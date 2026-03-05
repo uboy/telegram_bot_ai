@@ -145,3 +145,13 @@ def test_run_index_drift_audit_once_records_statuses(monkeypatch):
     assert status_by_kb[1] == "ok"
     assert status_by_kb[2] == "warning"
     assert status_by_kb[3] == "critical"
+
+
+def test_worker_config_exposes_retention_knobs(monkeypatch):
+    monkeypatch.setenv("RAG_RETENTION_ENABLED", "true")
+    monkeypatch.setenv("RAG_RETENTION_INTERVAL_SEC", "7200")
+
+    cfg = worker._worker_config()
+
+    assert cfg["retention_enabled"] is True
+    assert cfg["retention_interval_sec"] == 7200.0

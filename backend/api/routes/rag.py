@@ -19,6 +19,10 @@ from backend.schemas.rag import (
     RAGSummaryAnswer,
     RAGDiagnosticsResponse,
     RAGDiagnosticsCandidate,
+    RAGEvalRunRequest,
+    RAGEvalRunResponse,
+    RAGEvalStatusResponse,
+    RAGEvalResultRow,
 )
 
 # Используем существующую RAG-систему и AI-менеджер из основного проекта.
@@ -38,6 +42,7 @@ from shared.database import (
     RetrievalCandidateLog,
 )  # type: ignore
 from shared.kb_settings import normalize_kb_settings  # type: ignore
+from backend.services.rag_eval_service import rag_eval_service
 
 
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -1286,6 +1291,66 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
         hints=_safe_json_loads(query_log.hints_json),
         filters=_safe_json_loads(query_log.filters_json),
         candidates=candidates,
+    )
+
+
+@router.post(
+    "/eval/run",
+    response_model=RAGEvalRunResponse,
+    summary="Запустить RAG benchmark suite",
+    dependencies=[Depends(require_api_key)],
+)
+def rag_eval_run(payload: RAGEvalRunRequest, db: Session = Depends(get_db_dep)) -> RAGEvalRunResponse:  # noqa: ARG001
+    run_id = rag_eval_service.start_run(
+        suite_name=(payload.suite or "rag-general-v1"),
+        baseline_run_id=payload.baseline_run_id,
+        slices=payload.slices,
+        run_async=True,
+    )
+    return RAGEvalRunResponse(run_id=run_id, status="queued")
+
+
+@router.get(
+    "/eval/{run_id}",
+    response_model=RAGEvalStatusResponse,
+    summary="Статус RAG benchmark run",
+    dependencies=[Depends(require_api_key)],
+)
+def rag_eval_status(run_id: str, db: Session = Depends(get_db_dep)) -> RAGEvalStatusResponse:  # noqa: ARG001
+    status_obj = rag_eval_service.get_run_status(run_id)
+    if not status_obj:
+        raise HTTPException(status_code=404, detail="run_id not found")
+
+    result_rows: List[RAGEvalResultRow] = []
+    for row in status_obj.get("results") or []:
+        details = _safe_json_loads((row or {}).get("details_json"))
+        result_rows.append(
+            RAGEvalResultRow(
+                slice_name=str((row or {}).get("slice_name") or ""),
+                metric_name=str((row or {}).get("metric_name") or ""),
+                metric_value=float((row or {}).get("metric_value") or 0.0),
+                threshold_value=(
+                    float((row or {}).get("threshold_value"))
+                    if (row or {}).get("threshold_value") is not None
+                    else None
+                ),
+                passed=bool((row or {}).get("passed")),
+                details=details,
+            )
+        )
+
+    started_at = status_obj.get("started_at")
+    finished_at = status_obj.get("finished_at")
+    return RAGEvalStatusResponse(
+        run_id=str(status_obj.get("run_id") or run_id),
+        suite=str(status_obj.get("suite_name") or ""),
+        baseline_run_id=(status_obj.get("baseline_run_id") or None),
+        status=str(status_obj.get("status") or "unknown"),
+        started_at=(started_at.isoformat() if hasattr(started_at, "isoformat") else None),
+        finished_at=(finished_at.isoformat() if hasattr(finished_at, "isoformat") else None),
+        metrics=(status_obj.get("metrics") or {}),
+        error_message=(status_obj.get("error_message") or None),
+        results=result_rows,
     )
 
 

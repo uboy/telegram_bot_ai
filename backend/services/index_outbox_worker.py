@@ -11,6 +11,7 @@ from shared.database import IndexOutboxEvent, IndexSyncAudit, KnowledgeChunk, ge
 from shared.index_outbox_service import index_outbox_service
 from shared.logging_config import logger
 from shared.rag_system import rag_system
+from backend.services.rag_retention_service import run_retention_once
 
 
 _worker_started = False
@@ -50,6 +51,8 @@ def _worker_config() -> Dict[str, Any]:
         "drift_max_kbs": _get_int_env("RAG_INDEX_DRIFT_MAX_KBS", 200, min_value=1),
         "drift_warning_ratio": _get_float_env("RAG_INDEX_DRIFT_WARNING_RATIO", 0.0005, min_value=0.0),
         "drift_critical_ratio": _get_float_env("RAG_INDEX_DRIFT_CRITICAL_RATIO", 0.001, min_value=0.0),
+        "retention_enabled": _get_bool_env("RAG_RETENTION_ENABLED", True),
+        "retention_interval_sec": _get_float_env("RAG_RETENTION_INTERVAL_SEC", 3600.0, min_value=60.0),
     }
 
 
@@ -355,6 +358,7 @@ def _worker_loop() -> None:
         cfg["poll_interval_sec"],
     )
     next_drift_audit_at = time.monotonic() + float(cfg["drift_audit_interval_sec"])
+    next_retention_at = time.monotonic() + float(cfg["retention_interval_sec"])
 
     while True:
         handled = 0
@@ -372,6 +376,14 @@ def _worker_loop() -> None:
             except Exception as exc:  # noqa: BLE001
                 logger.error("Index drift audit iteration failed: %s", exc, exc_info=True)
             next_drift_audit_at = now + float(cfg["drift_audit_interval_sec"])
+
+        if bool(cfg["retention_enabled"]) and now >= next_retention_at:
+            try:
+                summary = run_retention_once()
+                logger.info("Retention cleanup completed: %s", summary)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Retention cleanup iteration failed: %s", exc, exc_info=True)
+            next_retention_at = now + float(cfg["retention_interval_sec"])
 
         sleep_sec = 0.1 if handled > 0 else float(cfg["poll_interval_sec"])
         time.sleep(max(0.05, sleep_sec))

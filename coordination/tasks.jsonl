@@ -45,3 +45,7 @@
 {"id":"RAGOUT-008","title":"Implement Phase B drift audit loop (SQL vs Qdrant) and degraded-mode diagnostics persistence in RAG API","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-009","title":"Add focused tests for outbox worker lifecycle, drift audit statuses, qdrant count API, and degraded diagnostics fields","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-010","title":"Sync spec/design/traceability/ops docs and produce Phase B review artifact with verification evidence","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-011","title":"Implement retention lifecycle service and integrate scheduled purge loop with deletion audit logging","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-012","title":"Implement RAG eval orchestration service and API endpoints for run launch/status","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-013","title":"Add focused tests for retention/eval services, eval API routes, and route contract extensions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-014","title":"Sync docs/spec/traceability and produce Phase C part-1 review artifact for retention/eval rollout","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}

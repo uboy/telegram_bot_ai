@@ -52,6 +52,8 @@ Most ingestion endpoints return `job_id` for async processing.
 
 - `POST /rag/query`
 - `GET /rag/diagnostics/{request_id}`
+- `POST /rag/eval/run`
+- `GET /rag/eval/{run_id}`
 - `POST /rag/summary`
 - `POST /rag/reload-models`
 
@@ -64,6 +66,16 @@ Most ingestion endpoints return `job_id` for async processing.
 - request metadata (`intent`, `hints`, `filters`, `latency_ms`, `backend_name`)
 - degraded markers (`degraded_mode`, `degraded_reason`)
 - top candidate diagnostics (`origin`, `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`)
+
+`POST /rag/eval/run` request body:
+- `suite` (string)
+- `baseline_run_id` (optional string)
+- `slices` (optional list of slice names)
+
+`GET /rag/eval/{run_id}` returns:
+- run lifecycle (`queued|running|completed|failed`)
+- run-level metrics summary
+- per-slice metric rows (`recall_at_10`, `mrr_at_10`, `ndcg_at_10`)
 
 ## ASR
 

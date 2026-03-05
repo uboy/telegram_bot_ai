@@ -13,6 +13,9 @@ def test_critical_api_routes_exist():
 
     expected = {
         ("POST", "/api/v1/rag/query"),
+        ("GET", "/api/v1/rag/diagnostics/{request_id}"),
+        ("POST", "/api/v1/rag/eval/run"),
+        ("GET", "/api/v1/rag/eval/{run_id}"),
         ("POST", "/api/v1/rag/summary"),
         ("POST", "/api/v1/rag/reload-models"),
         ("POST", "/api/v1/asr/transcribe"),

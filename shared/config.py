@@ -140,6 +140,49 @@ try:
 except ValueError:
     RAG_INDEX_DRIFT_CRITICAL_RATIO = 0.001
 
+# Retention lifecycle worker
+RAG_RETENTION_ENABLED = os.getenv("RAG_RETENTION_ENABLED", "true").lower() == "true"
+try:
+    RAG_RETENTION_INTERVAL_SEC = float(os.getenv("RAG_RETENTION_INTERVAL_SEC", "3600"))
+except ValueError:
+    RAG_RETENTION_INTERVAL_SEC = 3600.0
+try:
+    RAG_RETENTION_QUERY_LOG_DAYS = int(os.getenv("RAG_RETENTION_QUERY_LOG_DAYS", "30"))
+except ValueError:
+    RAG_RETENTION_QUERY_LOG_DAYS = 30
+try:
+    RAG_RETENTION_DOC_OLD_VERSION_DAYS = int(os.getenv("RAG_RETENTION_DOC_OLD_VERSION_DAYS", "30"))
+except ValueError:
+    RAG_RETENTION_DOC_OLD_VERSION_DAYS = 30
+try:
+    RAG_RETENTION_EVAL_DAYS = int(os.getenv("RAG_RETENTION_EVAL_DAYS", "90"))
+except ValueError:
+    RAG_RETENTION_EVAL_DAYS = 90
+try:
+    RAG_RETENTION_DRIFT_AUDIT_DAYS = int(os.getenv("RAG_RETENTION_DRIFT_AUDIT_DAYS", "90"))
+except ValueError:
+    RAG_RETENTION_DRIFT_AUDIT_DAYS = 90
+try:
+    RAG_RETENTION_AUDIT_DAYS = int(os.getenv("RAG_RETENTION_AUDIT_DAYS", "365"))
+except ValueError:
+    RAG_RETENTION_AUDIT_DAYS = 365
+
+# RAG eval orchestration thresholds
+RAG_EVAL_DEFAULT_SLICES = os.getenv("RAG_EVAL_DEFAULT_SLICES", "")
+RAG_EVAL_SUITE_FILE = os.getenv("RAG_EVAL_SUITE_FILE", "")
+try:
+    RAG_EVAL_THRESHOLD_RECALL_AT10 = float(os.getenv("RAG_EVAL_THRESHOLD_RECALL_AT10", "0.6"))
+except ValueError:
+    RAG_EVAL_THRESHOLD_RECALL_AT10 = 0.6
+try:
+    RAG_EVAL_THRESHOLD_MRR_AT10 = float(os.getenv("RAG_EVAL_THRESHOLD_MRR_AT10", "0.45"))
+except ValueError:
+    RAG_EVAL_THRESHOLD_MRR_AT10 = 0.45
+try:
+    RAG_EVAL_THRESHOLD_NDCG_AT10 = float(os.getenv("RAG_EVAL_THRESHOLD_NDCG_AT10", "0.5"))
+except ValueError:
+    RAG_EVAL_THRESHOLD_NDCG_AT10 = 0.5
+
 # n8n Integration
 # Если N8N_BASE_URL не установлен или пустой, считаем что n8n отключен
 N8N_BASE_URL_RAW = os.getenv("N8N_BASE_URL", "").strip()

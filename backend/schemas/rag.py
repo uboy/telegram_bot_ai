@@ -74,3 +74,35 @@ class RAGDiagnosticsResponse(BaseModel):
     candidates: List[RAGDiagnosticsCandidate] = []
 
 
+class RAGEvalRunRequest(BaseModel):
+    suite: str = "rag-general-v1"
+    baseline_run_id: Optional[str] = None
+    slices: Optional[List[str]] = None
+
+
+class RAGEvalRunResponse(BaseModel):
+    run_id: str
+    status: str
+
+
+class RAGEvalResultRow(BaseModel):
+    slice_name: str
+    metric_name: str
+    metric_value: float
+    threshold_value: Optional[float] = None
+    passed: bool
+    details: Optional[Dict] = None
+
+
+class RAGEvalStatusResponse(BaseModel):
+    run_id: str
+    suite: str
+    baseline_run_id: Optional[str] = None
+    status: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    metrics: Optional[Dict] = None
+    error_message: Optional[str] = None
+    results: List[RAGEvalResultRow] = []
+
+

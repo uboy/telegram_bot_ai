@@ -123,3 +123,20 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/diagnostics/<req
 - количество кандидатов и выбранных фрагментов,
 - latency и признаки деградации (`degraded_mode`, `degraded_reason`),
 - top-кандидаты с channel/fusion/rerank метриками и метаданными.
+
+## Запуск RAG eval-run
+
+Запустить benchmark suite:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/eval/run \
+  -H "X-API-Key: <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"suite":"rag-general-v1","slices":["overall","en","howto"]}'
+```
+
+Проверить статус:
+
+```bash
+curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/eval/<run_id>
+```

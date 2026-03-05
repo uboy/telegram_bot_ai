@@ -88,6 +88,33 @@ Main knobs:
 - `RAG_INDEX_DRIFT_WARNING_RATIO`
 - `RAG_INDEX_DRIFT_CRITICAL_RATIO`
 
+## Retention Lifecycle
+
+Retention cleanup runs inside the background worker loop:
+- purges old retrieval diagnostics logs,
+- purges old document versions/chunks,
+- purges stale eval artifacts and drift audit snapshots,
+- records every purge in `retention_deletion_audit`.
+
+Main knobs:
+- `RAG_RETENTION_ENABLED`
+- `RAG_RETENTION_INTERVAL_SEC`
+- `RAG_RETENTION_QUERY_LOG_DAYS`
+- `RAG_RETENTION_DOC_OLD_VERSION_DAYS`
+- `RAG_RETENTION_EVAL_DAYS`
+- `RAG_RETENTION_DRIFT_AUDIT_DAYS`
+- `RAG_RETENTION_AUDIT_DAYS`
+
+## RAG Eval Operations
+
+- Launch eval run: `POST /api/v1/rag/eval/run`
+- Check run status/results: `GET /api/v1/rag/eval/{run_id}`
+- Default suite file: `tests/rag_eval.yaml` (override with `RAG_EVAL_SUITE_FILE`)
+- Threshold knobs:
+  - `RAG_EVAL_THRESHOLD_RECALL_AT10`
+  - `RAG_EVAL_THRESHOLD_MRR_AT10`
+  - `RAG_EVAL_THRESHOLD_NDCG_AT10`
+
 ## Container Runtime Notes
 
 - Redis: on some Docker runtimes container-level `sysctls` are not allowed.  
@@ -123,6 +150,16 @@ Main knobs:
   - inspect latest drift rows in `index_sync_audit` for `warning`/`critical` status
   - if backlog grows with repeated Qdrant errors, temporarily switch `RAG_BACKEND=legacy`
   - after backend recovery, replay pending events (worker retries automatically)
+
+- Retention incident:
+  - inspect recent rows in `retention_deletion_audit` (`status`, `rows_deleted`, `details_json`)
+  - verify retention env values and worker uptime
+  - if aggressive cleanup detected, disable via `RAG_RETENTION_ENABLED=false` and restart backend, then investigate
+
+- Eval run incident:
+  - inspect `GET /api/v1/rag/eval/{run_id}` status and `error_message`
+  - validate suite file path (`RAG_EVAL_SUITE_FILE`) and YAML readability
+  - rerun with explicit slices for narrower diagnosis
 
 - Analytics failures:
   - inspect digest/import status endpoints

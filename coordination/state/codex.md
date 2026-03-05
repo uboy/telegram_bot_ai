@@ -386,3 +386,39 @@
   - Added review artifact `coordination/reviews/rag-outbox-phase-b-2026-03-05.md`.
 - next step:
   - move to next architecture phase (retention worker + eval orchestration) after user confirmation.
+
+## 2026-03-05 Phase C part-1 completion snapshot
+- task: RAGOUT-011..014
+- classification: non-trivial (implementation + review cycle)
+- implementation:
+  - Added retention lifecycle service `backend/services/rag_retention_service.py`:
+    - scheduled purge for retrieval logs,
+    - old document versions/chunks cleanup,
+    - eval artifacts and drift audit retention cleanup,
+    - per-policy audit entries in `retention_deletion_audit`.
+  - Added eval orchestration service `backend/services/rag_eval_service.py`:
+    - run creation and lifecycle state (`queued/running/completed/failed`),
+    - persisted slice metrics in `rag_eval_results`.
+  - Extended RAG API:
+    - `POST /api/v1/rag/eval/run`
+    - `GET /api/v1/rag/eval/{run_id}`
+  - Integrated retention loop into background worker in `backend/services/index_outbox_worker.py`.
+  - Added config/env knobs for retention/eval in `shared/config.py` and `env.template`.
+- tests:
+  - added `tests/test_rag_retention_service.py`
+  - added `tests/test_rag_eval_service.py`
+  - added `tests/test_rag_eval_api.py`
+  - updated `tests/test_api_routes_contract.py`
+  - updated `tests/test_index_outbox_worker.py`
+- verification:
+  - `python -m py_compile backend/services/rag_retention_service.py backend/services/rag_eval_service.py backend/services/index_outbox_worker.py backend/api/routes/rag.py backend/schemas/rag.py shared/config.py tests/test_api_routes_contract.py tests/test_rag_eval_api.py tests/test_rag_eval_service.py tests/test_rag_retention_service.py tests/test_index_outbox_worker.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_api.py tests/test_rag_eval_service.py tests/test_rag_retention_service.py tests/test_index_outbox_worker.py tests/test_api_routes_contract.py tests/test_rag_diagnostics.py` -> PASS (`17 passed`)
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_index_outbox_service.py tests/test_ingestion_outbox.py tests/test_indexing_jobs_lifecycle.py tests/test_qdrant_backend.py` -> PASS (`13 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-generalized-architecture-v2.md`
+  - updated `docs/API_REFERENCE.md`, `docs/CONFIGURATION.md`, `docs/OPERATIONS.md`, `docs/USAGE.md`
+  - added review report `coordination/reviews/rag-outbox-phase-c1-2026-03-05.md`
+- next step:
+  - implement statistical CI quality gate wiring and richer generation-faithfulness eval metrics.

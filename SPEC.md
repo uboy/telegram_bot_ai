@@ -54,6 +54,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Ingestion endpoints for documents, images, web pages, wiki (crawl/git/zip).
   - RAG query endpoint returning answer + sources + metadata + `request_id`.
   - RAG diagnostics endpoint for retrieval trace by `request_id`.
+  - RAG eval orchestration endpoints for benchmark run launch/status (`/rag/eval/run`, `/rag/eval/{run_id}`) with persisted run/result metrics.
   - Job status endpoint for ingestion progress (where implemented).
 - RAG pipeline:
   - Chunking with configurable size/overlap and Markdown-aware splitting.
@@ -130,6 +131,8 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Ingestion emits idempotent index outbox events for non-empty chunk upserts, enabling retry-safe index synchronization without duplicate writes.
 - Outbox worker processes queued index events asynchronously with bounded retries/dead-letter transition, and periodic drift audit records SQL-vs-Qdrant divergence in `index_sync_audit`.
 - Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and channel/fusion ranking fields for top candidates.
+- Retention lifecycle runs on schedule: old retrieval logs, old document versions/chunks, eval artifacts, and drift audit snapshots are purged by policy with `retention_deletion_audit` entries.
+- Backend exposes eval run lifecycle: `POST /api/v1/rag/eval/run` queues benchmark run and `GET /api/v1/rag/eval/{run_id}` returns run status + per-slice metrics.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

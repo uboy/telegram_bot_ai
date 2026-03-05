@@ -569,6 +569,22 @@ Implemented in this cycle:
 5. Verification:
 - focused runtime + regression tests passed for worker lifecycle, diagnostics fields, and Qdrant count API.
 
+## 26) Implementation snapshot (Phase C part-1 completed on 2026-03-05)
+
+Implemented in this cycle:
+1. Retention lifecycle worker implemented:
+- scheduled cleanup for retrieval logs, old document versions/chunks, eval artifacts, and drift audit rows,
+- audit trail persisted to `retention_deletion_audit` for every cleanup policy run.
+2. Eval orchestration services/API implemented:
+- backend service `rag_eval_service` with persisted `rag_eval_runs` + `rag_eval_results`,
+- API endpoints:
+  - `POST /api/v1/rag/eval/run`
+  - `GET /api/v1/rag/eval/{run_id}`
+3. Runtime integration:
+- retention loop integrated into index outbox background worker.
+4. Verification:
+- focused tests added for retention/eval services and eval API contract.
+
 ## Approval
 
 REVIEW REQUIRED — Reply "APPROVED:v1" or "CHANGES:<bullets>"
