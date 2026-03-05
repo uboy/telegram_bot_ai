@@ -176,6 +176,8 @@ python scripts/rag_orchestrator_compare.py --legacy-base-url http://legacy-host:
 bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10
 ```
 
+Скрипт автоматически поднимает `backend redis qdrant`, если `telegram_rag_backend` не запущен (предпочитает `docker-compose`, fallback: `docker compose`).
+
 Примечание: временный `v4` backend в этом скрипте запускается с `RAG_DEVICE=cpu` по умолчанию (чтобы избежать OOM/падений при параллельном запуске с legacy). При необходимости можно переопределить: `--v4-rag-device cuda`.
 
 Опционально указать конкретную БЗ:

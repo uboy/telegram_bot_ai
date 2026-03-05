@@ -47,6 +47,8 @@ bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --ma
 bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10
 ```
 
+Note: wrapper auto-starts `backend redis qdrant` when `telegram_rag_backend` is not running.
+
 ## CI Smoke Recommendation
 
 - Run on each PR:

@@ -138,6 +138,7 @@ Use comparator script against two running backend instances:
 For the default docker-compose stack, use wrapper script:
 - `bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10`
 - report path (host): `./data/rag_compare_report.json`
+- wrapper auto-starts `backend redis qdrant` if legacy backend container is absent
 - auto-prepare test KB from `test.pdf` in repo root:
   - `bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10`
 - by default temporary `v4` is started with `RAG_DEVICE=cpu`; override if needed:
