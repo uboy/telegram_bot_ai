@@ -333,8 +333,12 @@ def _run_mode(
     connect_retries: int,
     retry_sleep_sec: float,
 ) -> Dict[str, Any]:
-    rows = [
-        _run_case(
+    rows: List[Dict[str, Any]] = []
+    total_cases = len(cases)
+    for idx, case in enumerate(cases, start=1):
+        started = time.perf_counter()
+        print(f"[CASE] mode={mode_name} idx={idx}/{total_cases} id={case.case_id} start", flush=True)
+        row = _run_case(
             base_api=base_api,
             headers=headers,
             kb_id=kb_id,
@@ -343,8 +347,17 @@ def _run_mode(
             connect_retries=connect_retries,
             retry_sleep_sec=retry_sleep_sec,
         )
-        for case in cases
-    ]
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        print(
+            "[CASE] "
+            f"mode={mode_name} idx={idx}/{total_cases} id={case.case_id} "
+            f"ok={bool(row.get('ok'))} http={int(row.get('http_status') or 0)} "
+            f"answer_len={int(row.get('answer_len') or 0)} "
+            f"selected={int(row.get('total_selected') or 0)} "
+            f"ms={elapsed_ms}",
+            flush=True,
+        )
+        rows.append(row)
     return {
         "mode": mode_name,
         "summary": _summarize(rows),
