@@ -93,6 +93,11 @@ RAG_BACKEND = os.getenv("RAG_BACKEND", "legacy").strip().lower()
 if RAG_BACKEND not in {"legacy", "qdrant"}:
     RAG_BACKEND = "legacy"
 
+# Orchestrator switch (Phase D cutover)
+# false -> legacy route-level intent boosts/fallback ranking
+# true  -> v4 primary path without query-specific hardcoded boosts
+RAG_ORCHESTRATOR_V4 = os.getenv("RAG_ORCHESTRATOR_V4", "false").lower() == "true"
+
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip().rstrip("/")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks_v3").strip()

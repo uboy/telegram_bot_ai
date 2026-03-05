@@ -29,6 +29,7 @@ Copy-Item env.template .env
 - `RAG_MODEL_NAME`
 - `RAG_RERANK_MODEL`
 - `RAG_BACKEND` (`legacy` | `qdrant`)
+- `RAG_ORCHESTRATOR_V4` (`false` | `true`)
 - `RAG_TOP_K`
 - `RAG_CONTEXT_LENGTH`
 - `RAG_CHUNK_SIZE`
@@ -38,6 +39,9 @@ Copy-Item env.template .env
 - `QDRANT_COLLECTION`
 - `QDRANT_TIMEOUT_SEC`
 - `HF_TOKEN` (опционально, для gated/private моделей Hugging Face и лимитов API)
+
+`RAG_ORCHESTRATOR_V4=true` включает Phase D primary path без route-level query-specific boosts/fallback.
+`RAG_ORCHESTRATOR_V4=false` оставляет legacy intent/boost/fallback поведение.
 
 ### RAG index outbox worker
 - `RAG_INDEX_OUTBOX_WORKER_ENABLED`

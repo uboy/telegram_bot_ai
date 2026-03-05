@@ -49,3 +49,11 @@
 {"id":"RAGOUT-012","title":"Implement RAG eval orchestration service and API endpoints for run launch/status","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-013","title":"Add focused tests for retention/eval services, eval API routes, and route contract extensions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-014","title":"Sync docs/spec/traceability and produce Phase C part-1 review artifact for retention/eval rollout","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-015","title":"Implement statistical quality gate script for eval baseline deltas with bootstrap CI and sample-size checks","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-016","title":"Extend eval result persistence with per-metric sample arrays for CI bootstrap evaluation","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-017","title":"Add focused tests for quality gate logic and bootstrap checks","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-018","title":"Sync docs/traceability and produce Phase C part-2 review artifact for statistical gate rollout","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-019","title":"Implement Phase D feature-flag cutover in rag_query with non-heuristic primary ranking path","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-020","title":"Add regression tests for RAG_ORCHESTRATOR_V4 behavior (disable route-level boosts/fallback) and legacy compatibility","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-021","title":"Update spec/design/traceability and ops/config/usage docs for Phase D orchestrator flag rollout","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-022","title":"Produce Phase D kickoff review artifact and synchronize coordination state/cycle contract","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}

@@ -280,10 +280,12 @@ class RAGEvalService:
                     slice_cases = [row for row in case_metrics if slice_name == "overall" or slice_name in (row.get("slices") or [])]
                     sample_size = len(slice_cases)
                     aggregate = {metric_name: 0.0 for metric_name in metric_names}
+                    metric_values = {metric_name: [] for metric_name in metric_names}
                     if sample_size > 0:
                         for metric_name in metric_names:
+                            metric_values[metric_name] = [float(row.get(metric_name, 0.0)) for row in slice_cases]
                             aggregate[metric_name] = float(
-                                sum(float(row.get(metric_name, 0.0)) for row in slice_cases) / sample_size
+                                sum(metric_values[metric_name]) / sample_size
                             )
 
                     slice_summary[slice_name] = {
@@ -306,6 +308,7 @@ class RAGEvalService:
                                     {
                                         "sample_size": sample_size,
                                         "suite_name": suite_name,
+                                        "values": metric_values.get(metric_name, []),
                                     },
                                     ensure_ascii=False,
                                 ),

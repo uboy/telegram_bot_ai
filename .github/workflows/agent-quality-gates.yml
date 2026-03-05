@@ -35,6 +35,7 @@ jobs:
         run: |
           python -m py_compile scripts/ci_policy_gate.py
           python -m py_compile scripts/scan_secrets.py
+          python -m py_compile scripts/rag_eval_quality_gate.py
 
       - name: Install dependencies for smoke tests
         run: |

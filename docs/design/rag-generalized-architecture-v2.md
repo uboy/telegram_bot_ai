@@ -585,6 +585,36 @@ Implemented in this cycle:
 4. Verification:
 - focused tests added for retention/eval services and eval API contract.
 
+## 27) Implementation snapshot (Phase C part-2 completed on 2026-03-05)
+
+Implemented in this cycle:
+1. Statistical quality gate script added:
+- `scripts/rag_eval_quality_gate.py`
+- validates required slices/metrics against thresholds,
+- enforces minimum sample size,
+- compares run vs baseline delta with bootstrap 95% CI check against negative margin.
+2. Eval persistence enriched for statistical gate:
+- `rag_eval_service` now stores per-metric sample arrays in `RAGEvalResult.details_json.values`.
+3. CI integration:
+- quality-gate workflow compiles new script to protect contract from syntax/runtime drift.
+4. Verification:
+- focused tests added for gate logic and bootstrap behavior.
+
+## 28) Implementation snapshot (Phase D kickoff completed on 2026-03-05)
+
+Implemented in this cycle:
+1. Feature-flag cutover wiring:
+- added `RAG_ORCHESTRATOR_V4` in runtime config and env template.
+2. `rag_query` primary path gating:
+- when `RAG_ORCHESTRATOR_V4=true`, route-level query-specific intent boosts/fallback are disabled,
+- ranking uses base retrieval score only (`rerank_score` or distance fallback),
+- rollback remains one-flag switch (`RAG_ORCHESTRATOR_V4=false`).
+3. Verification:
+- added focused tests confirming v4 mode disables definition boost and keyword fallback.
+
+Checklist note:
+- item `Primary retrieval path has no hardcoded query phrase boosting` is now implemented behind Phase D feature flag and awaits full production cutover decision.
+
 ## Approval
 
 REVIEW REQUIRED — Reply "APPROVED:v1" or "CHANGES:<bullets>"

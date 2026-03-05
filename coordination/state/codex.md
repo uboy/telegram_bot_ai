@@ -422,3 +422,54 @@
   - added review report `coordination/reviews/rag-outbox-phase-c1-2026-03-05.md`
 - next step:
   - implement statistical CI quality gate wiring and richer generation-faithfulness eval metrics.
+
+## 2026-03-05 Phase C part-2 completion snapshot
+- task: RAGOUT-015..018
+- classification: non-trivial (implementation + review cycle)
+- implementation:
+  - Added statistical quality gate CLI script `scripts/rag_eval_quality_gate.py`:
+    - required slices/metrics enforcement,
+    - thresholds and minimum sample-size checks,
+    - baseline delta non-regression check,
+    - bootstrap 95% CI lower-bound check against configurable negative margin,
+    - JSON report output options.
+  - Extended eval persistence in `backend/services/rag_eval_service.py` to store per-result `sample_size`, `suite_name`, and metric `values` arrays in `details_json` for CI bootstrap evaluation.
+  - Added tests `tests/test_rag_eval_quality_gate.py` (bootstrap deterministic behavior, pass/fail gate scenarios).
+  - Hardened gate script import behavior with lazy DB model loading so unit tests can import module without immediate DB connection bootstrap.
+- verification:
+  - `python -m py_compile scripts/rag_eval_quality_gate.py backend/services/rag_eval_service.py tests/test_rag_eval_quality_gate.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_quality_gate.py` -> PASS (`3 passed`)
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_quality_gate.py tests/test_rag_eval_service.py tests/test_rag_eval_api.py tests/test_api_routes_contract.py` -> PASS (`9 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec:
+  - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-generalized-architecture-v2.md`.
+  - Updated `docs/OPERATIONS.md`, `docs/TESTING.md`, `docs/USAGE.md`.
+  - Added review report `coordination/reviews/rag-outbox-phase-c2-2026-03-05.md`.
+- notes:
+  - Focused pytest requiring backend imports should be run with test DB overrides in this shell (`MYSQL_URL=''`, `DB_PATH=data/test_bot_database.db`) to avoid accidental external MySQL dependency during collection.
+
+## 2026-03-05 Phase D kickoff snapshot (feature-flag orchestrator cutover)
+- task: RAGOUT-019..022
+- classification: non-trivial (implementation + review cycle)
+- implementation:
+  - Added `RAG_ORCHESTRATOR_V4` in `shared/config.py` and `env.template`.
+  - Updated `backend/api/routes/rag.py`:
+    - `RAG_ORCHESTRATOR_V4=true` => disable route-level query-specific boosts/keyword fallback,
+    - rank by base retrieval score only,
+    - keep rollback path via `RAG_ORCHESTRATOR_V4=false`.
+  - Added v4 regression coverage in `tests/test_rag_query_definition_intent.py`:
+    - `test_rag_query_orchestrator_v4_disables_definition_boosts`,
+    - `test_rag_query_orchestrator_v4_disables_keyword_fallback`.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py shared/config.py tests/test_rag_query_definition_intent.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py` -> PASS (`8 passed`)
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_service.py tests/test_rag_eval_api.py tests/test_api_routes_contract.py` -> PASS (`17 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec:
+  - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-generalized-architecture-v2.md`.
+  - Updated `docs/OPERATIONS.md`, `docs/CONFIGURATION.md`, `docs/USAGE.md`.
+  - Added review report `coordination/reviews/rag-outbox-phase-d1-2026-03-05.md`.
+- next step:
+  - run comparative eval (`legacy` vs `RAG_ORCHESTRATOR_V4=true`) and decide production default cutover.

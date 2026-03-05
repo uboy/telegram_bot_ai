@@ -60,15 +60,18 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Chunking with configurable size/overlap and Markdown-aware splitting.
   - Embeddings with sentence-transformers; Qdrant for dense retrieval in production mode (`RAG_BACKEND=qdrant`).
   - Legacy in-process FAISS path remains available as rollback mode (`RAG_BACKEND=legacy`).
+  - Retrieval orchestrator cutover is controlled by `RAG_ORCHESTRATOR_V4` feature flag.
   - Index sync foundation uses idempotent SQL outbox events (`index_outbox_events`) to support retry-safe delivery into retrieval index backend.
   - Backend outbox worker consumes pending index events with retry/backoff + dead-letter handling and writes periodic drift snapshots into `index_sync_audit`.
   - Optional reranker with top-N candidates and top-k final results.
   - Fallback keyword search if embeddings unavailable.
   - Context assembly with `SOURCE_ID` tags for inline citations.
-  - For definition-style questions ("что такое", "как определяется", "что включает"), ranking prioritizes explicit definitional fragments.
-  - For questions with explicit clause references ("пункт N"), retrieval additionally prioritizes chunks containing numeric section markers (`N.`) and `пункт N`.
-  - For factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points.
-  - For metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing to reduce false "no information" responses when target clause exists.
+  - In legacy orchestrator mode (`RAG_ORCHESTRATOR_V4=false`), definition/factoid/clause heuristics remain available:
+    - for definition-style questions ("что такое", "как определяется", "что включает"), ranking prioritizes explicit definitional fragments;
+    - for questions with explicit clause references ("пункт N"), retrieval additionally prioritizes chunks containing numeric section markers (`N.`) and `пункт N`;
+    - for factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points;
+    - for metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing.
+  - In Phase D orchestrator mode (`RAG_ORCHESTRATOR_V4=true`), route-level query-specific boosts/fallback are disabled in primary path.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers.
   - Sanitize command snippets not present in KB context.
@@ -124,15 +127,17 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Direct AI mode prompt policy enforces concise first reply and clarification-first behavior for ambiguous user input.
 - AI request metrics are persisted for all `ai_manager` calls and include provider/model/latency/status fields.
 - AI mode shows temporary progress status for long requests (>5s predicted or observed) and removes it after completion to keep chat clean.
-- RAG definition-style questions prefer glossary/definition fragments over generic policy mentions when both are present.
-- RAG questions with "пункт N" return the corresponding clause context when it exists in indexed chunks (including numeric markers like `25.`/`26.`).
-- RAG factoid/legal questions (including year/metric queries) return clause-level context when corresponding chunks exist in KB.
+- In legacy orchestrator mode (`RAG_ORCHESTRATOR_V4=false`), RAG definition-style questions prefer glossary/definition fragments over generic policy mentions when both are present.
+- In legacy orchestrator mode (`RAG_ORCHESTRATOR_V4=false`), RAG questions with "пункт N" return the corresponding clause context when it exists in indexed chunks (including numeric markers like `25.`/`26.`).
+- In legacy orchestrator mode (`RAG_ORCHESTRATOR_V4=false`), RAG factoid/legal questions (including year/metric queries) return clause-level context when corresponding chunks exist in KB.
+- In Phase D mode (`RAG_ORCHESTRATOR_V4=true`), `/api/v1/rag/query` disables route-level query-specific hardcoded boosts/keyword fallback and ranks by base retrieval score.
 - RAG query response includes `request_id`, and retrieval diagnostics are available via `GET /api/v1/rag/diagnostics/{request_id}`.
 - Ingestion emits idempotent index outbox events for non-empty chunk upserts, enabling retry-safe index synchronization without duplicate writes.
 - Outbox worker processes queued index events asynchronously with bounded retries/dead-letter transition, and periodic drift audit records SQL-vs-Qdrant divergence in `index_sync_audit`.
 - Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and channel/fusion ranking fields for top candidates.
 - Retention lifecycle runs on schedule: old retrieval logs, old document versions/chunks, eval artifacts, and drift audit snapshots are purged by policy with `retention_deletion_audit` entries.
 - Backend exposes eval run lifecycle: `POST /api/v1/rag/eval/run` queues benchmark run and `GET /api/v1/rag/eval/{run_id}` returns run status + per-slice metrics.
+- Statistical quality gate script validates eval run against baseline using thresholds, minimum sample size, and bootstrap 95% CI delta margin.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

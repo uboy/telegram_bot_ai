@@ -68,6 +68,14 @@ python scripts/start_stack.py --dry-run
 
 After changing any RAG backend env vars, restart `backend` and `bot` services.
 
+## RAG Orchestrator Mode
+
+- Legacy mode: `RAG_ORCHESTRATOR_V4=false`
+  - keeps route-level intent boosts and keyword fallback logic.
+- Phase D mode: `RAG_ORCHESTRATOR_V4=true`
+  - switches `/api/v1/rag/query` to primary ranking without query-specific hardcoded boosts/fallback.
+- Rollback: set `RAG_ORCHESTRATOR_V4=false` and restart `backend` + `bot`.
+
 ## Index Outbox Worker
 
 When `RAG_BACKEND=qdrant`, backend starts async index-sync worker:
@@ -114,6 +122,8 @@ Main knobs:
   - `RAG_EVAL_THRESHOLD_RECALL_AT10`
   - `RAG_EVAL_THRESHOLD_MRR_AT10`
   - `RAG_EVAL_THRESHOLD_NDCG_AT10`
+- Apply quality gate for completed run:
+  - `python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json`
 
 ## Container Runtime Notes
 

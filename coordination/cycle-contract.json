@@ -1,5 +1,5 @@
 {
-  "task_id": "RAGOUT-014",
+  "task_id": "RAGOUT-022",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
@@ -7,35 +7,24 @@
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "backend/services/index_outbox_worker.py",
-    "backend/services/rag_retention_service.py",
-    "backend/services/rag_eval_service.py",
-    "backend/app.py",
     "backend/api/routes/rag.py",
-    "backend/schemas/rag.py",
-    "shared/qdrant_backend.py",
     "shared/config.py",
-    "tests/test_index_outbox_worker.py",
-    "tests/test_rag_diagnostics.py",
-    "tests/test_rag_eval_api.py",
-    "tests/test_rag_eval_service.py",
-    "tests/test_rag_retention_service.py",
-    "tests/test_qdrant_backend.py",
+    "env.template",
+    "tests/test_rag_query_definition_intent.py",
     "SPEC.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
     "docs/design/rag-generalized-architecture-v2.md",
     "docs/OPERATIONS.md",
-    "docs/API_REFERENCE.md",
     "docs/CONFIGURATION.md",
     "docs/USAGE.md",
-    "env.template",
-    "coordination/reviews/rag-outbox-phase-c1-2026-03-05.md",
+    "coordination/reviews/rag-outbox-phase-d1-2026-03-05.md",
     "coordination/state/codex.md",
-    "coordination/tasks.jsonl"
+    "coordination/tasks.jsonl",
+    "coordination/cycle-contract.json"
   ],
   "size_limits": {
-    "max_files_changed": 30,
-    "max_lines_added": 3200,
+    "max_files_changed": 40,
+    "max_lines_added": 3600,
     "max_lines_deleted": 400
   }
 }

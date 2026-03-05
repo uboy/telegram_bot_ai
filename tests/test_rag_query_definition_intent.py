@@ -283,3 +283,88 @@ def test_rag_query_factoid_supercomputer_power(monkeypatch):
     result = rag_query(payload, db=DummyDB(chunk_rows=[metric_chunk]))
 
     assert "не менее 1 экзафлопса к 2030 году" in result.answer
+
+
+def test_rag_query_orchestrator_v4_disables_definition_boosts(monkeypatch):
+    from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", True, raising=False)
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):
+        return [
+            {
+                "content": (
+                    "В документе создается механизм гарантированного обезличивания и "
+                    "разметки данных при соблюдении прав обладателей информации."
+                ),
+                "metadata": {"section_title": "Приоритеты", "section_path": "пункт 42"},
+                "source_path": "doc://policy",
+                "source_type": "pdf",
+                "rerank_score": 0.92,
+                "distance": 0.08,
+            },
+            {
+                "content": (
+                    "Разметка данных - этап обработки структурированных и "
+                    "неструктурированных данных, при котором данным присваиваются "
+                    "идентификаторы."
+                ),
+                "metadata": {"section_title": "Термины и определения", "section_path": "пункт 2"},
+                "source_path": "doc://glossary",
+                "source_type": "pdf",
+                "rerank_score": 0.70,
+                "distance": 0.30,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    payload = RAGQuery(
+        query="Как в документе определяется разметка данных?",
+        knowledge_base_id=1,
+    )
+    result = rag_query(payload, db=DummyDB())
+
+    policy_idx = result.answer.find("гарантированного обезличивания")
+    assert policy_idx >= 0
+    assert "Разметка данных - этап обработки" not in result.answer
+
+
+def test_rag_query_orchestrator_v4_disables_keyword_fallback(monkeypatch):
+    from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", True, raising=False)
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):
+        return [
+            {
+                "content": "В документе упоминаются общие положения о развитии технологий ИИ.",
+                "metadata": {"section_title": "Общие положения", "section_path": "пункт 10"},
+                "source_path": "doc://policy",
+                "source_type": "pdf",
+                "rerank_score": 0.91,
+                "distance": 0.09,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    point_chunk = DummyChunkRow(
+        content=(
+            "25. Целями развития искусственного интеллекта в Российской Федерации "
+            "являются обеспечение роста благосостояния и качества жизни населения."
+        ),
+        metadata={"section_title": "IV. Цели и задачи", "section_path": "25"},
+    )
+    payload = RAGQuery(
+        query="Какие цели развития искусственного интеллекта названы в пункте 25?",
+        knowledge_base_id=1,
+    )
+    result = rag_query(payload, db=DummyDB(chunk_rows=[point_chunk]))
+
+    assert "упоминаются общие положения" in result.answer
+    assert "25. Целями развития искусственного интеллекта" not in result.answer

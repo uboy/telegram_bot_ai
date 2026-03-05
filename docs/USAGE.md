@@ -78,6 +78,9 @@ python scripts/start_stack.py
 3. Если ответ обрабатывается долго, бот покажет временный индикатор ожидания и удалит его после ответа.
 4. Можно отправить несколько вопросов подряд: бот обработает их по очереди и ответит под каждым исходным вопросом.
 5. Получите ответ с источниками.
+6. Для Phase D cutover можно включить `RAG_ORCHESTRATOR_V4=true` в `.env`:
+   - в этом режиме route-level intent boosts/keyword fallback отключаются,
+   - rollback: вернуть `RAG_ORCHESTRATOR_V4=false` и перезапустить `backend` + `bot`.
 
 ### 3) Транскрипция аудио
 1. Отправьте voice/audio сообщение.
@@ -139,4 +142,10 @@ curl -X POST http://localhost:8000/api/v1/rag/eval/run \
 
 ```bash
 curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/eval/<run_id>
+```
+
+Прогнать quality gate по завершенному run:
+
+```bash
+python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json
 ```
