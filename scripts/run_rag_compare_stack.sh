@@ -250,6 +250,7 @@ fi
 if [[ "$PREPARE_TEST_KB" == "true" ]]; then
   echo "[INFO] preparing test knowledge base and uploading PDF..."
   docker cp "$TEST_PDF_HOST" "$LEGACY_CONTAINER:$TEST_PDF_CONTAINER"
+  set +e
   PREP_OUTPUT="$(docker exec \
     -e PREPARE_KB_NAME="$TEST_KB_NAME" \
     -e PREPARE_KB_DESCRIPTION="$TEST_KB_DESCRIPTION" \
@@ -257,7 +258,7 @@ if [[ "$PREPARE_TEST_KB" == "true" ]]; then
     -e PREPARE_API_PREFIX="$API_PREFIX" \
     -e PREPARE_JOB_TIMEOUT_SEC="$JOB_TIMEOUT_SEC" \
     -e PREPARE_JOB_POLL_SEC="$JOB_POLL_SEC" \
-    "$LEGACY_CONTAINER" python - <<'PY'
+    "$LEGACY_CONTAINER" python - <<'PY' 2>&1
 import os
 import sys
 import time
@@ -351,10 +352,16 @@ print(f"[FAIL] timeout waiting for ingestion job_id={job_id} after {job_timeout:
 raise SystemExit(2)
 PY
 )"
+  prep_exit=$?
+  set -e
   printf '%s\n' "$PREP_OUTPUT"
-  PREP_KB_ID="$(printf '%s\n' "$PREP_OUTPUT" | awk -F= '/^KB_ID=/{print $2}' | tail -n1 | tr -d '\r')"
+  if [[ $prep_exit -ne 0 ]]; then
+    echo "ERROR: test KB preparation failed (exit=$prep_exit). See logs above." >&2
+    exit "$prep_exit"
+  fi
+  PREP_KB_ID="$(printf '%s\n' "$PREP_OUTPUT" | tr -d '\r' | sed -n 's/.*KB_ID=\([0-9][0-9]*\).*/\1/p' | tail -n1)"
   if [[ -z "$PREP_KB_ID" ]]; then
-    echo "ERROR: failed to parse KB_ID from preparation output" >&2
+    echo "ERROR: failed to parse KB_ID from preparation output (marker KB_ID=<int> not found)." >&2
     exit 2
   fi
   KB_ID="$PREP_KB_ID"
