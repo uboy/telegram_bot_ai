@@ -29,6 +29,7 @@ JOB_TIMEOUT_SEC="600"
 JOB_POLL_SEC="2"
 COMPARE_CONNECT_RETRIES="120"
 COMPARE_RETRY_SLEEP_SEC="1.0"
+COMPARE_MIN_SELECTED_RATE="0.01"
 
 usage() {
   cat <<'EOF'
@@ -51,6 +52,7 @@ Options:
   --job-poll-sec <sec>           Poll interval for ingestion job (default: 2)
   --connect-retries <int>        HTTP connect retries for comparator (default: 120)
   --retry-sleep-sec <float>      Sleep between comparator retries (default: 1.0)
+  --min-selected-rate <float>    Min selected-context rate per mode (default: 0.01)
   --cases-file <path>            Host path to eval cases file (default: tests/rag_eval.yaml)
   --report-path <path>           Container report path (default: /app/data/rag_compare_report.json)
   --max-source-hit-drop <float>  Fail if v4 source_hit drops more than value (default: 0.10)
@@ -127,6 +129,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --retry-sleep-sec)
       COMPARE_RETRY_SLEEP_SEC="$2"
+      shift 2
+      ;;
+    --min-selected-rate)
+      COMPARE_MIN_SELECTED_RATE="$2"
       shift 2
       ;;
     --cases-file)
@@ -247,6 +253,10 @@ if ! [[ "$COMPARE_CONNECT_RETRIES" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$COMPARE_RETRY_SLEEP_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "ERROR: --retry-sleep-sec must be numeric (got '$COMPARE_RETRY_SLEEP_SEC')" >&2
+  exit 2
+fi
+if ! [[ "$COMPARE_MIN_SELECTED_RATE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "ERROR: --min-selected-rate must be numeric (got '$COMPARE_MIN_SELECTED_RATE')" >&2
   exit 2
 fi
 
@@ -413,6 +423,7 @@ CMD=(
   --api-prefix "$API_PREFIX"
   --connect-retries "$COMPARE_CONNECT_RETRIES"
   --retry-sleep-sec "$COMPARE_RETRY_SLEEP_SEC"
+  --min-selected-rate "$COMPARE_MIN_SELECTED_RATE"
   --cases-file /tmp/rag_eval.yaml
   --json-out "$REPORT_PATH_CONTAINER"
   --max-source-hit-drop "$MAX_DROP"

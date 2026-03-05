@@ -57,6 +57,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--retry-sleep-sec", type=float, default=1.0, help="Sleep between retry attempts")
     parser.add_argument("--max-cases", type=int, default=0, help="Optional max number of cases (>0)")
     parser.add_argument("--max-source-hit-drop", type=float, default=-1.0, help="Fail if v4 source-hit drops by more than this absolute value (e.g. 0.1)")
+    parser.add_argument("--min-selected-rate", type=float, default=-1.0, help="Fail if any mode has selected-context rate below threshold (0..1)")
     parser.add_argument("--json-out", default="", help="Optional path to write comparison JSON")
     parser.add_argument("--print-json", action="store_true")
     return parser.parse_args()
@@ -308,6 +309,7 @@ def _summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     degraded_known = [row for row in rows if row.get("degraded_mode") is not None]
     degraded_true = sum(1 for row in degraded_known if bool(row.get("degraded_mode")))
+    selected_any = sum(1 for row in rows if int(row.get("total_selected") or 0) > 0)
 
     return {
         "cases_total": total,
@@ -316,6 +318,7 @@ def _summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "source_hit_rate": _safe_ratio(source_hit, total),
         "snippet_hit_rate": _safe_ratio(snippet_hits, snippet_total),
         "degraded_mode_rate": _safe_ratio(degraded_true, len(degraded_known)),
+        "selected_rate": _safe_ratio(selected_any, total),
     }
 
 
@@ -357,13 +360,15 @@ def _print_summary(report: Dict[str, Any]) -> None:
         "[SUMMARY] "
         f"legacy source_hit={legacy.get('source_hit_rate', 0.0):.3f} "
         f"non_empty={legacy.get('non_empty_rate', 0.0):.3f} "
-        f"snippet={legacy.get('snippet_hit_rate', 0.0):.3f}"
+        f"snippet={legacy.get('snippet_hit_rate', 0.0):.3f} "
+        f"selected={legacy.get('selected_rate', 0.0):.3f}"
     )
     print(
         "[SUMMARY] "
         f"v4     source_hit={v4.get('source_hit_rate', 0.0):.3f} "
         f"non_empty={v4.get('non_empty_rate', 0.0):.3f} "
-        f"snippet={v4.get('snippet_hit_rate', 0.0):.3f}"
+        f"snippet={v4.get('snippet_hit_rate', 0.0):.3f} "
+        f"selected={v4.get('selected_rate', 0.0):.3f}"
     )
     print(
         "[DELTA] "
@@ -452,6 +457,19 @@ def main() -> int:
             f"delta={delta.get('source_hit_rate'):.3f}, max_drop={max_drop:.3f}"
         )
         return 1
+
+    min_selected_rate = float(args.min_selected_rate)
+    if min_selected_rate >= 0:
+        legacy_selected_rate = float(legacy_summary.get("selected_rate", 0.0))
+        v4_selected_rate = float(v4_summary.get("selected_rate", 0.0))
+        if legacy_selected_rate < min_selected_rate or v4_selected_rate < min_selected_rate:
+            print(
+                "[FAIL] selected-rate below threshold: "
+                f"legacy={legacy_selected_rate:.3f}, "
+                f"v4={v4_selected_rate:.3f}, "
+                f"min_selected_rate={min_selected_rate:.3f}"
+            )
+            return 1
 
     return 0
 

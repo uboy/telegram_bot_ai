@@ -197,3 +197,5 @@ bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --ma
 ```bash
 bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --connect-retries 180 --retry-sleep-sec 1.5 --max-source-hit-drop 0.10
 ```
+
+По умолчанию wrapper также валит прогон, если доля кейсов с выбранным retrieval-контекстом слишком низкая (`--min-selected-rate 0.01`), чтобы исключить ложный "зеленый" прогон при пустых ответах.
