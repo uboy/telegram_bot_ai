@@ -54,6 +54,19 @@ python scripts/start_stack.py --dry-run
 - Ingestion jobs: `GET /api/v1/jobs/{job_id}`
 - ASR jobs: `GET /api/v1/asr/jobs/{job_id}`
 - Analytics digest status: `GET /api/v1/analytics/digests/{digest_id}`
+- RAG diagnostics: `GET /api/v1/rag/diagnostics/{request_id}`
+
+## RAG Backend Mode
+
+- Production default: `RAG_BACKEND=qdrant` (external dense retrieval + local lexical channel).
+- Rollback mode: `RAG_BACKEND=legacy` (in-process FAISS/BM25 path).
+- Qdrant connection knobs:
+  - `QDRANT_URL`
+  - `QDRANT_API_KEY` (optional)
+  - `QDRANT_COLLECTION`
+  - `QDRANT_TIMEOUT_SEC`
+
+After changing any RAG backend env vars, restart `backend` and `bot` services.
 
 ## Container Runtime Notes
 
@@ -79,6 +92,11 @@ python scripts/start_stack.py --dry-run
   - poll `/jobs/{job_id}` and inspect `error`
   - validate file/path/url input and external connectivity
 
+- RAG quality regression:
+  - capture `request_id` from `/api/v1/rag/query` response
+  - inspect `/api/v1/rag/diagnostics/{request_id}` for candidate trace
+  - if Qdrant errors spike, switch `RAG_BACKEND=legacy` and restart services
+
 - Analytics failures:
   - inspect digest/import status endpoints
   - check scheduler and DB availability
@@ -88,3 +106,4 @@ python scripts/start_stack.py --dry-run
 - Revert to previous image/tag.
 - Disable affected menu path in bot callbacks if needed.
 - Keep DB schema backward-compatible for v1 rollback.
+- For retrieval stack rollback, set `RAG_BACKEND=legacy` and restart backend/bot.

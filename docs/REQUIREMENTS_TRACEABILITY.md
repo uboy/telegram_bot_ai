@@ -33,6 +33,8 @@ Source: `SPEC.md` acceptance criteria.
 | AC-27 | KB-search handles multiple user questions in FIFO order and replies under source user messages | `frontend/bot_handlers.py`, `frontend/bot_callbacks.py` | `tests/test_bot_text_ai_mode.py` (`test_process_kb_query_queue_preserves_order`, `test_enqueue_pending_queries_for_kb_flushes_fifo`) | PASS |
 | AC-28 | Long KB-search requests show temporary progress indicator and delete it after completion | `frontend/bot_handlers.py` | `tests/test_bot_text_ai_mode.py` (`test_run_rag_query_with_progress_shows_and_deletes`) | PASS |
 | AC-29 | Backend RAG endpoint has CLI smoke runner for fast API sanity check | `scripts/rag_api_smoke_test.py` | `.venv\Scripts\python.exe scripts/rag_api_smoke_test.py --help` | PASS |
+| AC-30 | RAG query returns `request_id` and backend exposes retrieval diagnostics by `request_id` | `backend/api/routes/rag.py`, `backend/schemas/rag.py`, `shared/database.py` (`retrieval_query_logs`, `retrieval_candidate_logs`) | `tests/test_rag_diagnostics.py` | PASS |
+| AC-31 | Production RAG dense retrieval supports external Qdrant backend with rollback switch to legacy mode | `shared/rag_system.py`, `shared/qdrant_backend.py`, `shared/config.py`, `env.template`, `docker-compose.yml` | `tests/test_qdrant_backend.py`, `python -m py_compile shared/rag_system.py shared/qdrant_backend.py shared/config.py` | PASS |
 
 ## Gaps to close
 

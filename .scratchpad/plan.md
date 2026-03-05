@@ -198,3 +198,37 @@ Status: Draft for CC approval (design-first)
   - Mitigation: bounded summary format + keep last turns verbatim.
 - Risk: progress message orphaning on exceptions.
   - Mitigation: `try/finally` cleanup and delete best-effort.
+
+## Plan: RAG Max Quality Architecture (v3)
+
+Date: 2026-03-04
+Status: Implementation iteration completed (qdrant + diagnostics), further benchmark/reindex phase pending
+
+### Phase 1: Research + Architecture
+- [x] Audit current retrieval/ingestion/quality pipeline and constraints.
+- [x] Define target quality bar (retrieval accuracy + answer faithfulness + latency).
+- [x] Produce architecture spec with data model, interfaces, rollout, rollback.
+- [x] Wait for user approval on design (`APPROVED:v1`) before implementation.
+
+### Phase 2: Implementation Decomposition (post-approval)
+- [ ] Implement canonical chunk metadata normalization across loaders.
+- [x] Implement retrieval orchestrator v3 (candidate channels + calibrated fusion).
+- [x] Add retrieval decision logging and diagnostics endpoint.
+- [ ] Add quality benchmark/eval harness for multi-intent and multi-format sets.
+- [x] Deploy and integrate external hybrid retrieval backend as production target.
+- [ ] Execute full reindex and production cutover to new stack.
+
+### Verification Checklist
+- [x] Unit tests for query classification, fusion, rerank, context packing.
+- [x] Integration tests for `/api/v1/rag/query` on factoid/definition/howto/legal cases.
+- [x] Regression tests for Telegram KB queue/progress behavior.
+- [ ] Benchmarks with target thresholds (Recall@10, MRR@10, faithfulness pass rate, p95 latency).
+- [ ] Validate rollback toggle in staging and production runbook.
+- [x] `py_compile`, focused `pytest`, `scan_secrets`, `ci_policy_gate`.
+
+### Documentation Checklist
+- [x] Create design spec `docs/design/rag-max-quality-architecture-v1.md`.
+- [x] Update `SPEC.md` after implementation deltas are finalized.
+- [x] Update `docs/REQUIREMENTS_TRACEABILITY.md` with new AC mappings.
+- [x] Update `docs/USAGE.md` and `docs/OPERATIONS.md` for new knobs/diagnostics.
+- [x] Produce review report artifact for implementation cycle.

@@ -27,3 +27,7 @@
 {"id":"RAGSTACK-002","title":"Implement RAG stack v2 retrieval and frontend KB-query UX queue/progress with clean chat behavior","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
 {"id":"RAGSTACK-003","title":"Add regression tests and API smoke script for backend RAG quality and bot KB query queue/progress","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
 {"id":"RAGSTACK-004","title":"Update SPEC/design/traceability/usage and produce review report for full RAG stack migration","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}
+{"id":"RAGMAX-001","title":"Research and design max-quality RAG architecture v1 with measurable quality gates and phased rollout","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-04"}
+{"id":"RAGMAX-002","title":"Implement approved max-quality architecture phases (retrieval orchestrator, metadata normalization, diagnostics)","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
+{"id":"RAGMAX-003","title":"Run quality benchmark suite and regression verification for max-quality RAG rollout","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
+{"id":"RAGMAX-004","title":"Update spec/traceability/usage/operations docs and produce review artifacts for max-quality cycle","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}

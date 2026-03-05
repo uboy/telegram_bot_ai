@@ -24,6 +24,7 @@ class RAGSource(BaseModel):
 class RAGAnswer(BaseModel):
     answer: str
     sources: List[RAGSource] = []
+    request_id: Optional[str] = None
     debug_chunks: Optional[List[Dict]] = None  # Для debug mode: первые N чанков с метаданными
 
 
@@ -39,5 +40,30 @@ class RAGSummaryQuery(BaseModel):
 class RAGSummaryAnswer(BaseModel):
     answer: str
     sources: List[RAGSource] = []
+
+
+class RAGDiagnosticsCandidate(BaseModel):
+    rank: int
+    source_path: str
+    source_type: str
+    distance: Optional[str] = None
+    rerank_score: Optional[str] = None
+    origin: Optional[str] = None
+    metadata: Optional[Dict] = None
+    content_preview: Optional[str] = None
+
+
+class RAGDiagnosticsResponse(BaseModel):
+    request_id: str
+    query: str
+    knowledge_base_id: Optional[int] = None
+    intent: Optional[str] = None
+    backend_name: Optional[str] = None
+    total_candidates: int = 0
+    total_selected: int = 0
+    latency_ms: int = 0
+    hints: Optional[Dict] = None
+    filters: Optional[Dict] = None
+    candidates: List[RAGDiagnosticsCandidate] = []
 
 

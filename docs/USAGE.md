@@ -107,3 +107,18 @@ python scripts/start_stack.py
 ```bash
 .venv\Scripts\python.exe scripts/rag_api_smoke_test.py --cases-file tests/rag_api_cases.json --fail-on-empty
 ```
+
+## Диагностика retrieval по `request_id`
+
+1. Выполните запрос в KB-режиме или вызовите `/api/v1/rag/query`.
+2. Возьмите `request_id` из ответа.
+3. Запросите детализацию retrieval:
+
+```bash
+curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/diagnostics/<request_id>
+```
+
+В ответе будут:
+- intent/hints/filters запроса,
+- количество кандидатов и выбранных фрагментов,
+- latency и top-кандидаты с метаданными.

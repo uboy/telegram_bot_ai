@@ -349,6 +349,49 @@ class AIRequestMetric(Base):
         Index('ix_ai_metrics_status_time', 'status', 'created_at'),
     )
 
+
+class RetrievalQueryLog(Base):
+    """Лог RAG-запросов для диагностики retrieval pipeline."""
+    __tablename__ = 'retrieval_query_logs'
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(String(64), nullable=False, unique=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'), nullable=True, index=True)
+    query = Column(Text, nullable=False)
+    intent = Column(String(32), nullable=True)
+    hints_json = Column(Text, nullable=True)
+    filters_json = Column(Text, nullable=True)
+    total_candidates = Column(Integer, default=0, nullable=False)
+    total_selected = Column(Integer, default=0, nullable=False)
+    latency_ms = Column(Integer, default=0, nullable=False)
+    backend_name = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_retrieval_query_kb_created', 'knowledge_base_id', 'created_at'),
+    )
+
+
+class RetrievalCandidateLog(Base):
+    """Топ кандидатов retrieval для одного запроса."""
+    __tablename__ = 'retrieval_candidate_logs'
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(String(64), ForeignKey('retrieval_query_logs.request_id'), nullable=False, index=True)
+    rank = Column(Integer, nullable=False)
+    source_path = Column(String(500), nullable=True)
+    source_type = Column(String(50), nullable=True)
+    distance = Column(String(32), nullable=True)
+    rerank_score = Column(String(32), nullable=True)
+    origin = Column(String(32), nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    content_preview = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index('ix_retrieval_candidate_request_rank', 'request_id', 'rank'),
+    )
+
 # Определить, какую базу данных использовать
 # Приоритет: MYSQL_URL > DB_PATH > SQLite по умолчанию
 db_url = None

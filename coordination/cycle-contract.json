@@ -1,23 +1,21 @@
 {
-  "task_id": "RAGSTACK-004",
+  "task_id": "RAGMAX-004",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile backend/api/routes/rag.py frontend/bot_handlers.py frontend/bot_callbacks.py shared/utils.py scripts/rag_api_smoke_test.py tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py",
-    ".venv\\Scripts\\python.exe scripts/rag_api_smoke_test.py --help",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
     ".scratchpad/research.md",
     ".scratchpad/plan.md",
-    "docs/design/rag-stack-v2-migration-v1.md",
-    "coordination/reviews/rag-stack-v2-migration-2026-03-04.md"
+    "docs/design/rag-max-quality-architecture-v1.md",
+    "coordination/reviews/rag-max-quality-qdrant-diagnostics-2026-03-04.md",
+    "coordination/state/codex.md"
   ],
   "size_limits": {
-    "max_files_changed": 30,
-    "max_lines_added": 900,
-    "max_lines_deleted": 260
+    "max_files_changed": 24,
+    "max_lines_added": 1400,
+    "max_lines_deleted": 400
   }
 }

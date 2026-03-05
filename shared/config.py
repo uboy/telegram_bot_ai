@@ -86,6 +86,21 @@ RAG_ENABLE_CITATIONS = os.getenv("RAG_ENABLE_CITATIONS", "true").lower() == "tru
 RAG_MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.15"))  # Порог уверенности для ответа (если есть reranker)
 RAG_DEBUG_RETURN_CHUNKS = os.getenv("RAG_DEBUG_RETURN_CHUNKS", "false").lower() == "true"  # Возвращать debug информацию о чанках
 
+# RAG v3 backend switch
+# legacy -> in-process FAISS/BM25
+# qdrant -> dense retrieval via external Qdrant + local lexical channel
+RAG_BACKEND = os.getenv("RAG_BACKEND", "legacy").strip().lower()
+if RAG_BACKEND not in {"legacy", "qdrant"}:
+    RAG_BACKEND = "legacy"
+
+QDRANT_URL = os.getenv("QDRANT_URL", "").strip().rstrip("/")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks_v3").strip()
+try:
+    QDRANT_TIMEOUT_SEC = float(os.getenv("QDRANT_TIMEOUT_SEC", "10"))
+except ValueError:
+    QDRANT_TIMEOUT_SEC = 10.0
+
 # n8n Integration
 # Если N8N_BASE_URL не установлен или пустой, считаем что n8n отключен
 N8N_BASE_URL_RAW = os.getenv("N8N_BASE_URL", "").strip()

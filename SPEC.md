@@ -12,7 +12,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Telegram bot UI (menus, commands, upload flows).
 - Backend API for auth, knowledge bases, ingestion, and RAG query.
 - Document ingestion: files (Markdown, PDF, Word, Excel, text), images, web pages, and wiki via crawl/git/zip.
-- RAG pipeline: chunking, embeddings, FAISS index, optional reranking, keyword fallback.
+- RAG pipeline: chunking, embeddings, external Qdrant dense index + lexical BM25 channel, optional reranking, keyword fallback.
 - Inline citations and source listing in responses.
 - User/admin roles and approval flow.
 - AI provider selection and routing (Ollama, OpenAI, Anthropic, DeepSeek, Open WebUI via OpenAI-compatible endpoint).
@@ -21,7 +21,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 
 ## Out-of-scope
 - Full web UI beyond Telegram.
-- External MCP-compatible vector stores (only local FAISS + SQL).
+- Additional vector stores beyond configured Qdrant backend.
 - Enterprise SSO or complex IAM.
 - Automatic migration of data between SQLite and MySQL.
 - Advanced analytics dashboards (beyond logs and n8n hooks).
@@ -51,11 +51,13 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Auth by telegram_id and API key (`X-API-Key`).
   - CRUD for users and knowledge bases.
   - Ingestion endpoints for documents, images, web pages, wiki (crawl/git/zip).
-  - RAG query endpoint returning answer + sources + metadata.
+  - RAG query endpoint returning answer + sources + metadata + `request_id`.
+  - RAG diagnostics endpoint for retrieval trace by `request_id`.
   - Job status endpoint for ingestion progress (where implemented).
 - RAG pipeline:
   - Chunking with configurable size/overlap and Markdown-aware splitting.
-  - Embeddings with sentence-transformers; FAISS for vector search.
+  - Embeddings with sentence-transformers; Qdrant for dense retrieval in production mode (`RAG_BACKEND=qdrant`).
+  - Legacy in-process FAISS path remains available as rollback mode (`RAG_BACKEND=legacy`).
   - Optional reranker with top-N candidates and top-k final results.
   - Fallback keyword search if embeddings unavailable.
   - Context assembly with `SOURCE_ID` tags for inline citations.
@@ -120,6 +122,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - RAG definition-style questions prefer glossary/definition fragments over generic policy mentions when both are present.
 - RAG questions with "пункт N" return the corresponding clause context when it exists in indexed chunks (including numeric markers like `25.`/`26.`).
 - RAG factoid/legal questions (including year/metric queries) return clause-level context when corresponding chunks exist in KB.
+- RAG query response includes `request_id`, and retrieval diagnostics are available via `GET /api/v1/rag/diagnostics/{request_id}`.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**

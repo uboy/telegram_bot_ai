@@ -137,6 +137,63 @@ Agent: codex (team-lead-orchestrator / architect phase)
 - “Full stack replacement” with new vector DB (Qdrant/Weaviate) would require infra/dependency migration, data migration path, and rollout safety controls; high risk for one-step change.
 - Chosen v2 path maximizes quality improvement now while preserving ingestion compatibility and minimizing deployment risk.
 
+## Research: Max Quality RAG Architecture (v3)
+
+Date: 2026-03-04
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User Request
+- "Сделать максимальное качество" ответов и поиска.
+- Выполнить полный процесс: исследование, архитектурный дизайн, декомпозиция, затем реализация/ревью/тесты.
+
+### Current Baseline (after v2)
+- Retrieval:
+  - Dense embeddings + FAISS cosine search.
+  - BM25 in-memory channel + RRF fusion.
+  - Cross-encoder reranker.
+  - Route-level intent strategy (`DEFINITION`, `FACTOID`, `HOWTO`, etc.).
+- Ingestion:
+  - broad source coverage: pdf/doc/docx/xls/xlsx/md/txt/json/chat/zip/web/wiki/code/image.
+- UX:
+  - queue + progress for KB search already implemented.
+
+### Quality Gaps That Still Limit "Maximum Quality"
+1. Parser fidelity:
+  - PDF extraction via basic `PyPDF2` can lose table/layout semantics.
+  - DOCX loader captures paragraphs/headings, but weak table/list structure retention.
+2. Metadata richness:
+  - Chunk metadata is heterogeneous across source types.
+  - Missing stable, query-useful fields (normalized headings, offsets, parser confidence, chunk hash).
+3. Retrieval robustness:
+  - Strong heuristics exist but remain lexical/hand-tuned per intent.
+  - No offline calibrated retrieval score pipeline (nDCG/MRR/Recall@K target tracking per query class).
+4. Evaluation maturity:
+  - Current quality tests are limited and domain-narrow.
+  - No regression gates for mixed query intents across multiple corpora/format types.
+5. Explainability:
+  - No persistent retrieval decision logs for post-mortem tuning of missed answers.
+
+### Architectural Direction (v3)
+- Keep compatibility with current API/UX.
+- Introduce modular retrieval pipeline with explicit stages and score tracing:
+  - query understanding,
+  - candidate generation (dense + sparse + lexical + metadata filters),
+  - calibrated fusion,
+  - rerank + context packing policy,
+  - answer generation + citation enforcement.
+- Strengthen ingestion with canonical document model and structure-preserving parsers.
+- Add quality harness with reproducible eval datasets and CI pass/fail thresholds.
+- Updated by user change request:
+  - full stack replacement is mandatory in this cycle,
+  - external hybrid backend becomes target production path (not optional),
+  - legacy stack retained only as rollback window.
+
+### Constraints
+- No dependency changes without explicit approval.
+- Must preserve existing source-type ingestion behavior.
+- Must keep Telegram UX clean (temporary progress, ordered replies).
+- Must maintain API-key and secrets policy.
+
 # Research: AI Mode v2 (Telemetry + Context Memory + Progress UX)
 
 Date: 2026-03-01

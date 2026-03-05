@@ -3,13 +3,23 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from uuid import uuid4
+from time import perf_counter
 import json
 import logging
 import os
 import re
 
 from backend.api.deps import get_db_dep, require_api_key
-from backend.schemas.rag import RAGQuery, RAGAnswer, RAGSource, RAGSummaryQuery, RAGSummaryAnswer
+from backend.schemas.rag import (
+    RAGQuery,
+    RAGAnswer,
+    RAGSource,
+    RAGSummaryQuery,
+    RAGSummaryAnswer,
+    RAGDiagnosticsResponse,
+    RAGDiagnosticsCandidate,
+)
 
 # Используем существующую RAG-систему и AI-менеджер из основного проекта.
 from shared.rag_system import rag_system  # type: ignore
@@ -21,11 +31,107 @@ from shared.rag_safety import (  # type: ignore
     sanitize_commands_in_answer,
 )
 from shared.logging_config import logger  # type: ignore
-from shared.database import KnowledgeBase, KnowledgeChunk  # type: ignore
+from shared.database import (
+    KnowledgeBase,
+    KnowledgeChunk,
+    RetrievalQueryLog,
+    RetrievalCandidateLog,
+)  # type: ignore
 from shared.kb_settings import normalize_kb_settings  # type: ignore
 
 
 router = APIRouter(prefix="/rag", tags=["rag"])
+
+
+def _safe_json_dumps(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return None
+
+
+def _safe_json_loads(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not value:
+        return None
+    try:
+        obj = json.loads(value)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _metric_to_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return f"{float(value):.6f}"
+    except Exception:
+        text = str(value).strip()
+        return text[:32] if text else None
+
+
+def _persist_retrieval_logs(
+    *,
+    db: Session,
+    request_id: str,
+    query: str,
+    knowledge_base_id: Optional[int],
+    intent: Optional[str],
+    hints: Optional[Dict[str, Any]],
+    filters: Optional[Dict[str, Any]],
+    total_candidates: int,
+    total_selected: int,
+    latency_ms: int,
+    backend_name: Optional[str],
+    candidates: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    # Test doubles may pass lightweight DB stubs without persistence APIs.
+    if not hasattr(db, "add") or not hasattr(db, "commit"):
+        return
+    try:
+        db.add(
+            RetrievalQueryLog(
+                request_id=request_id,
+                knowledge_base_id=knowledge_base_id,
+                query=query or "",
+                intent=(intent or "")[:32] or None,
+                hints_json=_safe_json_dumps(hints),
+                filters_json=_safe_json_dumps(filters),
+                total_candidates=max(0, int(total_candidates or 0)),
+                total_selected=max(0, int(total_selected or 0)),
+                latency_ms=max(0, int(latency_ms or 0)),
+                backend_name=(backend_name or "")[:32] or None,
+            )
+        )
+        for rank, candidate in enumerate((candidates or [])[:20], start=1):
+            metadata_obj = candidate.get("metadata") if isinstance(candidate, dict) else {}
+            metadata_json = _safe_json_dumps(metadata_obj if isinstance(metadata_obj, dict) else {})
+            content_preview = ""
+            if isinstance(candidate, dict):
+                content_preview = (candidate.get("content") or "")[:1200]
+            db.add(
+                RetrievalCandidateLog(
+                    request_id=request_id,
+                    rank=rank,
+                    source_path=((candidate.get("source_path") or "")[:500] if isinstance(candidate, dict) else ""),
+                    source_type=((candidate.get("source_type") or "")[:50] if isinstance(candidate, dict) else ""),
+                    distance=_metric_to_str(candidate.get("distance") if isinstance(candidate, dict) else None),
+                    rerank_score=_metric_to_str(candidate.get("rerank_score") if isinstance(candidate, dict) else None),
+                    origin=((candidate.get("origin") or "")[:32] if isinstance(candidate, dict) else ""),
+                    metadata_json=metadata_json,
+                    content_preview=content_preview,
+                )
+            )
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            if hasattr(db, "rollback"):
+                db.rollback()
+        except Exception:
+            pass
+        logger.warning("Failed to persist retrieval logs request_id=%s: %s", request_id, exc)
 
 
 @router.post(
@@ -39,6 +145,14 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         raise HTTPException(status_code=400, detail="query is required")
 
     kb_id = payload.knowledge_base_id
+    request_id = uuid4().hex
+    t0 = perf_counter()
+    backend_name = getattr(rag_system, "retrieval_backend", "legacy")
+    intent: Optional[str] = None
+    query_hints: Dict[str, Any] = {}
+    filters_payload: Dict[str, Any] = {}
+    results: List[dict] = []
+    filtered_results: List[dict] = []
 
     try:
         # Настройки RAG
@@ -99,6 +213,13 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         source_types = [s.lower() for s in (payload.source_types or [])]
         languages = [s.lower() for s in (payload.languages or [])]
         path_prefixes = [p.lower() for p in (payload.path_prefixes or [])]
+        filters_payload = {
+            "source_types": source_types,
+            "languages": languages,
+            "path_prefixes": path_prefixes,
+            "date_from": payload.date_from,
+            "date_to": payload.date_to,
+        }
 
         def _passes_filters(item: dict) -> bool:
             if source_types:
@@ -703,7 +824,21 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     logger.debug("RAG keyword fallback added %d chunks (intent=%s, hints=%s)", added, intent, query_hints)
 
         if not results:
-            return RAGAnswer(answer="", sources=[])
+            _persist_retrieval_logs(
+                db=db,
+                request_id=request_id,
+                query=payload.query,
+                knowledge_base_id=kb_id,
+                intent=intent,
+                hints=query_hints,
+                filters=filters_payload,
+                total_candidates=0,
+                total_selected=0,
+                latency_ms=int((perf_counter() - t0) * 1000),
+                backend_name=backend_name,
+                candidates=[],
+            )
+            return RAGAnswer(answer="", sources=[], request_id=request_id)
 
         # Анти-галлюцинации: если есть reranker и все score ниже порога – считаем, что ответа нет
         rerank_scores = []
@@ -716,7 +851,21 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 continue
         if min_rerank_score > 0.0 and rerank_scores and max(rerank_scores) < min_rerank_score:
             logger.debug("Best rerank score %f below threshold %f", max(rerank_scores), min_rerank_score)
-            return RAGAnswer(answer="", sources=[])
+            _persist_retrieval_logs(
+                db=db,
+                request_id=request_id,
+                query=payload.query,
+                knowledge_base_id=kb_id,
+                intent=intent,
+                hints=query_hints,
+                filters=filters_payload,
+                total_candidates=len(results),
+                total_selected=0,
+                latency_ms=int((perf_counter() - t0) * 1000),
+                backend_name=backend_name,
+                candidates=results,
+            )
+            return RAGAnswer(answer="", sources=[], request_id=request_id)
 
         ranked_results: List[dict] = []
         for r in results:
@@ -760,7 +909,21 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         if not context_parts:
             logger.warning("No valid context parts extracted from results")
-            return RAGAnswer(answer="", sources=[])
+            _persist_retrieval_logs(
+                db=db,
+                request_id=request_id,
+                query=payload.query,
+                knowledge_base_id=kb_id,
+                intent=intent,
+                hints=query_hints,
+                filters=filters_payload,
+                total_candidates=len(results),
+                total_selected=len(filtered_results),
+                latency_ms=int((perf_counter() - t0) * 1000),
+                backend_name=backend_name,
+                candidates=filtered_results,
+            )
+            return RAGAnswer(answer="", sources=[], request_id=request_id)
 
         context_text = "\n\n".join(context_parts)
         if logger.isEnabledFor(logging.DEBUG):
@@ -841,7 +1004,21 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     logger.warning("Error creating debug chunk: %s", e, exc_info=True)
                     continue
 
-        return RAGAnswer(answer=ai_answer, sources=sources, debug_chunks=debug_chunks)
+        _persist_retrieval_logs(
+            db=db,
+            request_id=request_id,
+            query=payload.query,
+            knowledge_base_id=kb_id,
+            intent=intent,
+            hints=query_hints,
+            filters=filters_payload,
+            total_candidates=len(results),
+            total_selected=len(filtered_results),
+            latency_ms=int((perf_counter() - t0) * 1000),
+            backend_name=backend_name,
+            candidates=filtered_results,
+        )
+        return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id, debug_chunks=debug_chunks)
 
     except HTTPException:
         raise
@@ -853,7 +1030,69 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             e,
             exc_info=True,
         )
-        return RAGAnswer(answer="", sources=[])
+        _persist_retrieval_logs(
+            db=db,
+            request_id=request_id,
+            query=payload.query,
+            knowledge_base_id=kb_id,
+            intent=intent,
+            hints=query_hints,
+            filters=filters_payload,
+            total_candidates=len(results),
+            total_selected=len(filtered_results),
+            latency_ms=int((perf_counter() - t0) * 1000),
+            backend_name=backend_name,
+            candidates=filtered_results or results,
+        )
+        return RAGAnswer(answer="", sources=[], request_id=request_id)
+
+@router.get(
+    "/diagnostics/{request_id}",
+    response_model=RAGDiagnosticsResponse,
+    summary="Диагностика retrieval по request_id",
+    dependencies=[Depends(require_api_key)],
+)
+def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDiagnosticsResponse:
+    query_log = db.query(RetrievalQueryLog).filter_by(request_id=request_id).first()
+    if not query_log:
+        raise HTTPException(status_code=404, detail="request_id not found")
+
+    candidate_rows = (
+        db.query(RetrievalCandidateLog)
+        .filter_by(request_id=request_id)
+        .order_by(RetrievalCandidateLog.rank.asc())
+        .all()
+    )
+    candidates: List[RAGDiagnosticsCandidate] = []
+    for row in candidate_rows:
+        meta_obj = _safe_json_loads(getattr(row, "metadata_json", None))
+        candidates.append(
+            RAGDiagnosticsCandidate(
+                rank=int(getattr(row, "rank", 0) or 0),
+                source_path=getattr(row, "source_path", "") or "",
+                source_type=getattr(row, "source_type", "") or "",
+                distance=getattr(row, "distance", None),
+                rerank_score=getattr(row, "rerank_score", None),
+                origin=getattr(row, "origin", None),
+                metadata=meta_obj,
+                content_preview=getattr(row, "content_preview", None),
+            )
+        )
+
+    return RAGDiagnosticsResponse(
+        request_id=query_log.request_id,
+        query=query_log.query or "",
+        knowledge_base_id=query_log.knowledge_base_id,
+        intent=query_log.intent,
+        backend_name=query_log.backend_name,
+        total_candidates=int(query_log.total_candidates or 0),
+        total_selected=int(query_log.total_selected or 0),
+        latency_ms=int(query_log.latency_ms or 0),
+        hints=_safe_json_loads(query_log.hints_json),
+        filters=_safe_json_loads(query_log.filters_json),
+        candidates=candidates,
+    )
+
 
 @router.post(
     "/summary",

@@ -5,12 +5,13 @@ import os
 import json
 import logging
 import threading
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 from collections import defaultdict
 import numpy as np
 from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog, engine, get_session
 from sqlalchemy import text, or_
+from shared.qdrant_backend import QdrantBackend
 try:
     from shared.rag_pipeline.embedder import embed_texts as pipeline_embed_texts
 except Exception:
@@ -78,6 +79,43 @@ class RAGSystem:
             self.max_candidates = RAG_MAX_CANDIDATES
         except ImportError:
             self.max_candidates = int(os.getenv("RAG_MAX_CANDIDATES", "100"))
+
+        # Retrieval backend switch (v3)
+        self.retrieval_backend = "legacy"
+        self.qdrant_backend: Optional[QdrantBackend] = None
+        self._qdrant_bootstrap_done = False
+        try:
+            from shared.config import (
+                RAG_BACKEND,
+                QDRANT_URL,
+                QDRANT_API_KEY,
+                QDRANT_COLLECTION,
+                QDRANT_TIMEOUT_SEC,
+            )
+            self.retrieval_backend = (RAG_BACKEND or "legacy").strip().lower()
+            if self.retrieval_backend == "qdrant":
+                self.qdrant_backend = QdrantBackend(
+                    url=QDRANT_URL,
+                    api_key=QDRANT_API_KEY,
+                    collection=QDRANT_COLLECTION,
+                    timeout_sec=QDRANT_TIMEOUT_SEC,
+                )
+        except Exception:
+            self.retrieval_backend = os.getenv("RAG_BACKEND", "legacy").strip().lower() or "legacy"
+            if self.retrieval_backend == "qdrant":
+                self.qdrant_backend = QdrantBackend(
+                    url=os.getenv("QDRANT_URL", ""),
+                    api_key=os.getenv("QDRANT_API_KEY", ""),
+                    collection=os.getenv("QDRANT_COLLECTION", "rag_chunks_v3"),
+                    timeout_sec=float(os.getenv("QDRANT_TIMEOUT_SEC", "10")),
+                )
+        if self.retrieval_backend == "qdrant":
+            if self.qdrant_backend and self.qdrant_backend.enabled:
+                logger.info("✅ RAG backend selected: qdrant")
+            else:
+                logger.warning("⚠️ RAG_BACKEND=qdrant, but Qdrant is not configured. Falling back to legacy backend.")
+                self.retrieval_backend = "legacy"
+                self.qdrant_backend = None
         
         # Проверить, нужно ли загружать модель
         try:
@@ -380,6 +418,111 @@ class RAGSystem:
         except Exception as e:
             logger.error(f"Ошибка создания эмбеддинга: {e}")
             return None
+
+    def _qdrant_enabled(self) -> bool:
+        return self.retrieval_backend == "qdrant" and self.qdrant_backend is not None and self.qdrant_backend.enabled
+
+    def _qdrant_point_from_chunk(self, chunk: KnowledgeChunk) -> Optional[Dict[str, Any]]:
+        if not chunk.embedding:
+            return None
+        try:
+            vector_raw = json.loads(chunk.embedding)
+            vector = np.array(vector_raw, dtype="float32")
+            if vector.ndim != 1 or vector.size == 0:
+                return None
+            if self.qdrant_backend:
+                self.qdrant_backend.ensure_collection(int(vector.shape[0]))
+            payload = {
+                "kb_id": int(chunk.knowledge_base_id),
+                "chunk_id": int(chunk.id),
+                "source_type": chunk.source_type or "",
+                "source_path": chunk.source_path or "",
+                "content": chunk.content or "",
+                "chunk_metadata": chunk.chunk_metadata or "{}",
+            }
+            return {
+                "id": int(chunk.id),
+                "vector": vector.tolist(),
+                "payload": payload,
+            }
+        except Exception as e:
+            logger.debug("Failed to prepare qdrant point for chunk %s: %s", getattr(chunk, "id", None), e)
+            return None
+
+    def _qdrant_upsert_chunks(self, chunks: List[KnowledgeChunk]) -> int:
+        if not self._qdrant_enabled() or not chunks:
+            return 0
+        points: List[Dict[str, Any]] = []
+        for chunk in chunks:
+            point = self._qdrant_point_from_chunk(chunk)
+            if point:
+                points.append(point)
+        if not points:
+            return 0
+        total = 0
+        batch_size = 128
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i + batch_size]
+            try:
+                total += self.qdrant_backend.upsert_points(batch)
+            except Exception as e:
+                logger.warning("Qdrant upsert batch failed: %s", e)
+        return total
+
+    def _qdrant_bootstrap(self, knowledge_base_id: Optional[int] = None) -> None:
+        if not self._qdrant_enabled():
+            return
+        if self._qdrant_bootstrap_done and knowledge_base_id is None:
+            return
+        try:
+            with get_session() as session:
+                query = session.query(KnowledgeChunk).filter_by(is_deleted=False)
+                if knowledge_base_id is not None:
+                    query = query.filter_by(knowledge_base_id=knowledge_base_id)
+                chunks = query.all()
+            synced = self._qdrant_upsert_chunks(chunks)
+            if knowledge_base_id is None:
+                self._qdrant_bootstrap_done = True
+            logger.info("Qdrant bootstrap sync completed: kb_id=%s synced=%s", knowledge_base_id, synced)
+        except Exception as e:
+            logger.warning("Qdrant bootstrap sync failed: %s", e)
+
+    def _qdrant_dense_search(self, query_embedding: np.ndarray, knowledge_base_id: int, top_k: int) -> List[Dict[str, Any]]:
+        if not self._qdrant_enabled():
+            return []
+        try:
+            self._qdrant_bootstrap(knowledge_base_id)
+            rows = self.qdrant_backend.search(
+                vector=query_embedding.astype("float32").tolist(),
+                limit=max(1, int(top_k)),
+                kb_id=int(knowledge_base_id),
+            )
+            out: List[Dict[str, Any]] = []
+            for row in rows:
+                payload = row.payload or {}
+                chunk_metadata = payload.get("chunk_metadata")
+                metadata = {}
+                if isinstance(chunk_metadata, str) and chunk_metadata:
+                    try:
+                        metadata = json.loads(chunk_metadata)
+                    except Exception:
+                        metadata = {}
+                out.append(
+                    {
+                        "content": payload.get("content", ""),
+                        "metadata": metadata,
+                        "source_type": payload.get("source_type", ""),
+                        "source_path": payload.get("source_path", ""),
+                        "distance": -float(row.score),
+                        "similarity": float(row.score),
+                        "origin": "qdrant",
+                        "chunk_id": int(payload.get("chunk_id") or row.point_id),
+                    }
+                )
+            return out
+        except Exception as e:
+            logger.warning("Qdrant dense search failed, fallback to legacy: %s", e)
+            return []
     
     def _load_index(self, knowledge_base_id: Optional[int] = None):
         """Загрузить индекс из базы данных (по KB или все)"""
@@ -408,6 +551,23 @@ class RAGSystem:
         # BM25 для всех чанков (даже без эмбеддингов)
         self.bm25_chunks_all = chunks
         self.bm25_index_all = self._build_bm25_index(chunks)
+
+        if self._qdrant_enabled():
+            all_chunks_by_kb = defaultdict(list)
+            for chunk in chunks:
+                all_chunks_by_kb[chunk.knowledge_base_id].append(chunk)
+            self.bm25_index_by_kb.clear()
+            self.bm25_chunks_by_kb.clear()
+            for kb_id, kb_chunks in all_chunks_by_kb.items():
+                self.bm25_chunks_by_kb[kb_id] = kb_chunks
+                self.bm25_index_by_kb[kb_id] = self._build_bm25_index(kb_chunks)
+
+            # Dense search handled by Qdrant; local FAISS indices are not used in qdrant mode.
+            self.index = None
+            self.chunks = []
+            self.index_by_kb.clear()
+            self.chunks_by_kb.clear()
+            return
 
         # Группировать чанки по knowledge_base_id и подсчитать coverage
         chunks_by_kb = defaultdict(list)
@@ -635,6 +795,10 @@ class RAGSystem:
                         self.chunks = []
                         self.index_by_kb.clear()
                         self.chunks_by_kb.clear()
+
+                    # Dense index sync for qdrant backend
+                    if embedding is not None and self._qdrant_enabled():
+                        self._qdrant_upsert_chunks([chunk])
                     
                     return chunk
                 except Exception as e:
@@ -797,6 +961,16 @@ class RAGSystem:
                                     break
                             else:
                                 raise
+
+            if self._qdrant_enabled() and chunks_with_embeddings:
+                try:
+                    ids = [int(chunk_id) for chunk_id, _, _ in chunks_with_embeddings if chunk_id]
+                    if ids:
+                        with get_session() as session:
+                            chunk_rows = session.query(KnowledgeChunk).filter(KnowledgeChunk.id.in_(ids)).all()
+                        self._qdrant_upsert_chunks(chunk_rows)
+                except Exception as e:
+                    logger.warning("Qdrant sync after batch insert failed: %s", e)
             
             # Исправление D: отключить инкрементальное обновление индекса после батча
             # Индекс будет пересобран по запросу через _load_index()
@@ -847,82 +1021,88 @@ class RAGSystem:
         if not HAS_EMBEDDINGS or not self.encoder:
             return self._simple_search(query, knowledge_base_id, top_k)
         
-        # Загрузить индекс если не загружен (исправление логической ошибки)
+        # Загрузить кэши поиска если не загружены
         if knowledge_base_id is not None:
-            if knowledge_base_id not in self.index_by_kb:
+            if knowledge_base_id not in self.bm25_index_by_kb or knowledge_base_id not in self.bm25_chunks_by_kb:
                 self._load_index(knowledge_base_id)
         else:
-            if not self.index_by_kb:
+            if not self.bm25_index_all or not self.bm25_chunks_all:
                 self._load_index(None)
         
         # Векторный поиск
         query_embedding = self._get_embedding(query)
         if query_embedding is None:
             return self._simple_search(query, knowledge_base_id, top_k)
-        
-        # Определить, использовать ли индекс по KB или общий
-        if knowledge_base_id is not None:
-            if knowledge_base_id not in self.index_by_kb:
-                return self._simple_search(query, knowledge_base_id, top_k)
-            index = self.index_by_kb[knowledge_base_id]
-            chunks = self.chunks_by_kb[knowledge_base_id]
-        else:
-            if self.index is None or len(self.chunks) == 0:
-                return self._simple_search(query, knowledge_base_id, top_k)
-            index = self.index
-            chunks = self.chunks
-        
-        if len(chunks) == 0:
-            return []
-        
-        # Нормализовать query embedding для cosine similarity
-        query_embedding = query_embedding.reshape(1, -1).astype('float32')
-        faiss.normalize_L2(query_embedding)
-        
+
         # Определить режим поиска (how-to или обычный)
         is_howto_query = self._is_howto_query(query)
-        
-        # Dense‑поиск: широкий пул кандидатов
-        # Для how-to запросов увеличиваем candidate_k (до 300-500 для больших баз)
+
+        bm25_chunks = self.bm25_chunks_by_kb.get(knowledge_base_id) if knowledge_base_id is not None else self.bm25_chunks_all
+        bm25_chunks = bm25_chunks or []
+        total_docs = max(1, len(bm25_chunks))
+
+        # Dense‑поиск: внешний Qdrant backend (v3) или legacy FAISS fallback
         if is_howto_query:
-            candidate_k = min(max(300, self.max_candidates * 3), len(chunks), 500)
+            candidate_k = min(max(300, self.max_candidates * 3), total_docs, 500)
         else:
-            candidate_k = min(self.max_candidates, len(chunks))
-        scores, indices = index.search(query_embedding, candidate_k)
-        
+            candidate_k = min(self.max_candidates, total_docs)
+
         dense_candidates: List[Dict] = []
-        dense_ranked: List[int] = []
-        for i, idx in enumerate(indices[0]):
-            if idx < len(chunks):
-                chunk = chunks[idx]
-                metadata = json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {}
-                similarity = float(scores[0][i])
-                if is_howto_query:
-                    chunk_kind = metadata.get("chunk_kind", "text")
-                    if chunk_kind in ("code", "code_file", "list"):
-                        similarity *= 1.5
-                    section_path = (metadata.get("section_path") or "").lower()
-                    if section_path and any(word in section_path for word in query_words):
-                        similarity *= 1.2
-                distance = -similarity
-                dense_candidates.append(
-                    {
-                        "content": chunk.content,
-                        "metadata": metadata,
-                        "source_type": chunk.source_type,
-                        "source_path": chunk.source_path,
-                        "distance": distance,
-                        "similarity": similarity,
-                        "origin": "dense",
-                        "chunk_idx": idx,
-                    }
-                )
-                dense_ranked.append(idx)
+        if self._qdrant_enabled() and knowledge_base_id is not None:
+            dense_candidates = self._qdrant_dense_search(
+                query_embedding=query_embedding,
+                knowledge_base_id=int(knowledge_base_id),
+                top_k=candidate_k,
+            )
+        else:
+            # Определить, использовать ли индекс по KB или общий
+            if knowledge_base_id is not None:
+                if knowledge_base_id not in self.index_by_kb:
+                    return self._simple_search(query, knowledge_base_id, top_k)
+                index = self.index_by_kb[knowledge_base_id]
+                chunks = self.chunks_by_kb[knowledge_base_id]
+            else:
+                if self.index is None or len(self.chunks) == 0:
+                    return self._simple_search(query, knowledge_base_id, top_k)
+                index = self.index
+                chunks = self.chunks
+
+            if len(chunks) == 0:
+                return []
+
+            # Нормализовать query embedding для cosine similarity
+            query_embedding_norm = query_embedding.reshape(1, -1).astype('float32')
+            faiss.normalize_L2(query_embedding_norm)
+            candidate_k = min(candidate_k, len(chunks))
+            scores, indices = index.search(query_embedding_norm, candidate_k)
+
+            for i, idx in enumerate(indices[0]):
+                if idx < len(chunks):
+                    chunk = chunks[idx]
+                    metadata = json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {}
+                    similarity = float(scores[0][i])
+                    if is_howto_query:
+                        chunk_kind = metadata.get("chunk_kind", "text")
+                        if chunk_kind in ("code", "code_file", "list"):
+                            similarity *= 1.5
+                        section_path = (metadata.get("section_path") or "").lower()
+                        if section_path and any(word in section_path for word in query_words):
+                            similarity *= 1.2
+                    distance = -similarity
+                    dense_candidates.append(
+                        {
+                            "content": chunk.content,
+                            "metadata": metadata,
+                            "source_type": chunk.source_type,
+                            "source_path": chunk.source_path,
+                            "distance": distance,
+                            "similarity": similarity,
+                            "origin": "dense",
+                            "chunk_idx": idx,
+                        }
+                    )
 
         # BM25 поиск как второй канал (на всех чанках)
-        bm25_chunks = self.bm25_chunks_by_kb.get(knowledge_base_id) if knowledge_base_id is not None else self.bm25_chunks_all
-        if not bm25_chunks:
-            bm25_chunks = chunks
         bm25_index = self.bm25_index_by_kb.get(knowledge_base_id) if knowledge_base_id is not None else self.bm25_index_all
         if bm25_index is None:
             bm25_index = self._build_bm25_index(bm25_chunks)
@@ -1262,6 +1442,11 @@ class RAGSystem:
             self.bm25_chunks_by_kb.clear()
             self.bm25_chunks_all = []
             self._load_index()
+            if self._qdrant_enabled():
+                try:
+                    self.qdrant_backend.delete_kb(int(knowledge_base_id))
+                except Exception as e:
+                    logger.warning("Qdrant delete_kb failed for kb=%s: %s", knowledge_base_id, e)
             return True
     
     def clear_knowledge_base(self, knowledge_base_id: int) -> bool:
@@ -1289,6 +1474,11 @@ class RAGSystem:
             self.bm25_chunks_by_kb.clear()
             self.bm25_chunks_all = []
             self._load_index()
+            if self._qdrant_enabled():
+                try:
+                    self.qdrant_backend.delete_kb(int(knowledge_base_id))
+                except Exception as e:
+                    logger.warning("Qdrant clear_kb failed for kb=%s: %s", knowledge_base_id, e)
             return True
 
     def delete_chunks_by_source_exact(
@@ -1341,6 +1531,21 @@ class RAGSystem:
                     del self.bm25_chunks_by_kb[knowledge_base_id]
                 # Пересоздать индекс для этой KB
                 self._load_index(knowledge_base_id)
+                if self._qdrant_enabled():
+                    try:
+                        self.qdrant_backend.delete_by_filter(
+                            kb_id=int(knowledge_base_id),
+                            source_type=source_type,
+                            source_path=source_path,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Qdrant delete_by_filter failed: kb_id=%s source_type=%s source_path=%s error=%s",
+                            knowledge_base_id,
+                            source_type,
+                            source_path,
+                            e,
+                        )
 
             return deleted
 
@@ -1369,8 +1574,10 @@ class RAGSystem:
                 chunks = query.all()
                 deleted = 0
 
+                deleted_source_paths = set()
                 for chunk in chunks:
                     if chunk.source_path and chunk.source_path.startswith(source_prefix):
+                        deleted_source_paths.add(chunk.source_path)
                         if soft_delete:
                             chunk.is_deleted = True
                         else:
@@ -1393,6 +1600,22 @@ class RAGSystem:
                     del self.bm25_chunks_by_kb[knowledge_base_id]
                 # Пересоздать индекс для этой KB
                 self._load_index(knowledge_base_id)
+                if self._qdrant_enabled():
+                    for src in deleted_source_paths:
+                        try:
+                            self.qdrant_backend.delete_by_filter(
+                                kb_id=int(knowledge_base_id),
+                                source_type=source_type,
+                                source_path=src,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Qdrant delete_by_prefix item failed: kb_id=%s source_type=%s source_path=%s error=%s",
+                                knowledge_base_id,
+                                source_type,
+                                src,
+                                e,
+                            )
 
             return deleted
 

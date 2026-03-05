@@ -207,3 +207,63 @@
   - updated `docs/REQUIREMENTS_TRACEABILITY.md`,
   - updated `docs/USAGE.md`,
   - added `coordination/reviews/rag-stack-v2-migration-2026-03-04.md`.
+
+## 2026-03-04 Max Quality Architecture Kickoff
+- classification: non-trivial
+- mode: architect-only (design-first, no implementation changes)
+- user request:
+  - "сделать максимальное качество"
+  - выполнить процесс: исследование -> дизайн архитектуры -> декомпозиция -> реализация/ревью/тесты
+- actions completed:
+  - reviewed current retrieval/indexing/quality baseline (`shared/rag_system.py`, loaders, eval tests).
+  - documented new research section in `.scratchpad/research.md`.
+  - documented process plan section in `.scratchpad/plan.md`.
+  - created architecture spec `docs/design/rag-max-quality-architecture-v1.md`.
+  - opened new cycle tasks `RAGMAX-001..004` in `coordination/tasks.jsonl`.
+  - switched cycle contract to design stage (`coordination/cycle-contract.json`).
+- next step:
+  - wait for design approval token: `APPROVED:v1` or change request.
+
+## 2026-03-04 Max Quality Architecture Revision (User CHANGES)
+- user change request:
+  - "нужно сейчас получить максимум качества, даже если для этого нужно поменять стек полностью"
+- applied updates:
+  - revised design doc now mandates full stack replacement (external hybrid retrieval backend) in this cycle.
+  - removed optionality framing from research/plan artifacts.
+  - preserved rollback window via feature switch for safety.
+- next step:
+  - await renewed design approval on revised v1 spec, then begin implementation phase (`RAGMAX-002`).
+
+## 2026-03-04 Max Quality Implementation Snapshot (Qdrant + Diagnostics)
+- task: RAGMAX-002/003/004
+- classification: non-trivial
+- implementation:
+  - Added Qdrant dense retrieval adapter: `shared/qdrant_backend.py`.
+  - Optimized adapter to cache ensured vector size and avoid redundant collection-check requests during batch upsert.
+  - Added config switches and env/compose wiring:
+    - `RAG_BACKEND`, `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`, `QDRANT_TIMEOUT_SEC`,
+    - qdrant service in `docker-compose.yml`.
+  - Integrated hybrid retrieval path in `shared/rag_system.py`:
+    - qdrant dense channel + existing lexical BM25 channel,
+    - CRUD sync hooks (`add`, `batch`, `delete`, `clear`, `delete_kb`),
+    - legacy fallback path preserved.
+  - Added retrieval diagnostics persistence:
+    - DB models in `shared/database.py` (`retrieval_query_logs`, `retrieval_candidate_logs`).
+  - Updated RAG API:
+    - `/api/v1/rag/query` now always returns `request_id`,
+    - added `GET /api/v1/rag/diagnostics/{request_id}` in `backend/api/routes/rag.py`.
+  - Added schemas for diagnostics in `backend/schemas/rag.py`.
+- tests added:
+  - `tests/test_qdrant_backend.py`
+  - `tests/test_rag_diagnostics.py`
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_diagnostics.py tests/test_qdrant_backend.py` -> PASS
+  - `python -m py_compile shared/qdrant_backend.py shared/rag_system.py shared/config.py shared/database.py backend/api/routes/rag.py backend/schemas/rag.py tests/test_qdrant_backend.py tests/test_rag_diagnostics.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py tests/test_qdrant_backend.py` -> PASS (`9 passed`)
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py tests/test_qdrant_backend.py tests/test_bot_text_ai_mode.py tests/test_bot_document_upload.py tests/test_buttons_admin_menu.py` -> PASS (`25 passed`)
+  - `.venv\Scripts\python.exe scripts/rag_api_smoke_test.py --help` -> PASS
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec:
+  - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/USAGE.md`, `docs/OPERATIONS.md`.
+  - Added review artifact: `coordination/reviews/rag-max-quality-qdrant-diagnostics-2026-03-04.md`.

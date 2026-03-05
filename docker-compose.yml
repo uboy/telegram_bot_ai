@@ -8,6 +8,7 @@ services:
     depends_on:
       - redis
       - n8n
+      - qdrant
     volumes:
       # Внешний каталог с пользовательскими данными / настройками
       - ./data:/app/data
@@ -22,6 +23,7 @@ services:
       - N8N_BASE_URL=${N8N_BASE_URL:-http://n8n:5678}
       - N8N_DEFAULT_WEBHOOK=${N8N_DEFAULT_WEBHOOK:-}
       - N8N_PUBLIC_URL=${N8N_PUBLIC_URL:-http://localhost:5678}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
     # Раскомментируйте для использования GPU (требует nvidia-docker или Docker с поддержкой GPU)
     # Для работы GPU необходимо:
     # 1. Установить nvidia-container-toolkit (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
@@ -43,6 +45,7 @@ services:
       - .env
     depends_on:
       - redis
+      - qdrant
     command: ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     volumes:
       - ./data:/app/data
@@ -50,6 +53,7 @@ services:
     environment:
       - BOT_DATA_DIR=/app/data
       - HF_HOME=/app/data/cache/huggingface
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
     deploy:
        resources:
          reservations:
@@ -87,6 +91,16 @@ services:
     volumes:
       - redis_data:/data
 
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    container_name: telegram_rag_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   n8n:
     image: n8nio/n8n:1.68.1
     container_name: telegram_rag_n8n
@@ -109,5 +123,6 @@ services:
 volumes:
   db_data:
   redis_data:
+  qdrant_data:
 
 
