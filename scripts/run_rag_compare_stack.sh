@@ -16,6 +16,7 @@ CASES_FILE_HOST="tests/rag_eval.yaml"
 REPORT_PATH_CONTAINER="/app/data/rag_compare_report.json"
 KEEP_V4="false"
 PRINT_JSON="true"
+V4_CONNECT_HOST=""
 
 usage() {
   cat <<'EOF'
@@ -130,12 +131,19 @@ docker run -d --rm \
   "$IMAGE_NAME" \
   uvicorn backend.app:app --host 0.0.0.0 --port 8000 --workers 1 >/dev/null
 
+V4_CONNECT_HOST="$(docker inspect "$V4_CONTAINER" --format "{{ (index .NetworkSettings.Networks \"$NETWORK_NAME\").IPAddress }}" | tr -d '\r')"
+if [[ -z "$V4_CONNECT_HOST" ]]; then
+  echo "[WARN] failed to resolve v4 IP in network '$NETWORK_NAME', falling back to DNS name: $V4_CONTAINER"
+  V4_CONNECT_HOST="$V4_CONTAINER"
+fi
+echo "[INFO] v4 endpoint host: $V4_CONNECT_HOST"
+
 echo "[INFO] waiting for v4 health..."
 for i in $(seq 1 60); do
   if docker exec "$LEGACY_CONTAINER" python - <<PY >/dev/null 2>&1
 import requests, sys
 try:
-    r = requests.get("http://${V4_CONTAINER}:8000/api/v1/health", timeout=2)
+    r = requests.get("http://${V4_CONNECT_HOST}:8000/api/v1/health", timeout=2)
     sys.exit(0 if r.status_code == 200 else 1)
 except Exception:
     sys.exit(1)
@@ -149,7 +157,7 @@ done
 if ! docker exec "$LEGACY_CONTAINER" python - <<PY >/dev/null 2>&1
 import requests, sys
 try:
-    r = requests.get("http://${V4_CONTAINER}:8000/api/v1/health", timeout=5)
+    r = requests.get("http://${V4_CONNECT_HOST}:8000/api/v1/health", timeout=5)
     sys.exit(0 if r.status_code == 200 else 1)
 except Exception:
     sys.exit(1)
@@ -180,7 +188,7 @@ echo "[INFO] running comparator..."
 CMD=(
   python /tmp/rag_orchestrator_compare.py
   --legacy-base-url http://127.0.0.1:8000
-  --v4-base-url "http://${V4_CONTAINER}:8000"
+  --v4-base-url "http://${V4_CONNECT_HOST}:8000"
   --api-prefix "$API_PREFIX"
   --cases-file /tmp/rag_eval.yaml
   --json-out "$REPORT_PATH_CONTAINER"
@@ -201,4 +209,3 @@ if [[ -n "$HOST_DATA_DIR" ]]; then
   report_name="$(basename "$REPORT_PATH_CONTAINER")"
   echo "[INFO] report on host (mounted): ${HOST_DATA_DIR}/${report_name}"
 fi
-

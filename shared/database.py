@@ -1,9 +1,11 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, text, Index, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy.exc import OperationalError
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from typing import Generator
 import os
+import time
 
 from shared.logging_config import logger
 
@@ -961,8 +963,40 @@ def migrate_database():
     finally:
         session.close()
 
-# Создать таблицы
-Base.metadata.create_all(engine)
+def create_all_tables_with_race_tolerance(max_attempts: int = 3, sleep_sec: float = 0.2) -> None:
+    """Create all SQLAlchemy tables, tolerating SQLite startup races.
+
+    When backend and bot start simultaneously against the same SQLite file,
+    both processes may pass table-existence check and race on CREATE TABLE.
+    In that case SQLAlchemy can surface "table ... already exists".
+    """
+    is_sqlite = 'sqlite' in str(engine.url)
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        try:
+            Base.metadata.create_all(engine)
+            return
+        except OperationalError as exc:
+            message = str(exc).lower()
+            race_already_exists = is_sqlite and "already exists" in message
+            if not race_already_exists:
+                raise
+            if attempt >= attempts:
+                logger.warning(
+                    "SQLite create_all race detected on startup (already exists). "
+                    "Proceeding with existing schema after %s attempt(s).",
+                    attempt,
+                )
+                return
+            logger.warning(
+                "SQLite create_all race detected on startup (attempt %s/%s). Retrying...",
+                attempt,
+                attempts,
+            )
+            time.sleep(max(0.0, float(sleep_sec)))
+
+# Создать таблицы (устойчиво к гонке одновременного старта bot/backend на SQLite)
+create_all_tables_with_race_tolerance()
 
 # Выполнить миграции
 migrate_database()
