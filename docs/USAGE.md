@@ -122,7 +122,7 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/diagnostics/<req
 ```
 
 В ответе будут:
-- intent/hints/filters запроса,
+- intent/orchestrator_mode/hints/filters запроса,
 - количество кандидатов и выбранных фрагментов,
 - latency и признаки деградации (`degraded_mode`, `degraded_reason`),
 - top-кандидаты с channel/fusion/rerank метриками и метаданными.
@@ -148,4 +148,24 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/eval/<run_id>
 
 ```bash
 python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json
+```
+
+## Сравнение legacy vs v4 orchestrator на реальном API
+
+Сравнить качество ответов между двумя backend-инстансами (например, `legacy` и `RAG_ORCHESTRATOR_V4=true`) на одном и том же наборе кейсов:
+
+```bash
+python scripts/rag_orchestrator_compare.py ^
+  --legacy-base-url http://legacy-host:8000 ^
+  --v4-base-url http://v4-host:8000 ^
+  --api-key <API_KEY> ^
+  --kb-id <KB_ID> ^
+  --cases-file tests/rag_eval.yaml ^
+  --json-out data/rag_compare_report.json
+```
+
+Опциональный fail-gate по просадке `source_hit_rate`:
+
+```bash
+python scripts/rag_orchestrator_compare.py --legacy-base-url http://legacy-host:8000 --v4-base-url http://v4-host:8000 --api-key <API_KEY> --kb-id <KB_ID> --max-source-hit-drop 0.10
 ```

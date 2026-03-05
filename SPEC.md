@@ -53,7 +53,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - CRUD for users and knowledge bases.
   - Ingestion endpoints for documents, images, web pages, wiki (crawl/git/zip).
   - RAG query endpoint returning answer + sources + metadata + `request_id`.
-  - RAG diagnostics endpoint for retrieval trace by `request_id`.
+  - RAG diagnostics endpoint for retrieval trace by `request_id`, including orchestrator mode marker (`legacy`/`v4`) for incident triage.
   - RAG eval orchestration endpoints for benchmark run launch/status (`/rag/eval/run`, `/rag/eval/{run_id}`) with persisted run/result metrics.
   - Job status endpoint for ingestion progress (where implemented).
 - RAG pipeline:
@@ -132,6 +132,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - In legacy orchestrator mode (`RAG_ORCHESTRATOR_V4=false`), RAG factoid/legal questions (including year/metric queries) return clause-level context when corresponding chunks exist in KB.
 - In Phase D mode (`RAG_ORCHESTRATOR_V4=true`), `/api/v1/rag/query` disables route-level query-specific hardcoded boosts/keyword fallback and ranks by base retrieval score.
 - RAG query response includes `request_id`, and retrieval diagnostics are available via `GET /api/v1/rag/diagnostics/{request_id}`.
+- Retrieval diagnostics include `orchestrator_mode` marker to identify request execution mode (`legacy`/`v4`).
 - Ingestion emits idempotent index outbox events for non-empty chunk upserts, enabling retry-safe index synchronization without duplicate writes.
 - Outbox worker processes queued index events asynchronously with bounded retries/dead-letter transition, and periodic drift audit records SQL-vs-Qdrant divergence in `index_sync_audit`.
 - Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and channel/fusion ranking fields for top candidates.
@@ -155,6 +156,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Smart startup launcher (`scripts/start_stack.py`) starts MySQL profile only when `MYSQL_URL` is configured; otherwise stack runs without `db` service.
 - Supported AI providers are configurable via env and available through unified provider management.
 - Backend includes a runnable RAG API smoke script (`scripts/rag_api_smoke_test.py`) for quick endpoint sanity checks.
+- Backend includes a runnable legacy-vs-v4 compare script (`scripts/rag_orchestrator_compare.py`) for cutover evaluation on real API.
 - Any feature/bugfix that changes behavior updates `SPEC.md`, related design spec, and `docs/REQUIREMENTS_TRACEABILITY.md` in the same task.
 
 ## Specification maintenance policy

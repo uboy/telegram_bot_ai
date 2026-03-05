@@ -76,6 +76,9 @@ After changing any RAG backend env vars, restart `backend` and `bot` services.
   - switches `/api/v1/rag/query` to primary ranking without query-specific hardcoded boosts/fallback.
 - Rollback: set `RAG_ORCHESTRATOR_V4=false` and restart `backend` + `bot`.
 
+Diagnostics note:
+- `GET /api/v1/rag/diagnostics/{request_id}` now exposes `orchestrator_mode` (`legacy`/`v4`) for request-level triage.
+
 ## Index Outbox Worker
 
 When `RAG_BACKEND=qdrant`, backend starts async index-sync worker:
@@ -124,6 +127,13 @@ Main knobs:
   - `RAG_EVAL_THRESHOLD_NDCG_AT10`
 - Apply quality gate for completed run:
   - `python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json`
+
+## Legacy vs v4 Compare Run
+
+Use comparator script against two running backend instances:
+- `python scripts/rag_orchestrator_compare.py --legacy-base-url <legacy_url> --v4-base-url <v4_url> --api-key <API_KEY> --kb-id <KB_ID> --cases-file tests/rag_eval.yaml --json-out data/rag_compare_report.json`
+- Optional gate:
+  - `--max-source-hit-drop 0.10` fails run if `v4` loses more than 10pp `source_hit_rate` vs legacy.
 
 ## Container Runtime Notes
 

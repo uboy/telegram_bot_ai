@@ -473,3 +473,28 @@
   - Added review report `coordination/reviews/rag-outbox-phase-d1-2026-03-05.md`.
 - next step:
   - run comparative eval (`legacy` vs `RAG_ORCHESTRATOR_V4=true`) and decide production default cutover.
+
+## 2026-03-05 Phase D observability + compare tooling snapshot
+- task: RAGOUT-023..026
+- classification: non-trivial (implementation + review cycle)
+- implementation:
+  - Added request-level `orchestrator_mode` diagnostics marker (`legacy`/`v4`) in RAG diagnostics response.
+  - Persistence wiring: retrieval logs embed orchestrator mode in `hints_json` for historical triage.
+  - Added real-API comparison utility `scripts/rag_orchestrator_compare.py`:
+    - runs shared case suite against legacy and v4 backends,
+    - computes summary deltas (`source_hit_rate`, `non_empty_rate`, `snippet_hit_rate`),
+    - supports optional fail gate (`--max-source-hit-drop`),
+    - supports JSON report output.
+- tests:
+  - Added `tests/test_rag_orchestrator_compare.py`.
+  - Updated `tests/test_rag_diagnostics.py` for `orchestrator_mode` contract.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py scripts/rag_orchestrator_compare.py tests/test_rag_diagnostics.py tests/test_rag_orchestrator_compare.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_orchestrator_compare.py tests/test_rag_query_definition_intent.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_service.py tests/test_rag_eval_api.py tests/test_api_routes_contract.py` -> PASS (`24 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec:
+  - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/API_REFERENCE.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, `docs/USAGE.md`, `docs/design/rag-generalized-architecture-v2.md`.
+  - Added review report `coordination/reviews/rag-outbox-phase-d2-2026-03-05.md`.
+- next step:
+  - execute comparator on target host with real API for legacy/v4 and decide production cutover policy threshold.

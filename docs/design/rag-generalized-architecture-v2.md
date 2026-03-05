@@ -615,6 +615,16 @@ Implemented in this cycle:
 Checklist note:
 - item `Primary retrieval path has no hardcoded query phrase boosting` is now implemented behind Phase D feature flag and awaits full production cutover decision.
 
+## 29) Implementation snapshot (Phase D observability + compare tooling completed on 2026-03-05)
+
+Implemented in this cycle:
+1. Diagnostics observability hardening:
+- retrieval diagnostics now expose `orchestrator_mode` (`legacy`/`v4`) per `request_id`.
+2. Cutover evaluation tooling:
+- added `scripts/rag_orchestrator_compare.py` to compare real API behavior of legacy vs v4 backends on shared eval cases with JSON report and optional fail gate (`--max-source-hit-drop`).
+3. Verification:
+- added focused tests for diagnostics marker and comparator helpers.
+
 ## Approval
 
 REVIEW REQUIRED — Reply "APPROVED:v1" or "CHANGES:<bullets>"

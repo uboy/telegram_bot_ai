@@ -63,6 +63,7 @@ class RAGDiagnosticsResponse(BaseModel):
     query: str
     knowledge_base_id: Optional[int] = None
     intent: Optional[str] = None
+    orchestrator_mode: Optional[str] = None
     backend_name: Optional[str] = None
     total_candidates: int = 0
     total_selected: int = 0

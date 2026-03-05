@@ -118,11 +118,16 @@ def _persist_retrieval_logs(
     backend_name: Optional[str],
     degraded_mode: bool = False,
     degraded_reason: Optional[str] = None,
+    orchestrator_mode: Optional[str] = None,
     candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     # Test doubles may pass lightweight DB stubs without persistence APIs.
     if not hasattr(db, "add") or not hasattr(db, "commit"):
         return
+    hints_payload = hints if isinstance(hints, dict) else {}
+    if orchestrator_mode:
+        hints_payload = dict(hints_payload)
+        hints_payload["orchestrator_mode"] = str(orchestrator_mode).strip().lower()
     try:
         db.add(
             RetrievalQueryLog(
@@ -130,7 +135,7 @@ def _persist_retrieval_logs(
                 knowledge_base_id=knowledge_base_id,
                 query=query or "",
                 intent=(intent or "")[:32] or None,
-                hints_json=_safe_json_dumps(hints),
+                hints_json=_safe_json_dumps(hints_payload),
                 filters_json=_safe_json_dumps(filters),
                 total_candidates=max(0, int(total_candidates or 0)),
                 total_selected=max(0, int(total_selected or 0)),
@@ -195,6 +200,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
     filters_payload: Dict[str, Any] = {}
     results: List[dict] = []
     filtered_results: List[dict] = []
+    orchestrator_mode: str = "legacy"
 
     try:
         # Настройки RAG
@@ -222,6 +228,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             min_rerank_score = 0.0
             debug_return_chunks = False
             orchestrator_v4_enabled = False
+        orchestrator_mode = "v4" if orchestrator_v4_enabled else "legacy"
 
         # Настройки KB (single-page и контекст)
         kb_settings = {}
@@ -1003,6 +1010,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 backend_name=backend_name,
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
+                orchestrator_mode=orchestrator_mode,
                 candidates=[],
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1036,6 +1044,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 backend_name=backend_name,
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
+                orchestrator_mode=orchestrator_mode,
                 candidates=results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1112,6 +1121,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 backend_name=backend_name,
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
+                orchestrator_mode=orchestrator_mode,
                 candidates=filtered_results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1213,6 +1223,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             backend_name=backend_name,
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
+            orchestrator_mode=orchestrator_mode,
             candidates=filtered_results,
         )
         return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id, debug_chunks=debug_chunks)
@@ -1245,6 +1256,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             backend_name=backend_name,
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
+            orchestrator_mode=orchestrator_mode,
             candidates=filtered_results or results,
         )
         return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -1287,18 +1299,28 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
             )
         )
 
+    hints_obj = _safe_json_loads(query_log.hints_json)
+    orchestrator_mode = None
+    if isinstance(hints_obj, dict):
+        raw_mode = hints_obj.get("orchestrator_mode")
+        if raw_mode is not None:
+            mode_token = str(raw_mode).strip().lower()
+            if mode_token:
+                orchestrator_mode = mode_token
+
     return RAGDiagnosticsResponse(
         request_id=query_log.request_id,
         query=query_log.query or "",
         knowledge_base_id=query_log.knowledge_base_id,
         intent=query_log.intent,
+        orchestrator_mode=orchestrator_mode,
         backend_name=query_log.backend_name,
         total_candidates=int(query_log.total_candidates or 0),
         total_selected=int(query_log.total_selected or 0),
         latency_ms=int(query_log.latency_ms or 0),
         degraded_mode=bool(getattr(query_log, "degraded_mode", False)),
         degraded_reason=getattr(query_log, "degraded_reason", None),
-        hints=_safe_json_loads(query_log.hints_json),
+        hints=hints_obj,
         filters=_safe_json_loads(query_log.filters_json),
         candidates=candidates,
     )

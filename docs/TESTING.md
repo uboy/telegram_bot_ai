@@ -33,6 +33,9 @@
 
 # RAG eval + statistical quality gate logic
 .venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_eval_api.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py
+
+# RAG diagnostics + orchestrator compare tooling
+.venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_diagnostics.py tests/test_rag_orchestrator_compare.py
 ```
 
 ## CI Smoke Recommendation

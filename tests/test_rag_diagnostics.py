@@ -92,6 +92,9 @@ class DummyDB:
 
 def test_rag_query_persists_request_id_and_retrieval_logs(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
         return [
@@ -123,6 +126,7 @@ def test_rag_query_persists_request_id_and_retrieval_logs(monkeypatch):
     assert db.retrieval_query_logs[0].request_id == result.request_id
     assert db.retrieval_query_logs[0].backend_name == "qdrant"
     assert db.retrieval_query_logs[0].degraded_mode is False
+    assert "\"orchestrator_mode\": \"legacy\"" in (db.retrieval_query_logs[0].hints_json or "")
 
 
 def test_rag_query_marks_degraded_on_qdrant_fallback(monkeypatch):
@@ -161,7 +165,7 @@ def test_rag_diagnostics_returns_candidates():
             knowledge_base_id=1,
             query="Какие цели развития ИИ названы в пункте 25?",
             intent="FACTOID",
-            hints_json=json.dumps({"point_numbers": ["25"]}, ensure_ascii=False),
+            hints_json=json.dumps({"point_numbers": ["25"], "orchestrator_mode": "v4"}, ensure_ascii=False),
             filters_json=json.dumps({"source_types": ["pdf"]}, ensure_ascii=False),
             total_candidates=5,
             total_selected=2,
@@ -194,6 +198,7 @@ def test_rag_diagnostics_returns_candidates():
 
     assert result.request_id == "req-1"
     assert result.intent == "FACTOID"
+    assert result.orchestrator_mode == "v4"
     assert result.total_candidates == 5
     assert result.degraded_mode is True
     assert result.degraded_reason == "qdrant_unavailable_or_empty"
