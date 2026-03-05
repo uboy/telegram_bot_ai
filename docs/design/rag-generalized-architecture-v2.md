@@ -529,6 +529,27 @@ Rollback:
 3. Question: какие регуляторные сроки хранения обязательны для вашей среды?
 - Assumption: используем предложенный retention matrix; уточнение возможно до implementation phase.
 
+## 24) Implementation snapshot (Phase A completed on 2026-03-05)
+
+Implemented in this cycle:
+1. DB foundation entities added:
+- `index_outbox_events`
+- `index_sync_audit`
+- `rag_eval_runs`
+- `rag_eval_results`
+- `retention_deletion_audit`
+2. Retrieval diagnostics schema extended:
+- `retrieval_query_logs`: `degraded_mode`, `degraded_reason`
+- `retrieval_candidate_logs`: `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`
+3. Outbox service implemented:
+- idempotent enqueue,
+- pending claim,
+- processed/failed/dead lifecycle helpers.
+4. Ingestion integration:
+- successful non-empty upserts now enqueue outbox events (web/document/chat/archive/code/image flows).
+5. Verification:
+- focused tests and policy/secret checks executed (see review report in `coordination/reviews`).
+
 ## Approval
 
 REVIEW REQUIRED — Reply "APPROVED:v1" or "CHANGES:<bullets>"

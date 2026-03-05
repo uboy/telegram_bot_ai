@@ -35,3 +35,9 @@
 {"id":"RAGGEN-002","title":"Produce generalized RAG architecture v2 design spec with closed MUST-FIX requirements","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-05"}
 {"id":"RAGGEN-003","title":"Run independent review of v2 design and issue PASS/FAIL verdict with residual SHOULD-FIX items","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
 {"id":"RAGGEN-004","title":"Sync coordination artifacts (tasks/cycle/state) and prepare handoff for user approval of design v2","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-001","title":"Implement Phase A persistence foundation: outbox/audit/eval tables and retrieval diagnostics schema extensions","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-002","title":"Integrate ingestion flows with idempotent index outbox event emission for non-empty chunk upserts","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-003","title":"Add focused unit tests for outbox lifecycle and ingestion outbox hook behavior","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-004","title":"Update design/spec/traceability and produce review artifact for Phase A outbox cycle","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-005","title":"Audit Phase A implementation against checklist, detect miswired outbox calls, and apply corrective fixes","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-006","title":"Re-run regression suite after outbox call fixes and confirm no unintended deletions/regressions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}

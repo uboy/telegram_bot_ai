@@ -25,6 +25,7 @@ from shared.kb_settings import normalize_kb_settings, get_chunking_settings  # t
 from shared.wiki_scraper import crawl_wiki_to_kb  # type: ignore
 from shared.wiki_git_loader import load_wiki_from_git, load_wiki_from_zip  # type: ignore
 from shared.image_processor import image_processor  # type: ignore
+from shared.index_outbox_service import index_outbox_service  # type: ignore
 from shared.logging_config import logger  # type: ignore
 
 
@@ -186,6 +187,42 @@ class IngestionService:
             session.add(log_obj)
             # commit выполнится автоматически при выходе из with
 
+    def _enqueue_index_upsert_event(
+        self,
+        *,
+        kb_id: int,
+        document_id: int | None,
+        version: int | None,
+        source_type: str,
+        source_path: str,
+        chunks_added: int,
+    ) -> None:
+        if chunks_added <= 0:
+            return
+        payload = {
+            "source_type": source_type,
+            "source_path": source_path,
+            "chunks_added": int(chunks_added),
+            "version": int(version) if version is not None else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            index_outbox_service.enqueue_event(
+                operation="UPSERT",
+                knowledge_base_id=int(kb_id),
+                document_id=int(document_id) if document_id is not None else None,
+                version=int(version) if version is not None else None,
+                payload=payload,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Outbox enqueue failed: kb_id=%s document_id=%s source=%s error=%s",
+                kb_id,
+                document_id,
+                source_path,
+                exc,
+            )
+
     def ingest_web_page(self, kb_id: int, url: str, telegram_id: str | None, username: str | None) -> Dict[str, Any]:
         """Загрузить одну веб-страницу в базу знаний."""
         settings = self._get_kb_settings(kb_id)
@@ -276,6 +313,14 @@ class IngestionService:
         )
         self.db.add(log)
         self.db.commit()
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=document_id,
+            version=doc_version,
+            source_type="web",
+            source_path=url,
+            chunks_added=added,
+        )
 
         return {
             "kb_id": kb_id,
@@ -316,6 +361,14 @@ class IngestionService:
         )
         self.db.add(log)
         self.db.commit()
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=None,
+            version=None,
+            source_type="wiki",
+            source_path=wiki_root,
+            chunks_added=added,
+        )
 
         return {
             "deleted_chunks": deleted,
@@ -349,6 +402,14 @@ class IngestionService:
             total_chunks=added,
         )
         self._write_import_log(log)
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=None,
+            version=None,
+            source_type="wiki_git",
+            source_path=wiki_root,
+            chunks_added=added,
+        )
 
         return {
             "deleted_chunks": deleted,
@@ -387,6 +448,14 @@ class IngestionService:
             )
             self.db.add(log)
         self.db.commit()
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=None,
+            version=None,
+            source_type="wiki_zip",
+            source_path=wiki_root,
+            chunks_added=added,
+        )
 
         return {
             "deleted_chunks": deleted,
@@ -563,6 +632,14 @@ class IngestionService:
                         total_chunks=added,
                     )
                     self._write_import_log(log)
+                    self._enqueue_index_upsert_event(
+                        kb_id=kb_id,
+                        document_id=document_id,
+                        version=doc_version,
+                        source_type=inner_ext_clean or "unknown",
+                        source_path=source_path,
+                        chunks_added=added,
+                    )
                     try:
                         os.remove(inner_path)
                     except OSError:
@@ -637,6 +714,14 @@ class IngestionService:
             )
             self.db.add(log)
             self.db.commit()
+            self._enqueue_index_upsert_event(
+                kb_id=kb_id,
+                document_id=document_id,
+                version=doc_version,
+                source_type="chat",
+                source_path=source_path,
+                chunks_added=added,
+            )
             return {
                 "mode": "chat",
                 "kb_id": kb_id,
@@ -752,6 +837,14 @@ class IngestionService:
         )
         self.db.add(log)
         self.db.commit()
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=document_id,
+            version=doc_version,
+            source_type=file_type or "unknown",
+            source_path=source_path,
+            chunks_added=added,
+        )
 
         return {
             "mode": "document",
@@ -883,6 +976,14 @@ class IngestionService:
                     rag_system.add_chunks_batch(chunks_data)
                     chunks_added += len(chunks_data)
                     files_updated += 1
+                    self._enqueue_index_upsert_event(
+                        kb_id=kb_id,
+                        document_id=document_id,
+                        version=doc_version,
+                        source_type="code",
+                        source_path=source_path,
+                        chunks_added=len(chunks_data),
+                    )
                 files_processed += 1
 
         log = KnowledgeImportLog(
@@ -895,6 +996,14 @@ class IngestionService:
         )
         self.db.add(log)
         self.db.commit()
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=None,
+            version=None,
+            source_type="codebase",
+            source_path=repo_prefix,
+            chunks_added=chunks_added,
+        )
 
         return {
             "kb_id": kb_id,
@@ -1011,6 +1120,14 @@ class IngestionService:
         )
         self.db.add(log)
         self.db.commit()
+        self._enqueue_index_upsert_event(
+            kb_id=kb_id,
+            document_id=document_id,
+            version=doc_version,
+            source_type="image",
+            source_path=source_path,
+            chunks_added=1,
+        )
 
         return {
             "kb_id": kb_id,

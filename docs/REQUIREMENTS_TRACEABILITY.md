@@ -35,6 +35,7 @@ Source: `SPEC.md` acceptance criteria.
 | AC-29 | Backend RAG endpoint has CLI smoke runner for fast API sanity check | `scripts/rag_api_smoke_test.py` | `.venv\Scripts\python.exe scripts/rag_api_smoke_test.py --help` | PASS |
 | AC-30 | RAG query returns `request_id` and backend exposes retrieval diagnostics by `request_id` | `backend/api/routes/rag.py`, `backend/schemas/rag.py`, `shared/database.py` (`retrieval_query_logs`, `retrieval_candidate_logs`) | `tests/test_rag_diagnostics.py` | PASS |
 | AC-31 | Production RAG dense retrieval supports external Qdrant backend with rollback switch to legacy mode | `shared/rag_system.py`, `shared/qdrant_backend.py`, `shared/config.py`, `env.template`, `docker-compose.yml` | `tests/test_qdrant_backend.py`, `python -m py_compile shared/rag_system.py shared/qdrant_backend.py shared/config.py` | PASS |
+| AC-32 | Ingestion emits idempotent index outbox events for non-empty chunk upserts to support retry-safe index synchronization | `shared/database.py` (`index_outbox_events`, `index_sync_audit`, `rag_eval_runs`, `rag_eval_results`, `retention_deletion_audit`), `shared/index_outbox_service.py`, `backend/services/ingestion_service.py` | `tests/test_index_outbox_service.py`, `tests/test_ingestion_outbox.py`, `python -m py_compile shared/database.py shared/index_outbox_service.py backend/services/ingestion_service.py` | PASS |
 
 ## Gaps to close
 

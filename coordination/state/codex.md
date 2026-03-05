@@ -291,3 +291,66 @@
   - no code build/test executed (docs-only cycle).
 - next step:
   - wait for user approval token on new design revision and proceed to implementation planning if approved.
+
+## 2026-03-05 RAG Outbox Foundation (Phase A)
+- task: RAGOUT-001..004
+- classification: non-trivial (implementation + review cycle)
+- user instruction:
+  - continue process after approved architecture track.
+- implementation:
+  - extended `shared/database.py` with Phase A primitives:
+    - `index_outbox_events`,
+    - `index_sync_audit`,
+    - `rag_eval_runs`,
+    - `rag_eval_results`,
+    - `retention_deletion_audit`.
+  - extended retrieval diagnostics schema:
+    - `retrieval_query_logs`: `degraded_mode`, `degraded_reason`,
+    - `retrieval_candidate_logs`: `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`.
+  - added outbox lifecycle service `shared/index_outbox_service.py`:
+    - idempotent enqueue,
+    - claim pending,
+    - mark processed/failed/dead,
+    - pending count helper.
+  - integrated ingestion hooks in `backend/services/ingestion_service.py`:
+    - outbox event enqueue after successful non-empty upserts for web/document/chat/archive/code/image flows.
+  - added tests:
+    - `tests/test_index_outbox_service.py`,
+    - `tests/test_ingestion_outbox.py`.
+  - updated design/spec/traceability:
+    - `docs/design/rag-generalized-architecture-v2.md` (implementation snapshot),
+    - `SPEC.md`,
+    - `docs/REQUIREMENTS_TRACEABILITY.md`.
+  - added review artifact:
+    - `coordination/reviews/rag-outbox-phase-a-2026-03-05.md` (PASS).
+- verification:
+  - `python -m py_compile shared/database.py shared/index_outbox_service.py backend/services/ingestion_service.py tests/test_index_outbox_service.py tests/test_ingestion_outbox.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_index_outbox_service.py tests/test_ingestion_outbox.py tests/test_rag_diagnostics.py tests/test_ingestion_routes.py tests/test_indexing_jobs_lifecycle.py` -> PASS (`12 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- residual risk:
+  - no live outbox consumer worker yet (planned for next phase).
+- next step:
+  - implement outbox consumer with retry/backoff metrics and drift audit jobs.
+
+## 2026-03-05 Phase A checklist audit and corrections
+- task: RAGOUT-005..006
+- classification: non-trivial (review + corrective patch)
+- findings:
+  - no file deletions detected in working tree (`git diff --name-status` contains no `D` entries).
+  - identified two miswired outbox invocations in `backend/services/ingestion_service.py`:
+    - incorrect payload in `ingest_web_page`,
+    - invalid final event parameters in `ingest_codebase_path`.
+- fixes applied:
+  - corrected web/codebase outbox payload wiring,
+  - added outbox events for `ingest_wiki_crawl`, `ingest_wiki_git`, `ingest_wiki_zip`,
+  - added regression tests:
+    - `tests/test_ingestion_outbox.py::test_ingest_web_page_emits_web_outbox_event`
+    - `tests/test_ingestion_outbox.py::test_ingest_codebase_path_emits_code_and_codebase_events`
+- verification:
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_ingestion_outbox.py tests/test_index_outbox_service.py tests/test_rag_diagnostics.py tests/test_ingestion_routes.py tests/test_indexing_jobs_lifecycle.py` -> `14 passed`
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test_bot_database.db'; .venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_rag_query_definition_intent.py tests/test_bot_document_upload.py` -> `22 passed`
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- next step:
+  - proceed with Phase B (outbox consumer worker + drift audit job + degraded-mode signaling in API path).

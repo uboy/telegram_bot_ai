@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text, Index, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, text, Index, UniqueConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -365,6 +365,8 @@ class RetrievalQueryLog(Base):
     total_selected = Column(Integer, default=0, nullable=False)
     latency_ms = Column(Integer, default=0, nullable=False)
     backend_name = Column(String(32), nullable=True)
+    degraded_mode = Column(Boolean, default=False, nullable=False)
+    degraded_reason = Column(String(120), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     __table_args__ = (
@@ -384,6 +386,11 @@ class RetrievalCandidateLog(Base):
     distance = Column(String(32), nullable=True)
     rerank_score = Column(String(32), nullable=True)
     origin = Column(String(32), nullable=True)
+    channel = Column(String(32), nullable=True)
+    channel_rank = Column(Integer, nullable=True)
+    fusion_rank = Column(Integer, nullable=True)
+    fusion_score = Column(String(32), nullable=True)
+    rerank_delta = Column(String(32), nullable=True)
     metadata_json = Column(Text, nullable=True)
     content_preview = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -391,6 +398,98 @@ class RetrievalCandidateLog(Base):
     __table_args__ = (
         Index('ix_retrieval_candidate_request_rank', 'request_id', 'rank'),
     )
+
+
+class IndexOutboxEvent(Base):
+    """Outbox-событие синхронизации индекса (SQL -> векторный backend)."""
+    __tablename__ = 'index_outbox_events'
+
+    id = Column(Integer, primary_key=True)
+    event_id = Column(String(64), nullable=False, unique=True, index=True)
+    idempotency_key = Column(String(180), nullable=False, unique=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'), nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=True, index=True)
+    version = Column(Integer, nullable=True)
+    operation = Column(String(32), nullable=False)  # UPSERT|DELETE_SOURCE|DELETE_KB
+    payload_json = Column(Text, nullable=True)
+    status = Column(String(20), default='pending', nullable=False, index=True)  # pending|processing|processed|dead
+    attempt_count = Column(Integer, default=0, nullable=False)
+    available_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    locked_at = Column(DateTime, nullable=True)
+    processed_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_index_outbox_status_available', 'status', 'available_at'),
+    )
+
+
+class IndexSyncAudit(Base):
+    """Аудит дрейфа между SQL и векторным индексом."""
+    __tablename__ = 'index_sync_audit'
+
+    id = Column(Integer, primary_key=True)
+    knowledge_base_id = Column(Integer, ForeignKey('knowledge_bases.id'), nullable=False, index=True)
+    expected_active_chunks = Column(Integer, default=0, nullable=False)
+    indexed_chunks = Column(Integer, default=0, nullable=False)
+    drift_ratio = Column(Float, default=0.0, nullable=False)
+    status = Column(String(20), default='ok', nullable=False)  # ok|warning|critical
+    details_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_index_sync_audit_kb_created', 'knowledge_base_id', 'created_at'),
+    )
+
+
+class RAGEvalRun(Base):
+    """Запуск quality benchmark для retrieval/generation."""
+    __tablename__ = 'rag_eval_runs'
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String(64), nullable=False, unique=True, index=True)
+    suite_name = Column(String(80), nullable=False)
+    baseline_run_id = Column(String(64), nullable=True)
+    status = Column(String(20), default='queued', nullable=False)  # queued|running|completed|failed
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    metrics_json = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
+class RAGEvalResult(Base):
+    """Результат benchmark по срезам/метрикам."""
+    __tablename__ = 'rag_eval_results'
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String(64), ForeignKey('rag_eval_runs.run_id'), nullable=False, index=True)
+    slice_name = Column(String(64), nullable=False, index=True)
+    metric_name = Column(String(64), nullable=False, index=True)
+    metric_value = Column(Float, nullable=False, default=0.0)
+    threshold_value = Column(Float, nullable=True)
+    passed = Column(Boolean, default=False, nullable=False)
+    details_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_rag_eval_results_run_slice_metric', 'run_id', 'slice_name', 'metric_name'),
+    )
+
+
+class RetentionDeletionAudit(Base):
+    """Аудит выполнения retention-политик и удаления данных."""
+    __tablename__ = 'retention_deletion_audit'
+
+    id = Column(Integer, primary_key=True)
+    table_name = Column(String(80), nullable=False, index=True)
+    policy_name = Column(String(80), nullable=False)
+    rows_deleted = Column(Integer, default=0, nullable=False)
+    deleted_before = Column(DateTime, nullable=True)
+    status = Column(String(20), default='ok', nullable=False)  # ok|failed
+    details_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 # Определить, какую базу данных использовать
 # Приоритет: MYSQL_URL > DB_PATH > SQLite по умолчанию
@@ -778,6 +877,75 @@ def migrate_database():
                     """))
                     session.commit()
                     logger.info("✅ Migration: created default row in app_settings")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Extend retrieval_query_logs with degraded mode diagnostics
+        try:
+            if 'retrieval_query_logs' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('retrieval_query_logs')]
+                if 'degraded_mode' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_query_logs
+                        ADD COLUMN degraded_mode BOOLEAN DEFAULT 0
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'degraded_mode' to retrieval_query_logs")
+                if 'degraded_reason' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_query_logs
+                        ADD COLUMN degraded_reason VARCHAR(120)
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'degraded_reason' to retrieval_query_logs")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Extend retrieval_candidate_logs for channel/fusion/rerank diagnostics
+        try:
+            if 'retrieval_candidate_logs' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('retrieval_candidate_logs')]
+                if 'channel' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_candidate_logs
+                        ADD COLUMN channel VARCHAR(32)
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'channel' to retrieval_candidate_logs")
+                if 'channel_rank' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_candidate_logs
+                        ADD COLUMN channel_rank INTEGER
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'channel_rank' to retrieval_candidate_logs")
+                if 'fusion_rank' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_candidate_logs
+                        ADD COLUMN fusion_rank INTEGER
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'fusion_rank' to retrieval_candidate_logs")
+                if 'fusion_score' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_candidate_logs
+                        ADD COLUMN fusion_score VARCHAR(32)
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'fusion_score' to retrieval_candidate_logs")
+                if 'rerank_delta' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE retrieval_candidate_logs
+                        ADD COLUMN rerank_delta VARCHAR(32)
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'rerank_delta' to retrieval_candidate_logs")
         except Exception:
             try:
                 session.rollback()
