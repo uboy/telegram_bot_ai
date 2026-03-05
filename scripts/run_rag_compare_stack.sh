@@ -249,108 +249,19 @@ fi
 
 if [[ "$PREPARE_TEST_KB" == "true" ]]; then
   echo "[INFO] preparing test knowledge base and uploading PDF..."
+  docker cp scripts/rag_prepare_test_kb.py "$LEGACY_CONTAINER:/tmp/rag_prepare_test_kb.py"
   docker cp "$TEST_PDF_HOST" "$LEGACY_CONTAINER:$TEST_PDF_CONTAINER"
   set +e
   PREP_OUTPUT="$(docker exec \
-    -e PREPARE_KB_NAME="$TEST_KB_NAME" \
-    -e PREPARE_KB_DESCRIPTION="$TEST_KB_DESCRIPTION" \
-    -e PREPARE_PDF_PATH="$TEST_PDF_CONTAINER" \
-    -e PREPARE_API_PREFIX="$API_PREFIX" \
-    -e PREPARE_JOB_TIMEOUT_SEC="$JOB_TIMEOUT_SEC" \
-    -e PREPARE_JOB_POLL_SEC="$JOB_POLL_SEC" \
-    "$LEGACY_CONTAINER" python - <<'PY' 2>&1
-import os
-import sys
-import time
-from pathlib import Path
-import requests
-
-kb_name = os.getenv("PREPARE_KB_NAME", "rag_compare_test_kb").strip() or "rag_compare_test_kb"
-kb_description = os.getenv("PREPARE_KB_DESCRIPTION", "").strip()
-pdf_path = Path(os.getenv("PREPARE_PDF_PATH", "/tmp/rag_compare_test.pdf"))
-api_prefix = (os.getenv("PREPARE_API_PREFIX", "/api/v1") or "/api/v1").strip("/")
-job_timeout = float(os.getenv("PREPARE_JOB_TIMEOUT_SEC", "600") or "600")
-job_poll = float(os.getenv("PREPARE_JOB_POLL_SEC", "2") or "2")
-
-if not pdf_path.exists():
-    print(f"[FAIL] test PDF is missing in container: {pdf_path}")
-    raise SystemExit(2)
-
-base_api = f"http://127.0.0.1:8000/{api_prefix}"
-headers = {}
-api_key = (os.getenv("BACKEND_API_KEY") or "").strip()
-if api_key:
-    headers["X-API-Key"] = api_key
-
-def _request(method: str, url: str, **kwargs):
-    resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
-    if resp.status_code >= 400:
-        body = (resp.text or "").strip()
-        print(f"[FAIL] {method} {url} -> {resp.status_code}: {body[:500]}")
-        raise SystemExit(2)
-    return resp
-
-print(f"[INFO] prep base_api={base_api} kb_name={kb_name}")
-kbs_resp = _request("GET", f"{base_api}/knowledge-bases/")
-kbs = kbs_resp.json() if kbs_resp.content else []
-for kb in (kbs or []):
-    if isinstance(kb, dict) and str(kb.get("name") or "") == kb_name:
-        kb_id = kb.get("id")
-        if kb_id is None:
-            continue
-        print(f"[INFO] deleting existing KB id={kb_id} name={kb_name}")
-        _request("DELETE", f"{base_api}/knowledge-bases/{int(kb_id)}")
-
-create_resp = _request(
-    "POST",
-    f"{base_api}/knowledge-bases/",
-    json={"name": kb_name, "description": kb_description},
-)
-created = create_resp.json() if create_resp.content else {}
-kb_id = int(created.get("id"))
-print(f"[INFO] created KB id={kb_id} name={kb_name}")
-
-with pdf_path.open("rb") as f:
-    upload_resp = _request(
-        "POST",
-        f"{base_api}/ingestion/document",
-        data={
-            "knowledge_base_id": str(kb_id),
-            "file_name": pdf_path.name,
-            "file_type": "pdf",
-            "telegram_id": "0",
-            "username": "rag-compare-script",
-        },
-        files={"file": (pdf_path.name, f, "application/pdf")},
-        timeout=180,
-    )
-
-upload_payload = upload_resp.json() if upload_resp.content else {}
-job_id = upload_payload.get("job_id")
-if not job_id:
-    print(f"[FAIL] ingestion response does not contain job_id: {upload_payload}")
-    raise SystemExit(2)
-
-job_id = int(job_id)
-print(f"[INFO] ingestion started job_id={job_id} file={pdf_path.name}")
-deadline = time.time() + job_timeout
-while time.time() < deadline:
-    status_resp = _request("GET", f"{base_api}/jobs/{job_id}")
-    payload = status_resp.json() if status_resp.content else {}
-    status = str(payload.get("status") or "").strip().lower()
-    progress = int(payload.get("progress") or 0)
-    if status == "completed":
-        print(f"[INFO] ingestion completed job_id={job_id} progress={progress}")
-        print(f"KB_ID={kb_id}")
-        raise SystemExit(0)
-    if status == "failed":
-        print(f"[FAIL] ingestion failed job_id={job_id}: {payload.get('error')}")
-        raise SystemExit(2)
-    time.sleep(max(0.2, job_poll))
-
-print(f"[FAIL] timeout waiting for ingestion job_id={job_id} after {job_timeout:.1f}s")
-raise SystemExit(2)
-PY
+    "$LEGACY_CONTAINER" \
+    python /tmp/rag_prepare_test_kb.py \
+      --base-url http://127.0.0.1:8000 \
+      --api-prefix "$API_PREFIX" \
+      --kb-name "$TEST_KB_NAME" \
+      --kb-description "$TEST_KB_DESCRIPTION" \
+      --pdf-path "$TEST_PDF_CONTAINER" \
+      --job-timeout-sec "$JOB_TIMEOUT_SEC" \
+      --job-poll-sec "$JOB_POLL_SEC" 2>&1
 )"
   prep_exit=$?
   set -e
