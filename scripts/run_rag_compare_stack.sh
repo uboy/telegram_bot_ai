@@ -10,6 +10,7 @@ set -euo pipefail
 LEGACY_CONTAINER="telegram_rag_backend"
 V4_CONTAINER="telegram_rag_backend_v4"
 V4_PORT="8001"
+V4_RAG_DEVICE="cpu"
 API_PREFIX=""
 KB_ID=""
 MAX_DROP="0.10"
@@ -34,6 +35,7 @@ Options:
   --legacy-container <name>      Legacy backend container (default: telegram_rag_backend)
   --v4-container <name>          Temporary v4 container name (default: telegram_rag_backend_v4)
   --v4-port <port>               Port for temporary v4 backend in shared netns (default: 8001)
+  --v4-rag-device <device>       RAG device for v4 container (default: cpu)
   --api-prefix <path>            API prefix (default: from container BACKEND_API_PREFIX or /api/v1)
   --kb-id <id>                   Knowledge base id (optional; auto-resolve if omitted)
   --prepare-test-kb              Recreate test KB and upload PDF before compare
@@ -51,6 +53,7 @@ Options:
 Examples:
   bash scripts/run_rag_compare_stack.sh
   bash scripts/run_rag_compare_stack.sh --kb-id 1 --max-source-hit-drop 0.05
+  bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10
   bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
 EOF
 }
@@ -67,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --v4-port)
       V4_PORT="$2"
+      shift 2
+      ;;
+    --v4-rag-device)
+      V4_RAG_DEVICE="$2"
       shift 2
       ;;
     --api-prefix)
@@ -176,13 +183,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+print_v4_diagnostics() {
+  echo "[DIAG] v4 container state:"
+  docker ps -a --filter "name=^${V4_CONTAINER}$" --format ' - {{.Names}} status={{.Status}}' || true
+  docker inspect "$V4_CONTAINER" --format ' - status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' 2>/dev/null || true
+  echo "[DIAG] v4 container logs (tail 200):"
+  docker logs --tail 200 "$V4_CONTAINER" 2>&1 || true
+}
+
 echo "[INFO] starting v4 container: $V4_CONTAINER"
+echo "[INFO] v4 RAG device: $V4_RAG_DEVICE"
+V4_EXTRA_ENV=()
+if [[ "${V4_RAG_DEVICE,,}" == cpu* ]]; then
+  # Prevent accidental GPU allocation when compare is running side-by-side.
+  V4_EXTRA_ENV+=(-e CUDA_VISIBLE_DEVICES=)
+fi
 docker run -d --rm \
   --name "$V4_CONTAINER" \
   --network "container:${LEGACY_CONTAINER}" \
   --volumes-from "$LEGACY_CONTAINER" \
   --env-file .env \
   -e RAG_ORCHESTRATOR_V4=true \
+  -e RAG_DEVICE="$V4_RAG_DEVICE" \
+  "${V4_EXTRA_ENV[@]}" \
   "$IMAGE_NAME" \
   uvicorn backend.app:app --host 0.0.0.0 --port "$V4_PORT" --workers 1 >/dev/null
 
@@ -220,6 +243,7 @@ except Exception:
 PY
 then
   echo "ERROR: v4 health check failed (${V4_CONTAINER})" >&2
+  print_v4_diagnostics
   exit 2
 fi
 
@@ -364,7 +388,15 @@ if [[ "$PRINT_JSON" == "true" ]]; then
   CMD+=(--print-json)
 fi
 
+set +e
 docker exec "$LEGACY_CONTAINER" "${CMD[@]}"
+cmp_exit=$?
+set -e
+if [[ $cmp_exit -ne 0 ]]; then
+  echo "[ERROR] comparator failed with exit code: $cmp_exit" >&2
+  print_v4_diagnostics
+  exit "$cmp_exit"
+fi
 
 echo "[INFO] done"
 echo "[INFO] report in container: $REPORT_PATH_CONTAINER"

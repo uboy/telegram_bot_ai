@@ -42,6 +42,9 @@ bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10
 
 # Docker stack with automatic test KB recreation + test.pdf ingestion
 bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
+
+# Override v4 device if you intentionally want GPU for the temporary v4 container
+bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10
 ```
 
 ## CI Smoke Recommendation

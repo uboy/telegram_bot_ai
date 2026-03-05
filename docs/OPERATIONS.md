@@ -140,6 +140,8 @@ For the default docker-compose stack, use wrapper script:
 - report path (host): `./data/rag_compare_report.json`
 - auto-prepare test KB from `test.pdf` in repo root:
   - `bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10`
+- by default temporary `v4` is started with `RAG_DEVICE=cpu`; override if needed:
+  - `bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10`
 
 ## Container Runtime Notes
 
