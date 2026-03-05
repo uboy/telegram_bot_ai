@@ -31,3 +31,7 @@
 {"id":"RAGMAX-002","title":"Implement approved max-quality architecture phases (retrieval orchestrator, metadata normalization, diagnostics)","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-04"}
 {"id":"RAGMAX-003","title":"Run quality benchmark suite and regression verification for max-quality RAG rollout","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-04"}
 {"id":"RAGMAX-004","title":"Update spec/traceability/usage/operations docs and produce review artifacts for max-quality cycle","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-04"}
+{"id":"RAGGEN-001","title":"Analyze v1 design review findings and define hardening scope for generalized RAG architecture revision","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-05"}
+{"id":"RAGGEN-002","title":"Produce generalized RAG architecture v2 design spec with closed MUST-FIX requirements","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-05"}
+{"id":"RAGGEN-003","title":"Run independent review of v2 design and issue PASS/FAIL verdict with residual SHOULD-FIX items","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGGEN-004","title":"Sync coordination artifacts (tasks/cycle/state) and prepare handoff for user approval of design v2","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}

@@ -442,6 +442,63 @@ async def test_handle_text_waiting_query_queues_when_kb_selected(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_handle_text_search_mode_resets_stale_kb_queue(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="user",
+            full_name=None,
+            role="user",
+            approved=True,
+        )
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+
+    class DummyMessage:
+        def __init__(self):
+            self.text = "🔍 Поиск в базе знаний"
+            self.date = datetime.now(timezone.utc)
+            self.sent = []
+
+        async def reply_text(self, text, **kwargs):
+            self.sent.append((text, kwargs))
+
+    class DummyUser:
+        id = 1
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+
+    class DummyContext:
+        def __init__(self):
+            self.user_data = {
+                "state": "waiting_query",
+                "pending_queries": [{"query": "stale"}],
+                "pending_query": "legacy",
+                "kb_query_queue": [{"query": "old queued"}],
+            }
+
+    update = DummyUpdate()
+    context = DummyContext()
+    stale_worker = asyncio.create_task(asyncio.sleep(60))
+    context.user_data["kb_query_worker"] = stale_worker
+
+    await bot_handlers.handle_text(update, context)
+
+    assert context.user_data["state"] == "waiting_query"
+    assert context.user_data.get("pending_queries") is None
+    assert context.user_data.get("pending_query") is None
+    assert context.user_data.get("kb_query_queue") == []
+    assert context.user_data.get("kb_query_worker") is None
+    assert context.user_data.get("kb_query_session_id") == 1
+    assert stale_worker.cancelled() or stale_worker.done()
+
+
+@pytest.mark.anyio
 async def test_enqueue_pending_queries_for_kb_flushes_fifo(monkeypatch):
     from frontend import bot_handlers
     queued = []

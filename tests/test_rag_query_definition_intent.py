@@ -214,3 +214,72 @@ def test_rag_query_factoid_target_metric_with_year(monkeypatch):
     result = rag_query(payload, db=DummyDB(chunk_rows=[metric_chunk]))
 
     assert "не менее 60 млрд рублей к 2030 году" in result.answer
+
+
+def test_rag_query_factoid_strategy_period(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):
+        return [
+            {
+                "content": "В документе описаны общие направления и принципы реализации стратегии.",
+                "metadata": {"section_title": "Общие положения", "section_path": "пункт 1"},
+                "source_path": "doc://policy",
+                "source_type": "pdf",
+                "rerank_score": 0.87,
+                "distance": 0.13,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    period_chunk = DummyChunkRow(
+        content=(
+            "Национальная стратегия развития искусственного интеллекта в Российской Федерации "
+            "рассчитана на период до 2030 года."
+        ),
+        metadata={"section_title": "Срок реализации", "section_path": "пункт 4"},
+    )
+    payload = RAGQuery(
+        query="На какой период рассчитана национальная стратегия развития искусственного интеллекта?",
+        knowledge_base_id=1,
+    )
+    result = rag_query(payload, db=DummyDB(chunk_rows=[period_chunk]))
+
+    assert "период до 2030 года" in result.answer
+
+
+def test_rag_query_factoid_supercomputer_power(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):
+        return [
+            {
+                "content": "В документе перечислены целевые показатели по развитию технологий ИИ.",
+                "metadata": {"section_title": "Цели", "section_path": "пункт 25"},
+                "source_path": "doc://policy",
+                "source_type": "pdf",
+                "rerank_score": 0.83,
+                "distance": 0.17,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    metric_chunk = DummyChunkRow(
+        content=(
+            "Целевой показатель совокупной мощности суперкомпьютеров, оснащенных графическими процессорами "
+            "и используемых в целях обучения моделей искусственного интеллекта, установлен на уровне "
+            "не менее 1 экзафлопса к 2030 году."
+        ),
+        metadata={"section_title": "Целевые показатели", "section_path": "пункт 31"},
+    )
+    payload = RAGQuery(
+        query="Какой целевой показатель совокупной мощности суперкомпьютеров установлен на 2030 год?",
+        knowledge_base_id=1,
+    )
+    result = rag_query(payload, db=DummyDB(chunk_rows=[metric_chunk]))
+
+    assert "не менее 1 экзафлопса к 2030 году" in result.answer

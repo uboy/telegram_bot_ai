@@ -1,5 +1,5 @@
 {
-  "task_id": "RAGMAX-004",
+  "task_id": "RAGGEN-004",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
@@ -7,15 +7,14 @@
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    ".scratchpad/research.md",
-    ".scratchpad/plan.md",
-    "docs/design/rag-max-quality-architecture-v1.md",
-    "coordination/reviews/rag-max-quality-qdrant-diagnostics-2026-03-04.md",
-    "coordination/state/codex.md"
+    "docs/design/rag-generalized-architecture-v2.md",
+    "coordination/reviews/rag-generalized-architecture-v2-review-2026-03-05.md",
+    "coordination/state/codex.md",
+    "coordination/tasks.jsonl"
   ],
   "size_limits": {
-    "max_files_changed": 24,
-    "max_lines_added": 1400,
+    "max_files_changed": 12,
+    "max_lines_added": 1600,
     "max_lines_deleted": 400
   }
 }

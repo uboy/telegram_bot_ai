@@ -267,3 +267,27 @@
 - docs/spec:
   - Updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/USAGE.md`, `docs/OPERATIONS.md`.
   - Added review artifact: `coordination/reviews/rag-max-quality-qdrant-diagnostics-2026-03-04.md`.
+
+## 2026-03-05 Generalized RAG Design Hardening (v2)
+- task: RAGGEN-001..004
+- classification: non-trivial (design/review cycle)
+- user ask:
+  - prepare detailed RAG redesign without query-overfitting,
+  - include deep analysis conclusions,
+  - run independent review and identify weak points.
+- implementation in this cycle:
+  - Added hardened architecture spec `docs/design/rag-generalized-architecture-v2.md`.
+  - Closed all previous MUST-FIX areas in design:
+    - capacity/sizing model,
+    - retention and PII lifecycle,
+    - outbox idempotent dual-write consistency,
+    - statistical quality gates,
+    - failure-domain/degraded-mode contract,
+    - parser/model/index epoch governance.
+  - Added independent review artifact `coordination/reviews/rag-generalized-architecture-v2-review-2026-03-05.md` with PASS verdict and residual SHOULD-FIX notes.
+  - Synchronized `coordination/tasks.jsonl` and `coordination/cycle-contract.json` for this design cycle.
+- verification:
+  - design/review artifact presence confirmed via file checks.
+  - no code build/test executed (docs-only cycle).
+- next step:
+  - wait for user approval token on new design revision and proceed to implementation planning if approved.

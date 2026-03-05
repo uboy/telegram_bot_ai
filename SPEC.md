@@ -42,6 +42,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
   - In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
   - In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
+  - On explicit re-entry to KB search mode ("🔍 Поиск в базе знаний"), stale pending/queued KB queries from previous session are dropped to prevent orphan/out-of-context answers.
   - ASR visibility control: users can toggle technical metadata display in their settings.
   - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
   - **GPU Acceleration: automatic detection and utilization of NVIDIA GPUs (RTX 3090 support) inside Docker containers.**
@@ -64,6 +65,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - For definition-style questions ("что такое", "как определяется", "что включает"), ranking prioritizes explicit definitional fragments.
   - For questions with explicit clause references ("пункт N"), retrieval additionally prioritizes chunks containing numeric section markers (`N.`) and `пункт N`.
   - For factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points.
+  - For metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing to reduce false "no information" responses when target clause exists.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers.
   - Sanitize command snippets not present in KB context.
@@ -125,6 +127,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - RAG query response includes `request_id`, and retrieval diagnostics are available via `GET /api/v1/rag/diagnostics/{request_id}`.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
+- Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
 - ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
 - **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**

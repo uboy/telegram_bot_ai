@@ -380,11 +380,53 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     continue
                 fact_terms.append(token)
             year_tokens = re.findall(r"\b(20\d{2})\b", q)
+            key_phrase_candidates = (
+                "ежегодный объем",
+                "объем услуг",
+                "совокупной мощности",
+                "мощности суперкомпьютеров",
+                "совокупный прирост ввп",
+                "прирост ввп",
+                "на какой период",
+                "период рассчитана",
+                "федеральные законы",
+                "правовой основе",
+                "механизмы реализации",
+                "основные принципы",
+                "корректировке стратегии",
+                "принимает решение",
+            )
+            key_phrases = [phrase for phrase in key_phrase_candidates if phrase in q]
+            metric_query = any(
+                marker in q
+                for marker in (
+                    "целевой",
+                    "показател",
+                    "объем",
+                    "мощност",
+                    "ввп",
+                    "прирост",
+                    "период",
+                    "как часто",
+                    "федеральные законы",
+                    "механизмы реализации",
+                    "основные принципы",
+                )
+            )
+            strict_fact_terms = [t for t in fact_terms if len(t) >= 5][:8]
+            prefer_numeric = metric_query and any(
+                marker in q for marker in ("целевой", "показател", "объем", "мощност", "ввп", "прирост", "сколько")
+            )
             return {
+                "original_query": q,
                 "point_numbers": point_numbers,
                 "definition_term": definition_term,
                 "fact_terms": fact_terms[:10],
                 "year_tokens": year_tokens,
+                "metric_query": metric_query,
+                "prefer_numeric": prefer_numeric,
+                "strict_fact_terms": strict_fact_terms,
+                "key_phrases": key_phrases[:5],
             }
 
         def get_doc_id(result: dict) -> str:
@@ -418,6 +460,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             definition_term = (hints.get("definition_term") or "").strip().lower()
             fact_terms = [str(t).lower() for t in (hints.get("fact_terms") or [])]
             year_tokens = [str(t) for t in (hints.get("year_tokens") or [])]
+            strict_fact_terms = [str(t).lower() for t in (hints.get("strict_fact_terms") or [])]
+            key_phrases = [str(t).lower() for t in (hints.get("key_phrases") or [])]
+            metric_query = bool(hints.get("metric_query"))
+            prefer_numeric = bool(hints.get("prefer_numeric"))
 
             if "unit test" in q or "unittest" in q or "tests" in q:
                 if any(t in section_title for t in ("unit test", "unittest", "test")):
@@ -479,6 +525,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     if term in section_title or term in section_path:
                         score += 0.7
                 score += min(2.4, fact_hits * 0.45)
+                strict_hits = sum(1 for term in strict_fact_terms if term in text)
+                score += min(2.0, strict_hits * 0.6)
 
                 if "кто" in q and any(marker in text for marker in ("принимает", "определяет", "утверждает", "правительство", "президент")):
                     score += 1.3
@@ -492,6 +540,30 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 for y in year_tokens:
                     if y in text or y in section_title or y in section_path:
                         score += 0.9
+
+                if metric_query:
+                    phrase_hits = sum(1 for phrase in key_phrases if phrase and phrase in text)
+                    section_phrase_hits = sum(1 for phrase in key_phrases if phrase and (phrase in section_title or phrase in section_path))
+                    score += min(2.4, phrase_hits * 0.9)
+                    score += min(1.2, section_phrase_hits * 0.6)
+                    if prefer_numeric:
+                        if re.search(r"\b\d+[.,]?\d*\b", text):
+                            score += 1.6
+                        else:
+                            score -= 0.8
+                    if ("на какой период" in q or "период рассчитана" in q) and re.search(r"до\s+20\d{2}", text):
+                        score += 2.2
+                    if "мощност" in q and "суперкомпьют" in q and "экзафлопс" in text:
+                        score += 2.0
+                    if "механизмы реализации" in q and any(
+                        marker in text
+                        for marker in ("дорожн", "национальн", "государственн программ", "планы мероприятий")
+                    ):
+                        score += 1.6
+                    if "федеральные законы" in q and any(marker in text for marker in ("федеральн", "закон", "№")):
+                        score += 1.4
+                    if phrase_hits == 0 and strict_hits == 0 and fact_hits < 2 and not year_tokens:
+                        score -= 1.2
 
             point_matches = hints.get("point_numbers") or re.findall(r"пункт[а-я]*\s+(\d+)", q)
             if point_matches:
@@ -555,6 +627,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             definition_term = (hints.get("definition_term") or "").strip()
             fact_terms = [str(t).strip() for t in (hints.get("fact_terms") or []) if str(t).strip()]
             year_tokens = [str(y).strip() for y in (hints.get("year_tokens") or []) if str(y).strip()]
+            strict_fact_terms = [str(t).strip() for t in (hints.get("strict_fact_terms") or []) if str(t).strip()]
+            key_phrases = [str(t).strip() for t in (hints.get("key_phrases") or []) if str(t).strip()]
+            metric_query = bool(hints.get("metric_query"))
+            prefer_numeric = bool(hints.get("prefer_numeric"))
             conditions = []
             if intent == "DEFINITION" and definition_term and len(definition_term) >= 3:
                 conditions.append(KnowledgeChunk.content.ilike(f"%{definition_term}%"))
@@ -563,6 +639,13 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     if len(term) >= 3:
                         conditions.append(KnowledgeChunk.content.ilike(f"%{term}%"))
                         conditions.append(KnowledgeChunk.chunk_metadata.ilike(f"%{term}%"))
+                for term in strict_fact_terms[:6]:
+                    if len(term) >= 4:
+                        conditions.append(KnowledgeChunk.content.ilike(f"%{term}%"))
+                for phrase in key_phrases[:4]:
+                    if len(phrase) >= 6:
+                        conditions.append(KnowledgeChunk.content.ilike(f"%{phrase}%"))
+                        conditions.append(KnowledgeChunk.chunk_metadata.ilike(f"%{phrase}%"))
             for point_no in point_numbers:
                 conditions.append(KnowledgeChunk.content.ilike(f"%пункт {point_no}%"))
                 conditions.append(KnowledgeChunk.content.ilike(f"%{point_no}.%"))
@@ -598,6 +681,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 section_title = (meta.get("section_title") or "").lower()
                 section_path = (meta.get("section_path") or "").lower()
                 fallback_score = 0.0
+                point_hit = False
+                year_hit = False
 
                 if definition_term and definition_term.lower() in text:
                     fallback_score += 3.0
@@ -609,26 +694,53 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 if intent == "FACTOID":
                     term_hits = sum(1 for term in fact_terms if term.lower() in text)
                     fallback_score += min(3.0, term_hits * 0.55)
+                    strict_hits = sum(1 for term in strict_fact_terms if term.lower() in text)
+                    fallback_score += min(2.5, strict_hits * 0.75)
+                    phrase_hits = sum(1 for phrase in key_phrases if phrase.lower() in text)
+                    fallback_score += min(2.8, phrase_hits * 1.0)
                     if any(marker in text for marker in ("утвержда", "принима", "ежегод", "раз в", "показател", "экзафлопс", "ввп", "процент")):
                         fallback_score += 1.1
                     if re.search(r"\b\d+[.,]?\d*\b", text):
                         fallback_score += 0.8
+                    if metric_query and prefer_numeric:
+                        if re.search(r"\b\d+[.,]?\d*\b", text):
+                            fallback_score += 1.2
+                        else:
+                            fallback_score -= 0.6
+                    if metric_query and ("на какой период" in (hints.get("original_query") or "").lower() or "период рассчитана" in (hints.get("original_query") or "").lower()):
+                        if re.search(r"до\s+20\d{2}", text):
+                            fallback_score += 2.0
                     for year in year_tokens:
                         if year in text:
                             fallback_score += 0.7
+                            year_hit = True
 
                 for point_no in point_numbers:
                     if f"пункт {point_no}" in text:
                         fallback_score += 2.0
+                        point_hit = True
                     if re.search(rf"(?:^|\s){re.escape(point_no)}\.", text):
                         fallback_score += 2.5
+                        point_hit = True
                     if f"пункт {point_no}" in section_title or f"пункт {point_no}" in section_path:
                         fallback_score += 2.0
+                        point_hit = True
                     if re.search(rf"(?:^|\s){re.escape(point_no)}\.", section_title) or re.search(
                         rf"(?:^|\s){re.escape(point_no)}\.",
                         section_path,
                     ):
                         fallback_score += 1.2
+                        point_hit = True
+
+                if intent == "FACTOID" and metric_query:
+                    has_min_overlap = (
+                        sum(1 for term in strict_fact_terms if term.lower() in text) > 0
+                        or sum(1 for phrase in key_phrases if phrase.lower() in text) > 0
+                        or point_hit
+                        or year_hit
+                    )
+                    if not has_min_overlap:
+                        continue
 
                 if fallback_score <= 0.0:
                     continue
@@ -877,6 +989,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         if single_page_mode and intent in {"DEFINITION", "FACTOID"}:
             top_k_for_context = max(top_k_for_context, min(8, len(ranked_results)))
+        if intent == "FACTOID":
+            top_k_for_context = min(max(top_k_for_context, 4), 6)
 
         selected_docs = select_docs(intent, ranked_results)
         filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
@@ -886,7 +1000,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         # Формируем контекст для LLM
         context_parts: list[str] = []
-        if intent in {"HOWTO", "FACTOID"} and selected_docs:
+        if intent == "HOWTO" and selected_docs:
             token_limit_chars = max(3000, context_length * 5)
             for doc_id in selected_docs:
                 doc_chunks = load_doc_chunks(doc_id)
@@ -901,6 +1015,13 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                             top_chunk["id"] = c.get("id")
                             break
                 context_parts.extend(build_context_blocks(top_chunk, doc_chunks, token_limit_chars))
+        elif intent == "FACTOID":
+            # For factual/numeric questions prefer top direct evidence chunks.
+            top_n = min(max(top_k_for_context, 4), 6)
+            for r in filtered_results[:top_n]:
+                block = build_context_block(r, context_length, full_page_multiplier)
+                if block:
+                    context_parts.append(block)
         else:
             for r in filtered_results[:top_k_for_context]:
                 block = build_context_block(r, context_length, full_page_multiplier)

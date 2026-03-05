@@ -247,6 +247,35 @@ def _get_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> list[dict[str, An
     return context.user_data.setdefault("kb_query_queue", [])
 
 
+def _next_kb_query_session_id(context: ContextTypes.DEFAULT_TYPE) -> int:
+    current = int(context.user_data.get("kb_query_session_id", 0) or 0)
+    current += 1
+    context.user_data["kb_query_session_id"] = current
+    return current
+
+
+async def _reset_kb_query_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Drop stale pending items from previous KB selection flows.
+    context.user_data.pop("pending_queries", None)
+    context.user_data.pop("pending_query", None)
+
+    queue = context.user_data.get("kb_query_queue")
+    if isinstance(queue, list):
+        queue.clear()
+
+    worker = context.user_data.get("kb_query_worker")
+    if worker and hasattr(worker, "done") and not worker.done():
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+    context.user_data["kb_query_worker"] = None
+    _next_kb_query_session_id(context)
+
+
 async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         while True:
@@ -255,6 +284,11 @@ async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
                 break
 
             item = queue.pop(0)
+            active_session_id = int(context.user_data.get("kb_query_session_id", 0) or 0)
+            item_session_id = int(item.get("session_id", active_session_id) or 0)
+            if item_session_id != active_session_id:
+                continue
+
             message = item.get("message")
             query = (item.get("query") or "").strip()
             kb_id = item.get("kb_id")
@@ -299,6 +333,7 @@ async def _enqueue_kb_query(
     filters: dict | None = None,
 ) -> int:
     queue = _get_kb_query_queue(context)
+    session_id = int(context.user_data.get("kb_query_session_id", 0) or 0)
     queue.append(
         {
             "message": message,
@@ -307,6 +342,7 @@ async def _enqueue_kb_query(
             "kb_id": int(kb_id),
             "user": user,
             "filters": dict(filters or {}),
+            "session_id": session_id,
         }
     )
     position = len(queue)
@@ -994,6 +1030,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get('state')
 
     if text_input == "🔍 Поиск в базе знаний":
+        await _reset_kb_query_state(context)
         context.user_data['state'] = 'waiting_query'
         await update.message.reply_text("🔍 Введите запрос для поиска:")
         return
