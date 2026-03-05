@@ -61,3 +61,6 @@
 {"id":"RAGOUT-024","title":"Implement legacy-vs-v4 real-API comparison script with summary deltas and optional source-hit fail gate","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-025","title":"Add focused tests for diagnostics orchestrator marker and comparator helper logic","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-026","title":"Sync docs/spec/traceability and produce Phase D observability+compare review artifact","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-027","title":"Add host-ready docker wrapper script for one-command legacy-v4 compare run","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-028","title":"Document wrapper compare script usage in usage/ops/testing guides","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
+{"id":"RAGOUT-029","title":"Produce review artifact and sync coordination state for compare wrapper rollout","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}

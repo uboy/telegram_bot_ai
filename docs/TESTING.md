@@ -36,6 +36,9 @@
 
 # RAG diagnostics + orchestrator compare tooling
 .venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_diagnostics.py tests/test_rag_orchestrator_compare.py
+
+# Docker stack one-command legacy vs v4 compare
+bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10
 ```
 
 ## CI Smoke Recommendation

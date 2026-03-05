@@ -498,3 +498,19 @@
   - Added review report `coordination/reviews/rag-outbox-phase-d2-2026-03-05.md`.
 - next step:
   - execute comparator on target host with real API for legacy/v4 and decide production cutover policy threshold.
+
+## 2026-03-05 Phase D wrapper script snapshot
+- task: RAGOUT-027..029
+- implementation:
+  - added host-ready wrapper `scripts/run_rag_compare_stack.sh` for one-command compare run in default docker stack,
+  - wrapper starts temporary v4 backend, waits for health, runs comparator from legacy container, writes report to mounted `/app/data`.
+- docs:
+  - updated `docs/USAGE.md`, `docs/OPERATIONS.md`, `docs/TESTING.md` with wrapper command examples.
+- verification:
+  - `python -m py_compile scripts/rag_orchestrator_compare.py tests/test_rag_orchestrator_compare.py` -> PASS
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- review:
+  - added `coordination/reviews/rag-outbox-phase-d3-2026-03-05.md`.
+- next step:
+  - user executes `bash scripts/run_rag_compare_stack.sh` on target host and shares report for cutover decision.

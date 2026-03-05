@@ -169,3 +169,15 @@ python scripts/rag_orchestrator_compare.py ^
 ```bash
 python scripts/rag_orchestrator_compare.py --legacy-base-url http://legacy-host:8000 --v4-base-url http://v4-host:8000 --api-key <API_KEY> --kb-id <KB_ID> --max-source-hit-drop 0.10
 ```
+
+Для docker-стека этого репозитория (одной командой, без ручного запуска второго backend):
+
+```bash
+bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10
+```
+
+Опционально указать конкретную БЗ:
+
+```bash
+bash scripts/run_rag_compare_stack.sh --kb-id 1 --max-source-hit-drop 0.10
+```

@@ -1,5 +1,5 @@
 {
-  "task_id": "RAGOUT-026",
+  "task_id": "RAGOUT-029",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
@@ -7,23 +7,12 @@
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "backend/api/routes/rag.py",
-    "backend/schemas/rag.py",
-    "shared/config.py",
-    "env.template",
-    "tests/test_rag_query_definition_intent.py",
-    "tests/test_rag_diagnostics.py",
-    "tests/test_rag_orchestrator_compare.py",
+    "scripts/run_rag_compare_stack.sh",
     "scripts/rag_orchestrator_compare.py",
-    "SPEC.md",
-    "docs/REQUIREMENTS_TRACEABILITY.md",
-    "docs/design/rag-generalized-architecture-v2.md",
     "docs/OPERATIONS.md",
-    "docs/CONFIGURATION.md",
     "docs/USAGE.md",
-    "docs/API_REFERENCE.md",
     "docs/TESTING.md",
-    "coordination/reviews/rag-outbox-phase-d2-2026-03-05.md",
+    "coordination/reviews/rag-outbox-phase-d3-2026-03-05.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"

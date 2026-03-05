@@ -135,6 +135,10 @@ Use comparator script against two running backend instances:
 - Optional gate:
   - `--max-source-hit-drop 0.10` fails run if `v4` loses more than 10pp `source_hit_rate` vs legacy.
 
+For the default docker-compose stack, use wrapper script:
+- `bash scripts/run_rag_compare_stack.sh --max-source-hit-drop 0.10`
+- report path (host): `./data/rag_compare_report.json`
+
 ## Container Runtime Notes
 
 - Redis: on some Docker runtimes container-level `sysctls` are not allowed.  
