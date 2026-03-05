@@ -52,6 +52,7 @@ bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --co
 
 Note: wrapper auto-starts `backend redis qdrant` when `telegram_rag_backend` is not running.
 Note: wrapper fails by default when retrieval selected-context rate is near zero (`--min-selected-rate 0.01`).
+Note: with `--prepare-test-kb`, wrapper auto-generates cases from the uploaded PDF unless `--no-auto-cases` is passed.
 
 ## CI Smoke Recommendation
 

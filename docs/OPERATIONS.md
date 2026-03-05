@@ -141,6 +141,8 @@ For the default docker-compose stack, use wrapper script:
 - wrapper auto-starts `backend redis qdrant` if legacy backend container is absent
 - auto-prepare test KB from `test.pdf` in repo root:
   - `bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10`
+- when `--prepare-test-kb` is used, wrapper auto-generates eval cases from uploaded PDF chunks by default
+  - disable with `--no-auto-cases` or override with explicit `--cases-file <path>`
 - by default temporary `v4` is started with `RAG_DEVICE=cpu`; override if needed:
   - `bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10`
 - comparator network retry tuning (useful on first cold model load):

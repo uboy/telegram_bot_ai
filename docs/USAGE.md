@@ -192,6 +192,8 @@ bash scripts/run_rag_compare_stack.sh --kb-id 1 --max-source-hit-drop 0.10
 bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
 ```
 
+В режиме `--prepare-test-kb` wrapper по умолчанию генерирует eval-кейсы из чанков загруженного PDF (чтобы избежать пустых сравнений из несоответствующего `tests/rag_eval.yaml`). Отключение: `--no-auto-cases`.
+
 Если `v4` поднимается медленно (первичная загрузка моделей), увеличьте сетевые retry comparator:
 
 ```bash

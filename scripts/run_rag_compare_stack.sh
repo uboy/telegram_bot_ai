@@ -15,6 +15,7 @@ API_PREFIX=""
 KB_ID=""
 MAX_DROP="0.10"
 CASES_FILE_HOST="tests/rag_eval.yaml"
+CASES_FILE_CONTAINER="/tmp/rag_eval.yaml"
 REPORT_PATH_CONTAINER="/app/data/rag_compare_report.json"
 KEEP_V4="false"
 PRINT_JSON="true"
@@ -27,6 +28,10 @@ TEST_PDF_HOST="test.pdf"
 TEST_PDF_CONTAINER="/tmp/rag_compare_test.pdf"
 JOB_TIMEOUT_SEC="600"
 JOB_POLL_SEC="2"
+AUTO_CASES_FROM_PREPARED_KB="true"
+AUTO_CASES_MAX="5"
+AUTO_CASES_SCAN_LIMIT="200"
+CASES_FILE_EXPLICIT="false"
 COMPARE_CONNECT_RETRIES="120"
 COMPARE_RETRY_SLEEP_SEC="1.0"
 COMPARE_MIN_SELECTED_RATE="0.01"
@@ -50,6 +55,9 @@ Options:
   --test-pdf <path>              Host path to PDF for --prepare-test-kb (default: test.pdf)
   --job-timeout-sec <sec>        Wait timeout for ingestion job (default: 600)
   --job-poll-sec <sec>           Poll interval for ingestion job (default: 2)
+  --no-auto-cases                Disable auto-generation of eval cases from prepared KB
+  --auto-cases-max <int>         Number of auto-generated cases (default: 5)
+  --auto-cases-scan-limit <int>  Max chunks scanned for auto-cases (default: 200)
   --connect-retries <int>        HTTP connect retries for comparator (default: 120)
   --retry-sleep-sec <float>      Sleep between comparator retries (default: 1.0)
   --min-selected-rate <float>    Min selected-context rate per mode (default: 0.01)
@@ -66,6 +74,7 @@ Examples:
   bash scripts/run_rag_compare_stack.sh --v4-rag-device cuda --max-source-hit-drop 0.10
   bash scripts/run_rag_compare_stack.sh --compose-services "backend redis qdrant" --max-source-hit-drop 0.10
   bash scripts/run_rag_compare_stack.sh --prepare-test-kb --test-pdf test.pdf --max-source-hit-drop 0.10
+  bash scripts/run_rag_compare_stack.sh --prepare-test-kb --auto-cases-max 8 --max-source-hit-drop 0.10
 EOF
 }
 
@@ -123,6 +132,18 @@ while [[ $# -gt 0 ]]; do
       JOB_POLL_SEC="$2"
       shift 2
       ;;
+    --no-auto-cases)
+      AUTO_CASES_FROM_PREPARED_KB="false"
+      shift
+      ;;
+    --auto-cases-max)
+      AUTO_CASES_MAX="$2"
+      shift 2
+      ;;
+    --auto-cases-scan-limit)
+      AUTO_CASES_SCAN_LIMIT="$2"
+      shift 2
+      ;;
     --connect-retries)
       COMPARE_CONNECT_RETRIES="$2"
       shift 2
@@ -137,6 +158,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cases-file)
       CASES_FILE_HOST="$2"
+      CASES_FILE_EXPLICIT="true"
       shift 2
       ;;
     --report-path)
@@ -257,6 +279,14 @@ if ! [[ "$COMPARE_RETRY_SLEEP_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 fi
 if ! [[ "$COMPARE_MIN_SELECTED_RATE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "ERROR: --min-selected-rate must be numeric (got '$COMPARE_MIN_SELECTED_RATE')" >&2
+  exit 2
+fi
+if ! [[ "$AUTO_CASES_MAX" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --auto-cases-max must be integer (got '$AUTO_CASES_MAX')" >&2
+  exit 2
+fi
+if ! [[ "$AUTO_CASES_SCAN_LIMIT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --auto-cases-scan-limit must be integer (got '$AUTO_CASES_SCAN_LIMIT')" >&2
   exit 2
 fi
 
@@ -403,16 +433,46 @@ if [[ "$PREPARE_TEST_KB" == "true" ]]; then
   fi
   KB_ID="$PREP_KB_ID"
   echo "[INFO] prepared test KB id: $KB_ID"
-fi
 
-if [[ ! -f "$CASES_FILE_HOST" ]]; then
-  echo "[WARN] cases file not found on host: $CASES_FILE_HOST"
-  echo "[WARN] comparator will fail if no fallback cases are provided."
+  if [[ "$AUTO_CASES_FROM_PREPARED_KB" == "true" && "$CASES_FILE_EXPLICIT" != "true" ]]; then
+    echo "[INFO] generating eval cases from prepared KB..."
+    docker cp scripts/rag_generate_cases_from_kb.py "$LEGACY_CONTAINER:/tmp/rag_generate_cases_from_kb.py"
+    AUTO_CASES_OUT="/tmp/rag_eval_generated.json"
+    PDF_BASENAME="$(basename "$TEST_PDF_HOST")"
+    set +e
+    CASES_OUTPUT="$(docker exec \
+      "$LEGACY_CONTAINER" \
+      python /tmp/rag_generate_cases_from_kb.py \
+        --kb-id "$KB_ID" \
+        --out "$AUTO_CASES_OUT" \
+        --source-like "$PDF_BASENAME" \
+        --max-cases "$AUTO_CASES_MAX" \
+        --scan-limit "$AUTO_CASES_SCAN_LIMIT" 2>&1
+)"
+    cases_exit=$?
+    set -e
+    printf '%s\n' "$CASES_OUTPUT"
+    if [[ $cases_exit -ne 0 ]]; then
+      echo "ERROR: failed to auto-generate cases from prepared KB (exit=$cases_exit)." >&2
+      exit "$cases_exit"
+    fi
+    CASES_FILE_CONTAINER="$(printf '%s\n' "$CASES_OUTPUT" | tr -d '\r' | sed -n 's#.*CASES_FILE=\(.*\)#\1#p' | tail -n1)"
+    if [[ -z "$CASES_FILE_CONTAINER" ]]; then
+      echo "ERROR: failed to parse CASES_FILE from auto-cases output." >&2
+      exit 2
+    fi
+    echo "[INFO] using auto-generated cases file: $CASES_FILE_CONTAINER"
+  fi
 fi
 
 docker cp scripts/rag_orchestrator_compare.py "$LEGACY_CONTAINER:/tmp/rag_orchestrator_compare.py"
-if [[ -f "$CASES_FILE_HOST" ]]; then
-  docker cp "$CASES_FILE_HOST" "$LEGACY_CONTAINER:/tmp/rag_eval.yaml"
+if [[ "$CASES_FILE_CONTAINER" == "/tmp/rag_eval.yaml" ]]; then
+  if [[ ! -f "$CASES_FILE_HOST" ]]; then
+    echo "[WARN] cases file not found on host: $CASES_FILE_HOST"
+    echo "[WARN] comparator will fail if no fallback cases are provided."
+  else
+    docker cp "$CASES_FILE_HOST" "$LEGACY_CONTAINER:/tmp/rag_eval.yaml"
+  fi
 fi
 
 echo "[INFO] running comparator..."
@@ -424,7 +484,7 @@ CMD=(
   --connect-retries "$COMPARE_CONNECT_RETRIES"
   --retry-sleep-sec "$COMPARE_RETRY_SLEEP_SEC"
   --min-selected-rate "$COMPARE_MIN_SELECTED_RATE"
-  --cases-file /tmp/rag_eval.yaml
+  --cases-file "$CASES_FILE_CONTAINER"
   --json-out "$REPORT_PATH_CONTAINER"
   --max-source-hit-drop "$MAX_DROP"
 )
