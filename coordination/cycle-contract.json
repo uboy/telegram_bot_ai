@@ -1,23 +1,23 @@
 {
-  "task_id": "RAGQLTY-002",
+  "task_id": "RAGQLTY-003",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py",
+    "python -m py_compile scripts/rag_eval_baseline_runner.py tests/test_rag_eval_baseline_runner.py backend/services/rag_eval_service.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "tests/data/rag_eval_ready_data_v1.yaml",
-    "tests/test_rag_eval_dataset_contract.py",
-    "backend/services/rag_eval_service.py",
-    "docs/design/rag-eval-ready-corpus-v1.md",
+    "scripts/rag_eval_baseline_runner.py",
+    "tests/test_rag_eval_baseline_runner.py",
+    "docs/design/rag-eval-baseline-runner-v1.md",
     "docs/design/rag-general-quality-program-v1.md",
     "SPEC.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
     "docs/USAGE.md",
-    "coordination/reviews/ragqlty-p0-2-ready-corpus-2026-03-06.md",
+    "docs/OPERATIONS.md",
+    "coordination/reviews/ragqlty-p0-3-baseline-runner-2026-03-06.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"

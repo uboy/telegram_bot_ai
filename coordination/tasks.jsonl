@@ -72,7 +72,7 @@
 {"id":"WIKIBUG-005","title":"Harden wiki crawl completeness for Gitee JS navigation via git-loader fallback with regression tests","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-001","title":"P0-1 define generalized RAG quality metrics and acceptance thresholds","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-002","title":"P0-2 add fixed ready-data regression corpus for RAG evaluation","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-003","title":"P0-3 implement evaluation runner and baseline quality report artifact","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-003","title":"P0-3 implement evaluation runner and baseline quality report artifact","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-004","title":"P0-4 implement threshold-based quality gate integrated with test workflow","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-005","title":"P1-1 normalize ingestion metadata contract across all loaders","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-006","title":"P1-2 harden markdown/code chunk metadata consistency","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}

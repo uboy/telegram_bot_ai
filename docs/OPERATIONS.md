@@ -120,18 +120,21 @@ Main knobs:
 
 - Launch eval run: `POST /api/v1/rag/eval/run`
 - Check run status/results: `GET /api/v1/rag/eval/{run_id}`
-- Default suite file: `tests/rag_eval.yaml` (override with `RAG_EVAL_SUITE_FILE`)
+- Default suite file: `tests/data/rag_eval_ready_data_v1.yaml` (override with `RAG_EVAL_SUITE_FILE`)
 - Threshold knobs:
   - `RAG_EVAL_THRESHOLD_RECALL_AT10`
   - `RAG_EVAL_THRESHOLD_MRR_AT10`
   - `RAG_EVAL_THRESHOLD_NDCG_AT10`
 - Apply quality gate for completed run:
   - `python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json`
+- Produce baseline artifacts (JSON + Markdown):
+  - `python scripts/rag_eval_baseline_runner.py --suite rag-general-v1 --label baseline_v1 --out-dir data/rag_eval_baseline`
+  - outputs include timestamped reports and `data/rag_eval_baseline/latest.{json,md}` snapshots.
 
 ## Legacy vs v4 Compare Run
 
 Use comparator script against two running backend instances:
-- `python scripts/rag_orchestrator_compare.py --legacy-base-url <legacy_url> --v4-base-url <v4_url> --api-key <API_KEY> --kb-id <KB_ID> --cases-file tests/rag_eval.yaml --json-out data/rag_compare_report.json`
+- `python scripts/rag_orchestrator_compare.py --legacy-base-url <legacy_url> --v4-base-url <v4_url> --api-key <API_KEY> --kb-id <KB_ID> --cases-file tests/data/rag_eval_ready_data_v1.yaml --json-out data/rag_compare_report.json`
 - Optional gate:
   - `--max-source-hit-drop 0.10` fails run if `v4` loses more than 10pp `source_hit_rate` vs legacy.
 

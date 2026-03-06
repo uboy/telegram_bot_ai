@@ -633,3 +633,21 @@
   - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py` -> PASS (`6 passed`)
   - `python scripts/scan_secrets.py` -> PASS
   - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-06 RAGQLTY-003 completion snapshot (P0-3)
+- step:
+  - implement baseline eval runner and persist report artifacts.
+- implementation:
+  - added CLI runner `scripts/rag_eval_baseline_runner.py`.
+  - runner writes timestamped JSON/Markdown reports and `latest.{json,md}` snapshots.
+  - added tests `tests/test_rag_eval_baseline_runner.py`.
+- docs/spec:
+  - added design note `docs/design/rag-eval-baseline-runner-v1.md`.
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/USAGE.md`, `docs/OPERATIONS.md`.
+  - updated quality program artifact map in `docs/design/rag-general-quality-program-v1.md`.
+  - added review artifact `coordination/reviews/ragqlty-p0-3-baseline-runner-2026-03-06.md`.
+- verification:
+  - `python -m py_compile scripts/rag_eval_baseline_runner.py tests/test_rag_eval_baseline_runner.py backend/services/rag_eval_service.py` -> PASS
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py` -> PASS (`8 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS

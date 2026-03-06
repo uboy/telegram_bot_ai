@@ -55,6 +55,9 @@ P0-1 artifact:
 P0-2 artifact:
 - `docs/design/rag-eval-ready-corpus-v1.md`.
 
+P0-3 artifact:
+- `docs/design/rag-eval-baseline-runner-v1.md`.
+
 ### Phase 1 - Ingestion Metadata Quality
 - Step P1-1: normalize metadata contract across all loaders.
 - Step P1-2: harden markdown/code chunk metadata consistency.
