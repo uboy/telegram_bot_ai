@@ -147,23 +147,39 @@ def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) 
     
     ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
 
-    def _format_source_html(source_path: str, source_type: str, index: int) -> str:
+    def _format_source_html(s: dict, index: int) -> str:
+        source_path = s.get("source_path") or ""
+        source_type = s.get("source_type", "unknown")
+        page_number = s.get("page_number")
+        section_title = (s.get("section_title") or "").strip()
+
         is_url = source_type == "web" or source_path.startswith(("http://", "https://"))
         if is_url:
             url_escaped = escape(source_path, quote=True)
             display_url = normalize_wiki_url_for_display(source_path) or source_path
             return f'{index}. <a href="{url_escaped}">{escape(display_url)}</a>'
-        
+
         f_name = source_path.split("/")[-1].split("::")[-1]
+        location_parts = []
+        if page_number:
+            location_parts.append(f"стр. {page_number}")
+        if section_title:
+            location_parts.append(section_title)
+        location = ", ".join(location_parts)
+        if location:
+            return f"{index}. <code>{escape(f_name)}</code> — {escape(location)}"
         return f"{index}. <code>{escape(f_name)}</code>"
 
     sources_html_list = []
-    seen_paths = set()
-    for i, s in enumerate(backend_sources, 1):
+    seen_sources: set = set()
+    for s in backend_sources:
         path = s.get("source_path") or ""
-        if not path or path.lower() in seen_paths: continue
-        seen_paths.add(path.lower())
-        sources_html_list.append(_format_source_html(path, s.get("source_type", "unknown"), i))
+        page = s.get("page_number")
+        key = (path.lower(), page)
+        if not path or key in seen_sources:
+            continue
+        seen_sources.add(key)
+        sources_html_list.append(_format_source_html(s, len(sources_html_list) + 1))
 
     if sources_html_list:
         sources_html = "\n".join(f"• {s}" for s in sources_html_list)

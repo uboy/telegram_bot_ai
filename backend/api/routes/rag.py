@@ -1170,14 +1170,31 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         # Собираем список источников для ответа
         sources: list[RAGSource] = []
+        seen_source_keys: set = set()
         for chunk in filtered_results:
             try:
                 metadata = chunk.get("metadata") or {}
+                _page = metadata.get("page")
+                _page = _page if isinstance(_page, int) else None
+                _section = (
+                    metadata.get("section_title")
+                    or metadata.get("section_path")
+                    or chunk.get("title")
+                    or None
+                )
+                _path = chunk.get("source_path") or metadata.get("source_path") or ""
+                _type = chunk.get("source_type") or metadata.get("source_type") or ""
+                _key = (_path.lower(), _page)
+                if _key in seen_source_keys:
+                    continue
+                seen_source_keys.add(_key)
                 sources.append(
                     RAGSource(
-                        source_path=chunk.get("source_path") or metadata.get("source_path") or "",
-                        source_type=chunk.get("source_type") or metadata.get("source_type") or "",
-                        score=float(chunk.get("distance", 0.0)),
+                        source_path=_path,
+                        source_type=_type,
+                        score=float(chunk.get("rerank_score") or chunk.get("distance", 0.0)),
+                        page_number=_page,
+                        section_title=_section,
                     )
                 )
             except (ValueError, TypeError) as e:
@@ -1446,10 +1463,24 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
         context_parts.append(content[:1500])
         sp = r.get("source_path") or ""
         st = r.get("source_type") or "unknown"
-        key = (sp, st)
+        _rmeta = r.get("metadata") or {}
+        _rpage = _rmeta.get("page")
+        _rpage = _rpage if isinstance(_rpage, int) else None
+        _rsection = (
+            _rmeta.get("section_title")
+            or _rmeta.get("section_path")
+            or r.get("title")
+            or None
+        )
+        key = (sp, _rpage)
         if sp and key not in seen:
             seen.add(key)
-            sources.append(RAGSource(source_path=sp, source_type=st, score=float(r.get("rerank_score") or 0.0)))
+            sources.append(RAGSource(
+                source_path=sp, source_type=st,
+                score=float(r.get("rerank_score") or 0.0),
+                page_number=_rpage,
+                section_title=_rsection,
+            ))
 
     context_text = "\n\n".join(context_parts)
 

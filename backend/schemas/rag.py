@@ -19,6 +19,8 @@ class RAGSource(BaseModel):
     source_path: str
     source_type: str
     score: float
+    page_number: Optional[int] = None
+    section_title: Optional[str] = None
 
 
 class RAGAnswer(BaseModel):
