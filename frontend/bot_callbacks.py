@@ -2045,32 +2045,57 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     
     # Настройки ИИ
     if data == 'admin_ai':
-        from shared.config import OLLAMA_MODEL
-        providers = ai_manager.list_providers()
-        current = ai_manager.current_provider or 'ollama'
-        provider_obj = ai_manager.get_provider(current)
-
-        # Текущая текстовая модель (in-memory состояние)
-        text_model = getattr(provider_obj, 'model', None) or ''
-        env_model = OLLAMA_MODEL or ''
-
-        lines = ["🔧 <b>Настройки ИИ</b>\n"]
-        lines.append(f"⚡ <b>Провайдер:</b> <code>{current}</code>")
-        if text_model:
-            lines.append(f"💬 <b>Модель текста:</b> <code>{text_model}</code>")
-        if env_model and env_model != text_model:
-            lines.append(f"📋 <b>Дефолт (.env):</b> <code>{env_model}</code> ⚠️ отличается от текущей")
-        elif env_model:
-            lines.append(f"📋 <b>Дефолт (.env):</b> <code>{env_model}</code>")
-        lines.append(f"\n🖼️ <b>Модель изображений:</b> задаётся пользователем (Ollama)")
-        lines.append(f"🌐 <b>Доступные провайдеры:</b> {', '.join(providers) if providers else '—'}")
-        lines.append(
-            "\n<i>Текстовая/image модели — индивидуальные настройки каждого пользователя.\n"
-            "RAG-модели — в разделе «Настройки RAG».</i>"
+        from shared.config import (
+            OLLAMA_MODEL,
+            RAG_MODEL_NAME, RAG_RERANK_MODEL, RAG_ENABLE_RERANK,
+            RAG_BACKEND, RAG_ORCHESTRATOR_V4,
+            RAG_MAX_CANDIDATES, RAG_TOP_K, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP,
+            RAG_CONTEXT_LENGTH, RAG_MIN_RERANK_SCORE, RAG_DEVICE,
         )
+        try:
+            from shared.rag_system import HAS_PYMORPHY
+        except Exception:
+            HAS_PYMORPHY = False
 
-        text = "\n".join(lines)
-        await safe_edit_message_text(query, text, reply_markup=ai_providers_menu(providers, current), parse_mode='HTML')
+        providers = ai_manager.list_providers()
+        # Личные настройки текущего пользователя (из БД, уже загружены выше)
+        my_provider = preferred_provider or ai_manager.current_provider or 'ollama'
+        provider_obj = ai_manager.get_provider(my_provider)
+        env_model = OLLAMA_MODEL or ''
+        # preferred_model из БД — личный выбор пользователя; если не задан — берём из провайдера
+        my_text_model = preferred_model or getattr(provider_obj, 'model', None) or env_model
+        my_image_model = preferred_image_model or ''
+
+        # RAG labels
+        rag_backend_label = "Qdrant (dense + BM25)" if RAG_BACKEND == "qdrant" else "FAISS (in-process) + BM25"
+        rerank_label = f"✅ {RAG_RERANK_MODEL}" if RAG_ENABLE_RERANK else f"⚪ выключен"
+        morph_label = "✅ pymorphy (лемматизация)" if HAS_PYMORPHY else "⚪ только стоп-слова"
+        v4_label = "V4 (pure semantic)" if RAG_ORCHESTRATOR_V4 else "V3 (semantic + keyword fallback)"
+
+        # Предупреждение о рассинхронизации: личная модель отличается от .env дефолта
+        desync = ""
+        if env_model and preferred_model and preferred_model != env_model:
+            desync = f" ⚠️ дефолт .env: <code>{env_model}</code>"
+
+        text = (
+            "🔧 <b>Настройки ИИ</b>\n\n"
+            "<b>— Языковая модель (ваши настройки) —</b>\n"
+            f"⚡ <b>Провайдер:</b> <code>{my_provider}</code>\n"
+            f"💬 <b>Текст:</b> <code>{my_text_model or '—'}</code>{desync}\n"
+            f"🖼️ <b>Изображения:</b> <code>{my_image_model or 'не задана (Ollama)'}</code>\n"
+            f"🌐 <b>Доступные провайдеры:</b> {', '.join(providers) if providers else '—'}\n\n"
+            "<b>— RAG (глобальные настройки) —</b>\n"
+            f"📦 <b>Эмбеддинги:</b> <code>{RAG_MODEL_NAME}</code>\n"
+            f"🏆 <b>Reranker:</b> {rerank_label}\n"
+            f"🔤 <b>Морфология BM25:</b> {morph_label}\n"
+            f"🗄️ <b>Backend:</b> {rag_backend_label}\n"
+            f"🧭 <b>Оркестратор:</b> {v4_label}\n"
+            f"💻 <b>Устройство:</b> <code>{RAG_DEVICE}</code>\n"
+            f"🔎 <b>Кандидаты → Top-K:</b> {RAG_MAX_CANDIDATES} → {RAG_TOP_K} (порог {RAG_MIN_RERANK_SCORE})\n"
+            f"✂️ <b>Чанк:</b> {RAG_CHUNK_SIZE} симв. / overlap {RAG_CHUNK_OVERLAP}\n"
+            f"📖 <b>Контекст на источник:</b> {RAG_CONTEXT_LENGTH} симв."
+        )
+        await safe_edit_message_text(query, text, reply_markup=ai_providers_menu(providers, my_provider), parse_mode='HTML')
         return
 
     if data == 'admin_asr':

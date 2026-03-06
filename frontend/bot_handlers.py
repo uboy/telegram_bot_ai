@@ -1173,6 +1173,58 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=admin_menu(),
             )
         context.user_data['state'] = None
+    elif state == 'waiting_wiki_root' and user.role == 'admin':
+        wiki_url = text_input.strip()
+        kb_id_raw = context.user_data.get('kb_id_for_wiki')
+        kb_id = int(kb_id_raw) if kb_id_raw else None
+
+        if not kb_id:
+            await update.message.reply_text(
+                "❌ Не выбрана база знаний для загрузки вики.",
+                reply_markup=admin_menu(),
+            )
+            context.user_data['state'] = None
+            context.user_data.pop('kb_id_for_wiki', None)
+            return
+
+        if not wiki_url.startswith(("http://", "https://")):
+            await update.message.reply_text(
+                "⚠️ Введите корректный URL, начинающийся с http:// или https://",
+            )
+            return
+
+        try:
+            stats = await asyncio.to_thread(
+                backend_client.ingest_wiki_crawl,
+                kb_id=kb_id,
+                url=wiki_url,
+                telegram_id=str(user.telegram_id),
+                username=user.username,
+            )
+            deleted = stats.get("deleted_chunks", 0) if isinstance(stats, dict) else 0
+            pages = stats.get("pages_processed", 0) if isinstance(stats, dict) else 0
+            added = stats.get("chunks_added", 0) if isinstance(stats, dict) else 0
+            wiki_root = (stats.get("wiki_root", wiki_url) if isinstance(stats, dict) else wiki_url)
+
+            await update.message.reply_text(
+                "✅ Сканирование вики завершено.\n\n"
+                f"Исходный URL: {wiki_url}\n"
+                f"Корневой wiki-URL: {wiki_root}\n"
+                f"Удалено старых фрагментов: {deleted}\n"
+                f"Обработано страниц: {pages}\n"
+                f"Добавлено фрагментов: {added}",
+                reply_markup=kb_actions_menu(kb_id),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при wiki-crawl через bot text state: %s", e, exc_info=True)
+            await update.message.reply_text(
+                f"❌ Ошибка при сканировании вики: {str(e)}\n\n"
+                "Убедитесь, что URL корректный и доступен.",
+                reply_markup=kb_actions_menu(kb_id),
+            )
+        finally:
+            context.user_data['state'] = None
+            context.user_data.pop('kb_id_for_wiki', None)
     else:
         kb_id = context.user_data.get('kb_id')
         if kb_id:

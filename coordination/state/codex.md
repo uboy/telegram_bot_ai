@@ -529,3 +529,37 @@
     - added `RAGAN-001` со статусом `todo` для формального закрепления анализа и следующего review цикла.
 - notes:
   - изменения только в документации/координационных артефактах, без изменений runtime-кода.
+
+## 2026-03-06 New Task: Wiki URL crawl flow broken
+- role: team-lead-orchestrator + architect
+- user report:
+  - "сломалась \"собрать вики по URL\" функция. когда будешь исправлять, учти чтобы другие функции не сломались"
+- classification: non-trivial (bug report with unknown root cause at intake + stateful bot flow + regression-protection requirement)
+- startup ritual:
+  - re-read `coordination/tasks.jsonl` and `coordination/state/codex.md`.
+- findings so far:
+  - `kb_wiki_crawl` callback sets `context.user_data['state'] = 'waiting_wiki_root'` in `frontend/bot_callbacks.py`.
+  - `frontend/bot_handlers.py::handle_text` has no branch for `waiting_wiki_root`.
+  - no `wiki_urls` producer found in current code, so `wiki_git_load/wiki_zip_load` callbacks cannot be reached through normal state flow.
+- next_step:
+  - produce focused fix design, then implement minimal-safe branch for wiki URL text state + add regression test and docs/traceability updates.
+
+## 2026-03-06 Wiki URL crawl bugfix completion snapshot
+- implementation:
+  - Added `waiting_wiki_root` branch in `frontend/bot_handlers.py::handle_text`.
+  - Branch validates KB selection and URL shape, calls `backend_client.ingest_wiki_crawl`, returns explicit crawl stats, and clears `state` + `kb_id_for_wiki`.
+- regression tests:
+  - Added `tests/test_bot_text_ai_mode.py::test_handle_text_waiting_wiki_root_ingests_wiki_crawl`.
+  - Pre-fix reproduction verified (test failed before handler branch implementation).
+- verification:
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py -k waiting_wiki_root` -> FAIL (expected before fix)
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_document_upload.py` -> PASS (`17 passed`)
+  - `python -m py_compile frontend/bot_handlers.py tests/test_bot_text_ai_mode.py` -> PASS
+  - `python scripts/scan_secrets.py` -> PASS
+- docs/spec/traceability:
+  - Updated `SPEC.md` with explicit wiki URL stateful acceptance criteria.
+  - Added design doc `docs/design/wiki-url-crawl-state-fix-v1.md`.
+  - Updated `docs/REQUIREMENTS_TRACEABILITY.md` and `docs/USAGE.md`.
+  - Added review artifact `coordination/reviews/wiki-url-crawl-state-fix-2026-03-06.md`.
+- notes:
+  - Attempted independent sub-agent review (`code-review-qa`) and architect planning (`agent-architect`) but task tool returned `ProviderModelNotFoundError`; completed with self-review fallback.

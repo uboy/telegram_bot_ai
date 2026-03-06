@@ -273,6 +273,85 @@ async def test_handle_text_waiting_kb_name_creates_knowledge_base(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="admin",
+            full_name=None,
+            role="admin",
+            approved=True,
+        )
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+    ingest_calls = []
+
+    def _ingest_wiki_crawl(*, kb_id, url, telegram_id=None, username=None):
+        ingest_calls.append(
+            {
+                "kb_id": kb_id,
+                "url": url,
+                "telegram_id": telegram_id,
+                "username": username,
+            }
+        )
+        return {
+            "deleted_chunks": 2,
+            "pages_processed": 9,
+            "chunks_added": 33,
+            "wiki_root": url,
+        }
+
+    monkeypatch.setattr(bot_handlers.backend_client, "ingest_wiki_crawl", _ingest_wiki_crawl)
+
+    class DummyMessage:
+        def __init__(self):
+            self.text = "https://gitee.com/mazurdenis/open-harmony/wikis"
+            self.date = datetime.now(timezone.utc)
+            self.sent = []
+            self.kwargs = []
+
+        async def reply_text(self, text, **kwargs):
+            self.sent.append(text)
+            self.kwargs.append(kwargs)
+
+    class DummyUser:
+        id = 1
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+
+    class DummyContext:
+        def __init__(self):
+            self.user_data = {
+                "state": "waiting_wiki_root",
+                "kb_id_for_wiki": 42,
+            }
+
+    update = DummyUpdate()
+    context = DummyContext()
+
+    await bot_handlers.handle_text(update, context)
+
+    assert ingest_calls == [
+        {
+            "kb_id": 42,
+            "url": "https://gitee.com/mazurdenis/open-harmony/wikis",
+            "telegram_id": "1",
+            "username": "admin",
+        }
+    ]
+    assert context.user_data["state"] is None
+    assert context.user_data.get("kb_id_for_wiki") is None
+    assert "Сканирование вики завершено" in update.message.sent[-1]
+    assert "reply_markup" in update.message.kwargs[-1]
+
+
+@pytest.mark.anyio
 async def test_run_rag_query_with_progress_shows_and_deletes(monkeypatch):
     from frontend import bot_handlers
 

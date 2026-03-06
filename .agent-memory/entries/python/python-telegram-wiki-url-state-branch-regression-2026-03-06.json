@@ -1,0 +1,17 @@
+{
+  "id": "python-telegram-wiki-url-state-branch-regression-2026-03-06",
+  "technology": "python-telegram-bot",
+  "skills": ["developer", "reviewer", "spec-maintainer"],
+  "applies_to_systems": ["codex", "claude", "cursor", "gemini", "opencode"],
+  "summary": "When callback sets `waiting_wiki_root`, text handler must include matching state branch that calls wiki crawl ingestion and clears temporary state. Missing branch silently falls through to default flow and breaks user-facing wiki URL ingestion.",
+  "source_links": [
+    "frontend/bot_callbacks.py",
+    "frontend/bot_handlers.py",
+    "tests/test_bot_text_ai_mode.py",
+    "docs/design/wiki-url-crawl-state-fix-v1.md"
+  ],
+  "recorded_on": "2026-03-06",
+  "last_verified_on": "2026-03-06",
+  "verify_after_days": 30,
+  "status": "active"
+}

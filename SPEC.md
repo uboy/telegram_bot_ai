@@ -39,6 +39,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - For AI requests, request/model metrics are persisted in DB and used to estimate expected latency.
   - If AI request is predicted (or observed) to exceed 5 seconds, bot shows temporary progress status and removes it after response/error.
   - Admin menu for users/KBs/ingestion/AI settings.
+  - Wiki crawl flow from admin KB actions is stateful: after pressing "Собрать вики по URL" and sending root URL, bot must call backend wiki-crawl ingestion and return explicit result stats instead of falling back to unrelated default flow.
   - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
   - In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
   - In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
@@ -114,6 +115,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Bot can register users and requires admin approval for non-admins.
 - Admin can create, list, clear, and delete knowledge bases via bot UI.
 - KB creation flow in admin panel is stateful: after "Создать базу знаний" and name input, bot must call backend create endpoint and return explicit success/failure instead of falling back to welcome screen.
+- Wiki crawl flow in admin panel is stateful: after "Собрать вики по URL" and root URL input, bot must call backend `/ingestion/wiki-crawl`, return crawl stats, and clear temporary wiki state keys.
 - Admin KB upload does not require manual file-type selection; bot auto-detects document type, supports multiple files in one flow, validates Telegram file limits, and returns per-file success/failure report.
 - Global admin-level "upload documents" entry is removed; document upload starts from a selected KB only.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).

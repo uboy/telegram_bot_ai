@@ -1,18 +1,21 @@
 {
-  "task_id": "RAGOUT-029",
+  "task_id": "WIKIBUG-004",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_document_upload.py",
+    "python -m py_compile frontend/bot_handlers.py tests/test_bot_text_ai_mode.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "scripts/run_rag_compare_stack.sh",
-    "scripts/rag_orchestrator_compare.py",
-    "docs/OPERATIONS.md",
+    "frontend/bot_handlers.py",
+    "tests/test_bot_text_ai_mode.py",
+    "docs/design/wiki-url-crawl-state-fix-v1.md",
+    "docs/REQUIREMENTS_TRACEABILITY.md",
     "docs/USAGE.md",
-    "docs/TESTING.md",
-    "coordination/reviews/rag-outbox-phase-d3-2026-03-05.md",
+    "SPEC.md",
+    "coordination/reviews/wiki-url-crawl-state-fix-2026-03-06.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"

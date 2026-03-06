@@ -65,3 +65,7 @@
 {"id":"RAGOUT-028","title":"Document wrapper compare script usage in usage/ops/testing guides","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-029","title":"Produce review artifact and sync coordination state for compare wrapper rollout","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
 {"id":"RAGAN-001","title":"TODO: зафиксировать AS-IS анализ текущего RAG алгоритма (технологии, ingestion, retrieval/query path, хранение) и подготовить базу для независимого review слабых мест","status":"todo","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
+{"id":"WIKIBUG-001","title":"Research root cause for broken \"Собрать вики по URL\" flow and prepare fix plan","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
+{"id":"WIKIBUG-002","title":"Implement waiting_wiki_root text-state handling for wiki URL ingestion without regressions","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"WIKIBUG-003","title":"Add regression test and run focused verification for wiki URL flow + related bot handlers","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"WIKIBUG-004","title":"Update SPEC/design/traceability docs and produce review artifact for wiki URL bugfix","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-06"}
