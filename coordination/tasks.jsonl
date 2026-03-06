@@ -69,3 +69,22 @@
 {"id":"WIKIBUG-002","title":"Implement waiting_wiki_root text-state handling for wiki URL ingestion without regressions","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"WIKIBUG-003","title":"Add regression test and run focused verification for wiki URL flow + related bot handlers","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
 {"id":"WIKIBUG-004","title":"Update SPEC/design/traceability docs and produce review artifact for wiki URL bugfix","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-06"}
+{"id":"WIKIBUG-005","title":"Harden wiki crawl completeness for Gitee JS navigation via git-loader fallback with regression tests","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-001","title":"P0-1 define generalized RAG quality metrics and acceptance thresholds","status":"todo","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-002","title":"P0-2 add fixed ready-data regression corpus for RAG evaluation","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-003","title":"P0-3 implement evaluation runner and baseline quality report artifact","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-004","title":"P0-4 implement threshold-based quality gate integrated with test workflow","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-005","title":"P1-1 normalize ingestion metadata contract across all loaders","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-006","title":"P1-2 harden markdown/code chunk metadata consistency","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-007","title":"P1-3 add ingestion metadata regression tests and review report","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-008","title":"P2-1 remove brittle query-specific route boosts and keep generalized ranking behavior","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-009","title":"P2-2 stabilize hybrid retrieval fusion and rerank selection boundaries","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-010","title":"P2-3 add retrieval diagnostics assertions in automated tests","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-011","title":"P3-1 simplify answer prompts and remove forced template headings","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-012","title":"P3-2 align RU/EN grounded response behavior and add format regressions","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-013","title":"P4-1 relax command sanitizer to token-level validation","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-014","title":"P4-2 preserve context-backed URLs while keeping untrusted URL filtering","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-015","title":"P4-3 add safety positive/negative regression tests and review artifact","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-016","title":"P5-1 add end-to-end RAG regression suite over fixed corpus","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-017","title":"P5-2 wire mandatory CI quality gate with fail-fast thresholds","status":"todo","assignee":"codex","phase":"devops","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-018","title":"P5-3 update ops/testing docs and finalize rollout review with gate evidence","status":"todo","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-06"}

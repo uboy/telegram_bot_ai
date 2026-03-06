@@ -40,6 +40,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - If AI request is predicted (or observed) to exceed 5 seconds, bot shows temporary progress status and removes it after response/error.
   - Admin menu for users/KBs/ingestion/AI settings.
   - Wiki crawl flow from admin KB actions is stateful: after pressing "Собрать вики по URL" and sending root URL, bot must call backend wiki-crawl ingestion and return explicit result stats instead of falling back to unrelated default flow.
+  - For Gitee wiki URLs, wiki-crawl uses git-based loader fallback to ensure full recursive synchronization when HTML pages expose wiki navigation mostly via JS.
   - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
   - In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
   - In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
@@ -116,6 +117,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Admin can create, list, clear, and delete knowledge bases via bot UI.
 - KB creation flow in admin panel is stateful: after "Создать базу знаний" and name input, bot must call backend create endpoint and return explicit success/failure instead of falling back to welcome screen.
 - Wiki crawl flow in admin panel is stateful: after "Собрать вики по URL" and root URL input, bot must call backend `/ingestion/wiki-crawl`, return crawl stats, and clear temporary wiki state keys.
+- For Gitee wiki URLs, `/ingestion/wiki-crawl` must synchronize full wiki content (not only root page) by using git-loader fallback when plain HTML crawl cannot discover recursive links.
 - Admin KB upload does not require manual file-type selection; bot auto-detects document type, supports multiple files in one flow, validates Telegram file limits, and returns per-file success/failure report.
 - Global admin-level "upload documents" entry is removed; document upload starts from a selected KB only.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).

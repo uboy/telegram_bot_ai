@@ -20,6 +20,19 @@ from shared.document_loaders import document_loader_manager
 from shared.logging_config import logger
 
 
+def _should_use_git_wiki_loader(wiki_root: str) -> bool:
+    """Определить, стоит ли предпочесть git loader вместо HTML-crawl.
+
+    На Gitee wiki-страницы часто рендерятся JS-приложением, где в HTML мало
+    прямых ссылок на дочерние wiki-страницы. В этом случае HTML-crawl обычно
+    видит только корневую страницу и не даёт полноценной рекурсии.
+    """
+    parsed = urlparse((wiki_root or "").strip())
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    return host.endswith("gitee.com") and "/wikis" in path
+
+
 def _normalize_base_url(base_url: str) -> str:
     """Нормализовать базовый URL вики и определить корень wiki-раздела.
 
@@ -69,7 +82,7 @@ def crawl_wiki_to_kb(
     knowledge_base_id: int,
     max_pages: int = 200,
     loader_options: dict | None = None,
-) -> Dict[str, int]:
+) -> Dict[str, int | str]:
     """
     Рекурсивно обойти wiki-раздел сайта и загрузить страницы в базу знаний.
 
@@ -78,6 +91,36 @@ def crawl_wiki_to_kb(
     - max_pages: ограничение на количество страниц (на всякий случай, от DoS)
     """
     wiki_root = _normalize_base_url(base_url)
+
+    if _should_use_git_wiki_loader(wiki_root):
+        try:
+            from shared.wiki_git_loader import load_wiki_from_git  # local import to avoid circular import at module load
+
+            logger.info(
+                "[wiki] gitee wiki detected, using git loader for full sync: kb_id=%s, wiki_root=%s",
+                knowledge_base_id,
+                wiki_root,
+            )
+            stats = load_wiki_from_git(
+                wiki_url=wiki_root,
+                knowledge_base_id=knowledge_base_id,
+                loader_options=loader_options,
+            )
+            files_processed = int(stats.get("files_processed", 0) or 0)
+            return {
+                "deleted_chunks": int(stats.get("deleted_chunks", 0) or 0),
+                "pages_processed": files_processed,
+                "chunks_added": int(stats.get("chunks_added", 0) or 0),
+                "wiki_root": str(stats.get("wiki_root", wiki_root) or wiki_root),
+            }
+        except Exception as e:
+            logger.warning(
+                "[wiki] git loader fallback failed, continue with HTML-crawl: kb_id=%s wiki_root=%s error=%s",
+                knowledge_base_id,
+                wiki_root,
+                e,
+                exc_info=True,
+            )
 
     # Удалить старые фрагменты этой вики в выбранной БЗ
     logger.info("[wiki] старт сканирования: kb_id=%s, base_url=%s, wiki_root=%s", knowledge_base_id, base_url, wiki_root)
@@ -221,7 +264,7 @@ async def crawl_wiki_to_kb_async(
     knowledge_base_id: int,
     max_pages: int = 200,
     loader_options: dict | None = None,
-) -> Dict[str, int]:
+) -> Dict[str, int | str]:
     """
     Асинхронная обёртка для использования из Telegram-хэндлеров.
     Запускает синхронный сканер в отдельном потоке.

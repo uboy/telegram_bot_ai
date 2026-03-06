@@ -563,3 +563,41 @@
   - Added review artifact `coordination/reviews/wiki-url-crawl-state-fix-2026-03-06.md`.
 - notes:
   - Attempted independent sub-agent review (`code-review-qa`) and architect planning (`agent-architect`) but task tool returned `ProviderModelNotFoundError`; completed with self-review fallback.
+
+## 2026-03-06 Wiki recursive sync hardening snapshot (Gitee)
+- trigger:
+  - user reported that wiki ingestion call succeeds but does not recursively sync all pages/files.
+- diagnosis:
+  - runtime log showed `pages=1` for `gitee.com/.../wikis` despite larger wiki.
+  - direct HTML inspection revealed static page has almost no recursive wiki links in `<a href>`; navigation is JS-heavy.
+- implementation:
+  - added host-scoped fallback in `shared/wiki_scraper.py`:
+    - for `gitee.com` + `/wikis`, prefer `load_wiki_from_git` for full sync;
+    - map `files_processed` to `pages_processed` for compatibility;
+    - if fallback fails, continue legacy HTML-crawl path.
+- tests:
+  - added `tests/test_wiki_scraper.py`:
+    - host detection test,
+    - gitee crawl path uses git-loader fallback and bypasses HTML requests.
+- verification:
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py -k wiki` -> PASS (`3 passed`)
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py tests/test_bot_document_upload.py` -> PASS (`19 passed`)
+  - `python -m py_compile shared/wiki_scraper.py tests/test_wiki_scraper.py` -> PASS
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- docs/spec/review:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`.
+  - added `docs/design/wiki-url-crawl-state-fix-v2.md`.
+  - updated review artifact `coordination/reviews/wiki-url-crawl-state-fix-2026-03-06.md`.
+
+## 2026-03-06 Generalized RAG quality program planning snapshot
+- user requirement:
+  - produce full architecture/design plan with small-step decomposition,
+    mandatory review and gate/test checks, and separate commit per step.
+- documented:
+  - added `docs/design/rag-general-quality-program-v1.md` with phased roadmap (P0..P5),
+    mandatory workflow, and explicit rule: one completed step equals one atomic commit.
+- coordination:
+  - added backlog tasks `RAGQLTY-001..018` in `coordination/tasks.jsonl`.
+- notes:
+  - this update is planning/documentation only; no runtime code behavior changed.

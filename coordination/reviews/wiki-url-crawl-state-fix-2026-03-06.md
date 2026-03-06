@@ -20,12 +20,25 @@
 - Regression coverage verified:
   - Added `test_handle_text_waiting_wiki_root_ingests_wiki_crawl`.
   - Test reproduces pre-fix failure and verifies backend call, response path, and state reset.
+- Additional root cause confirmed from runtime behavior/logs:
+  - Gitee wiki root HTML is JS-heavy and exposes almost no recursive wiki links for static anchor crawl.
+  - Result: plain HTML crawl can stop at 1 page even though wiki contains many pages.
+- Additional hardening verified:
+  - Added Gitee-specific git-loader fallback in `shared/wiki_scraper.py::crawl_wiki_to_kb`.
+  - `files_processed` is mapped to `pages_processed` for compatibility with existing wiki-crawl response contract.
+  - If git fallback fails, logic safely falls back to existing HTML crawl path.
+- Additional regression coverage:
+  - Added `tests/test_wiki_scraper.py` to verify Gitee URL path uses git-loader fallback and bypasses HTML crawl path.
 
 ## Verification
 - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py -k waiting_wiki_root` -> FAIL (pre-fix expected)
 - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_document_upload.py` -> PASS (`17 passed`)
+- `.venv\Scripts\python.exe -m pytest -q tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py -k wiki` -> PASS (`3 passed`)
+- `.venv\Scripts\python.exe -m pytest -q tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py tests/test_bot_document_upload.py` -> PASS (`19 passed`)
 - `python -m py_compile frontend/bot_handlers.py tests/test_bot_text_ai_mode.py` -> PASS
+- `python -m py_compile shared/wiki_scraper.py tests/test_wiki_scraper.py` -> PASS
 - `python scripts/scan_secrets.py` -> PASS
+- `python scripts/ci_policy_gate.py --working-tree` -> PASS
 
 ## Risks
 - Existing `wiki_git_load` / `wiki_zip_load` callbacks still depend on `wiki_urls` context mapping that is not produced in current flow.
