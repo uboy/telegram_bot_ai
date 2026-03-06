@@ -60,6 +60,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Job status endpoint for ingestion progress (where implemented).
 - RAG pipeline:
   - Chunking with configurable size/overlap and Markdown-aware splitting.
+  - Ingestion normalizes core chunk metadata contract (`type`, `title`, `doc_title`, `section_title`, `section_path`, `chunk_kind`, `document_class`, `language`, `doc_version`, `source_updated_at`) across source types.
   - Embeddings with sentence-transformers; Qdrant for dense retrieval in production mode (`RAG_BACKEND=qdrant`).
   - Legacy in-process FAISS path remains available as rollback mode (`RAG_BACKEND=legacy`).
   - Retrieval orchestrator cutover is controlled by `RAG_ORCHESTRATOR_V4` feature flag.
@@ -123,6 +124,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Admin KB upload does not require manual file-type selection; bot auto-detects document type, supports multiple files in one flow, validates Telegram file limits, and returns per-file success/failure report.
 - Global admin-level "upload documents" entry is removed; document upload starts from a selected KB only.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).
+- Ingested chunks keep a normalized metadata baseline so retrieval/context assembly can rely on consistent title/section/document fields across loaders.
 - RAG query returns an answer plus a list of sources with path/URL and metadata.
 - Inline citations are present when enabled and only reference provided sources.
 - Command snippets in answers are filtered to those present in KB context.
@@ -147,6 +149,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Statistical quality gate script validates eval run against baseline using thresholds, minimum sample size, and bootstrap 95% CI delta margin.
 - Eval ready-data suite is contract-tested for minimum size, unique case ids, required fields, and required slice coverage before use in regression cycles.
 - Baseline eval run is reproducibly executable via CLI runner and produces review artifacts (`*.json`, `*.md`) for each run.
+- Quality gate supports both DB run mode (`--run-id`) and artifact mode (`--run-report-json`, optional `--baseline-report-json`) with identical threshold PASS/FAIL semantics.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

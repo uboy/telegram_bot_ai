@@ -36,6 +36,7 @@ jobs:
           python -m py_compile scripts/ci_policy_gate.py
           python -m py_compile scripts/scan_secrets.py
           python -m py_compile scripts/rag_eval_quality_gate.py
+          python -m py_compile scripts/rag_eval_baseline_runner.py
 
       - name: Install dependencies for smoke tests
         run: |
@@ -46,3 +47,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: test-token
         run: python -m pytest -q -p no:cacheprovider tests/test_security_api_key.py tests/test_rag_safety.py
+
+      - name: Eval gate tests
+        env:
+          TELEGRAM_BOT_TOKEN: test-token
+        run: python -m pytest -q -p no:cacheprovider tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py

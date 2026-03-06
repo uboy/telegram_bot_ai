@@ -159,6 +159,18 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/eval/<run_id>
 python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json
 ```
 
+Прогнать quality gate по report-артефактам (без чтения run из БД):
+
+```bash
+python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/latest.json --allow-no-baseline --print-json
+```
+
+С baseline report comparison:
+
+```bash
+python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/current.json --baseline-report-json data/rag_eval_baseline/baseline.json --print-json
+```
+
 Сформировать baseline-отчет с артефактами (`json` + `md`):
 
 ```bash

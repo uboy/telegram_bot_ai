@@ -134,6 +134,41 @@ class IngestionService:
                 return detect_language(content) or "ru"
         return "ru"
 
+    def _normalize_chunk_metadata(
+        self,
+        *,
+        base_meta: Dict[str, Any],
+        source_type: str,
+        source_path: str,
+        chunk_title: str,
+        doc_class: str,
+        language: str,
+        doc_hash: str | None,
+        doc_version: int,
+        source_updated_at: str,
+    ) -> Dict[str, Any]:
+        meta: Dict[str, Any] = dict(base_meta or {})
+
+        title = str(meta.get("title") or chunk_title or source_path or "").strip()
+        doc_title = str(meta.get("doc_title") or title or source_path or "").strip()
+        section_title = str(meta.get("section_title") or title or doc_title or "").strip()
+        section_path = str(meta.get("section_path") or doc_title or source_path or "ROOT").strip()
+
+        meta["type"] = str(meta.get("type") or source_type or "unknown")
+        meta["title"] = title
+        meta["doc_title"] = doc_title
+        meta["section_title"] = section_title
+        meta["section_path"] = section_path
+        meta.setdefault("chunk_kind", "text")
+
+        meta["document_class"] = doc_class
+        meta["language"] = language or "ru"
+        if doc_hash:
+            meta["doc_hash"] = doc_hash
+        meta["doc_version"] = doc_version
+        meta["source_updated_at"] = source_updated_at
+        return meta
+
     def _upsert_document(
         self,
         kb_id: int,
@@ -254,12 +289,17 @@ class IngestionService:
         chunks_data = []
         for chunk in chunks:
             content = chunk.get("content", "")
-            base_meta = dict(chunk.get("metadata") or {})
-            base_meta.setdefault("title", chunk.get("title") or url)
-            base_meta.setdefault("document_class", doc_class)
-            base_meta["language"] = detect_language(content) if content else doc_language
-            base_meta["doc_version"] = doc_version
-            base_meta["source_updated_at"] = source_updated_at
+            base_meta = self._normalize_chunk_metadata(
+                base_meta=dict(chunk.get("metadata") or {}),
+                source_type="web",
+                source_path=url,
+                chunk_title=str(chunk.get("title") or url),
+                doc_class=doc_class,
+                language=(detect_language(content) if content else doc_language),
+                doc_hash=None,
+                doc_version=doc_version,
+                source_updated_at=source_updated_at,
+            )
 
             chunks_data.append({
                 'knowledge_base_id': kb_id,
@@ -557,13 +597,17 @@ class IngestionService:
                     chunks_data = []
                     for chunk in chunks:
                         content = chunk.get("content", "")
-                        base_meta = dict(chunk.get("metadata") or {})
-                        base_meta.setdefault("title", chunk.get("title") or name)
-                        base_meta.setdefault("document_class", doc_class)
-                        base_meta["language"] = detect_language(content) if content else doc_language
-                        base_meta["doc_hash"] = doc_hash
-                        base_meta["doc_version"] = doc_version
-                        base_meta["source_updated_at"] = source_updated_at
+                        base_meta = self._normalize_chunk_metadata(
+                            base_meta=dict(chunk.get("metadata") or {}),
+                            source_type=inner_ext_clean or "unknown",
+                            source_path=source_path,
+                            chunk_title=str(chunk.get("title") or name),
+                            doc_class=doc_class,
+                            language=(detect_language(content) if content else doc_language),
+                            doc_hash=doc_hash,
+                            doc_version=doc_version,
+                            source_updated_at=source_updated_at,
+                        )
                         if inner_ext_clean in ("md", "markdown"):
                             original_title = base_meta.get("doc_title") or base_meta.get("title") or ""
                             base_meta["doc_title"] = source_path
@@ -683,13 +727,17 @@ class IngestionService:
             chunks_data = []
             for chunk in chunks:
                 content = chunk.get("content", "")
-                base_meta = dict(chunk.get("metadata") or {})
-                base_meta.setdefault("title", chunk.get("title") or source_path)
-                base_meta.setdefault("document_class", doc_class)
-                base_meta["language"] = detect_language(content) if content else doc_language
-                base_meta["doc_hash"] = doc_hash
-                base_meta["doc_version"] = doc_version
-                base_meta["source_updated_at"] = source_updated_at
+                base_meta = self._normalize_chunk_metadata(
+                    base_meta=dict(chunk.get("metadata") or {}),
+                    source_type="chat",
+                    source_path=source_path,
+                    chunk_title=str(chunk.get("title") or source_path),
+                    doc_class=doc_class,
+                    language=(detect_language(content) if content else doc_language),
+                    doc_hash=doc_hash,
+                    doc_version=doc_version,
+                    source_updated_at=source_updated_at,
+                )
                 chunks_data.append({
                     "knowledge_base_id": kb_id,
                     "content": content,
@@ -767,13 +815,17 @@ class IngestionService:
         chunks_data = []
         for chunk in chunks:
             content = chunk.get("content", "")
-            base_meta = dict(chunk.get("metadata") or {})
-            base_meta.setdefault("title", chunk.get("title") or source_path)
-            base_meta.setdefault("document_class", doc_class)
-            base_meta["language"] = detect_language(content) if content else doc_language
-            base_meta["doc_hash"] = doc_hash
-            base_meta["doc_version"] = doc_version
-            base_meta["source_updated_at"] = source_updated_at
+            base_meta = self._normalize_chunk_metadata(
+                base_meta=dict(chunk.get("metadata") or {}),
+                source_type=file_type or "unknown",
+                source_path=source_path,
+                chunk_title=str(chunk.get("title") or source_path),
+                doc_class=doc_class,
+                language=(detect_language(content) if content else doc_language),
+                doc_hash=doc_hash,
+                doc_version=doc_version,
+                source_updated_at=source_updated_at,
+            )
             if file_type in ("md", "markdown"):
                 original_title = base_meta.get("doc_title") or base_meta.get("title") or ""
                 base_meta["doc_title"] = source_path
@@ -950,13 +1002,17 @@ class IngestionService:
                 chunks_data = []
                 for chunk in chunks:
                     content = chunk.get("content", "")
-                    base_meta = dict(chunk.get("metadata") or {})
-                    base_meta.setdefault("title", rel_path)
-                    base_meta.setdefault("document_class", doc_class)
-                    base_meta["language"] = detect_language(content) if content else doc_language
-                    base_meta["doc_hash"] = doc_hash
-                    base_meta["doc_version"] = doc_version
-                    base_meta["source_updated_at"] = source_updated_at
+                    base_meta = self._normalize_chunk_metadata(
+                        base_meta=dict(chunk.get("metadata") or {}),
+                        source_type="code",
+                        source_path=source_path,
+                        chunk_title=rel_path,
+                        doc_class=doc_class,
+                        language=(detect_language(content) if content else doc_language),
+                        doc_hash=doc_hash,
+                        doc_version=doc_version,
+                        source_updated_at=source_updated_at,
+                    )
                     base_meta["chunk_kind"] = "code_file"
                     base_meta["code_lang"] = self._code_lang_from_ext(ext)
                     base_meta["file_path"] = rel_path
@@ -1095,13 +1151,17 @@ class IngestionService:
             source_type="image",
             source_path=source_path,
             metadata={
-                "type": "image",
-                "file_id": file_id,
-                "document_class": doc_class,
-                "language": doc_language,
-                "doc_hash": doc_hash,
-                "doc_version": doc_version,
-                "source_updated_at": source_updated_at,
+                **self._normalize_chunk_metadata(
+                    base_meta={"file_id": file_id},
+                    source_type="image",
+                    source_path=source_path,
+                    chunk_title=source_path,
+                    doc_class=doc_class,
+                    language=doc_language,
+                    doc_hash=doc_hash,
+                    doc_version=doc_version,
+                    source_updated_at=source_updated_at,
+                ),
             },
             document_id=document_id,
             version=doc_version,

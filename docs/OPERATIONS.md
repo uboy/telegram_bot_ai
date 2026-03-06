@@ -127,6 +127,9 @@ Main knobs:
   - `RAG_EVAL_THRESHOLD_NDCG_AT10`
 - Apply quality gate for completed run:
   - `python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <baseline_run_id> --print-json`
+- Apply quality gate from report artifacts (no DB run lookup):
+  - `python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/latest.json --allow-no-baseline --print-json`
+  - `python scripts/rag_eval_quality_gate.py --run-report-json <run_report.json> --baseline-report-json <baseline_report.json> --print-json`
 - Produce baseline artifacts (JSON + Markdown):
   - `python scripts/rag_eval_baseline_runner.py --suite rag-general-v1 --label baseline_v1 --out-dir data/rag_eval_baseline`
   - outputs include timestamped reports and `data/rag_eval_baseline/latest.{json,md}` snapshots.

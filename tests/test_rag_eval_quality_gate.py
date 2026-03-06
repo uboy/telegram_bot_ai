@@ -81,3 +81,80 @@ def test_evaluate_gate_fails_without_bootstrap_samples_by_default():
 
     assert report["passed"] is False
     assert "missing_bootstrap_samples" in report["checks"][0]["reasons"]
+
+
+def test_rows_from_status_payload_parses_details_json():
+    payload = {
+        "run_id": "eval_report_1",
+        "status": "completed",
+        "results": [
+            {
+                "slice_name": "ru",
+                "metric_name": "recall_at_10",
+                "metric_value": 0.81,
+                "threshold_value": 0.6,
+                "passed": True,
+                "details_json": '{"sample_size": 120, "values": [1, 1, 0]}',
+            }
+        ],
+    }
+
+    rows = gate._rows_from_status_payload(payload)
+
+    assert ("ru", "recall_at_10") in rows
+    row = rows[("ru", "recall_at_10")]
+    assert row["metric_value"] == pytest.approx(0.81, abs=1e-9)
+    assert row["details"]["sample_size"] == 120
+    assert row["details"]["values"] == [1, 1, 0]
+
+
+def test_evaluate_gate_with_artifact_rows_passes():
+    run_rows = gate._rows_from_status_payload(
+        {
+            "status": "completed",
+            "results": [
+                {
+                    "slice_name": "ru",
+                    "metric_name": "recall_at_10",
+                    "metric_value": 0.8,
+                    "threshold_value": 0.6,
+                    "passed": True,
+                    "details": {"sample_size": 150, "values": [1.0] * 150},
+                }
+            ],
+        }
+    )
+    baseline_rows = gate._rows_from_status_payload(
+        {
+            "status": "completed",
+            "results": [
+                {
+                    "slice_name": "ru",
+                    "metric_name": "recall_at_10",
+                    "metric_value": 0.75,
+                    "threshold_value": 0.6,
+                    "passed": True,
+                    "details": {"sample_size": 150, "values": [0.5] * 150},
+                }
+            ],
+        }
+    )
+
+    report = gate.evaluate_gate(
+        run_id="artifact-run",
+        run_rows=run_rows,
+        baseline_id="artifact-base",
+        baseline_rows=baseline_rows,
+        required_slices=["ru"],
+        metrics=["recall_at_10"],
+        thresholds={"recall_at_10": 0.6},
+        min_sample_size=100,
+        negative_margin=-0.01,
+        bootstrap_samples=400,
+        seed=11,
+        allow_no_baseline=False,
+        allow_missing_bootstrap=False,
+    )
+
+    assert report["passed"] is True
+    assert report["checks"][0]["status"] == "passed"

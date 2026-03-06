@@ -651,3 +651,42 @@
   - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py` -> PASS (`8 passed`)
   - `python scripts/scan_secrets.py` -> PASS
   - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-06 RAGQLTY-004 completion snapshot (P0-4)
+- step:
+  - integrate threshold-based quality gate into test workflow.
+- implementation:
+  - extended `scripts/rag_eval_quality_gate.py` with artifact mode (`--run-report-json`, `--baseline-report-json`).
+  - kept DB mode (`--run-id`) for backward compatibility.
+  - updated CI workflow `.github/workflows/agent-quality-gates.yml` to compile baseline runner and run eval-gate related tests.
+  - extended `tests/test_rag_eval_quality_gate.py` with artifact-mode coverage.
+- docs/spec:
+  - added design note `docs/design/rag-eval-threshold-gate-workflow-v1.md`.
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/USAGE.md`, `docs/OPERATIONS.md`.
+  - updated quality program artifact map in `docs/design/rag-general-quality-program-v1.md`.
+  - added review artifact `coordination/reviews/ragqlty-p0-4-threshold-gate-workflow-2026-03-06.md`.
+- verification:
+  - `python -m py_compile scripts/rag_eval_quality_gate.py scripts/rag_eval_baseline_runner.py tests/test_rag_eval_quality_gate.py` -> PASS
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_service.py` -> PASS (`10 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-06 RAGQLTY-005 completion snapshot (P1-1)
+- step:
+  - normalize ingestion metadata contract across loading paths.
+- implementation:
+  - added `_normalize_chunk_metadata(...)` helper in `backend/services/ingestion_service.py`.
+  - applied helper in web/archive/chat/document/codebase/image ingestion branches.
+  - contract now ensures baseline keys: `type`, `title`, `doc_title`, `section_title`, `section_path`, `chunk_kind`, `document_class`, `language`, `doc_version`, `source_updated_at` (+ optional `doc_hash`).
+- tests:
+  - added `tests/test_ingestion_metadata_contract.py`.
+- docs/spec:
+  - added design note `docs/design/rag-ingestion-metadata-contract-v1.md`.
+  - updated `docs/design/rag-general-quality-program-v1.md`.
+  - updated `SPEC.md` and `docs/REQUIREMENTS_TRACEABILITY.md`.
+  - added review artifact `coordination/reviews/ragqlty-p1-1-ingestion-metadata-contract-2026-03-06.md`.
+- verification:
+  - `python -m py_compile backend/services/ingestion_service.py tests/test_ingestion_metadata_contract.py` -> PASS
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_ingestion_metadata_contract.py tests/test_ingestion_routes.py tests/test_ingestion_outbox.py` -> PASS (`8 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS

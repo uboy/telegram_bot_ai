@@ -58,6 +58,12 @@ P0-2 artifact:
 P0-3 artifact:
 - `docs/design/rag-eval-baseline-runner-v1.md`.
 
+P0-4 artifact:
+- `docs/design/rag-eval-threshold-gate-workflow-v1.md`.
+
+P1-1 artifact:
+- `docs/design/rag-ingestion-metadata-contract-v1.md`.
+
 ### Phase 1 - Ingestion Metadata Quality
 - Step P1-1: normalize metadata contract across all loaders.
 - Step P1-2: harden markdown/code chunk metadata consistency.

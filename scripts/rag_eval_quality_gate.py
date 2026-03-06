@@ -78,6 +78,46 @@ def _load_result_rows(run_id: str) -> Dict[Tuple[str, str], Dict[str, Any]]:
     return out
 
 
+def _rows_from_status_payload(payload: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        slice_name = str(row.get("slice_name") or "").strip().lower()
+        metric_name = str(row.get("metric_name") or "").strip().lower()
+        if not slice_name or not metric_name:
+            continue
+
+        details: Dict[str, Any] = {}
+        if isinstance(row.get("details"), dict):
+            details = row.get("details") or {}
+        else:
+            details = _safe_json_loads(row.get("details_json"))
+
+        out[(slice_name, metric_name)] = {
+            "slice_name": slice_name,
+            "metric_name": metric_name,
+            "metric_value": float(row.get("metric_value") or 0.0),
+            "threshold_value": (
+                float(row.get("threshold_value")) if row.get("threshold_value") is not None else None
+            ),
+            "passed": bool(row.get("passed")),
+            "details": details,
+        }
+    return out
+
+
+def _load_status_report(path: str) -> Dict[str, Any]:
+    raw = Path(path).read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("status report json must be an object")
+    return data
+
+
 def _extract_sample_size(details: Dict[str, Any]) -> int:
     try:
         return int(details.get("sample_size") or 0)
@@ -248,8 +288,10 @@ def evaluate_gate(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate RAG eval run against quality gate rules")
-    parser.add_argument("--run-id", required=True, help="Target eval run_id")
+    parser.add_argument("--run-id", help="Target eval run_id (DB mode)")
+    parser.add_argument("--run-report-json", help="Path to eval status JSON report (artifact mode)")
     parser.add_argument("--baseline-run-id", help="Baseline eval run_id (optional; defaults to run.baseline_run_id)")
+    parser.add_argument("--baseline-report-json", help="Path to baseline status JSON report (artifact mode)")
     parser.add_argument("--slices", help="Comma-separated required slices")
     parser.add_argument("--metrics", help="Comma-separated metric names")
     parser.add_argument("--threshold-recall-at10", type=float, default=0.6)
@@ -274,25 +316,74 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    run_meta = _load_run_meta(args.run_id)
-    if not run_meta:
-        print(f"quality-gate: run not found: {args.run_id}")
-        return 2
-    if str(run_meta.status or "").lower() != "completed":
-        print(f"quality-gate: run is not completed: {args.run_id} status={run_meta.status}")
-        return 2
+    run_id: Optional[str] = None
+    baseline_run_id: Optional[str] = None
+    run_rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    baseline_rows: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None
 
-    baseline_run_id = (
-        str(args.baseline_run_id).strip()
-        if args.baseline_run_id
-        else str(run_meta.baseline_run_id or "").strip()
-    ) or None
+    if args.run_report_json:
+        try:
+            run_report = _load_status_report(str(args.run_report_json))
+        except Exception as exc:  # noqa: BLE001
+            print(f"quality-gate: failed to read run report json: {exc}")
+            return 2
 
-    run_rows = _load_result_rows(args.run_id)
-    baseline_rows = _load_result_rows(baseline_run_id) if baseline_run_id else None
-    if baseline_run_id and not baseline_rows:
-        print(f"quality-gate: baseline run not found or has no results: {baseline_run_id}")
-        return 2
+        run_id = str(run_report.get("run_id") or "").strip() or "report-run"
+        report_status = str(run_report.get("status") or "").strip().lower()
+        if report_status and report_status != "completed":
+            print(f"quality-gate: run report is not completed: status={report_status}")
+            return 2
+        run_rows = _rows_from_status_payload(run_report)
+        if not run_rows:
+            print("quality-gate: run report has no metric rows")
+            return 2
+
+        baseline_run_id = (str(args.baseline_run_id).strip() if args.baseline_run_id else "") or (
+            str(run_report.get("baseline_run_id") or "").strip() or None
+        )
+
+        if args.baseline_report_json:
+            try:
+                baseline_report = _load_status_report(str(args.baseline_report_json))
+            except Exception as exc:  # noqa: BLE001
+                print(f"quality-gate: failed to read baseline report json: {exc}")
+                return 2
+            baseline_rows = _rows_from_status_payload(baseline_report)
+            if not baseline_rows:
+                print("quality-gate: baseline report has no metric rows")
+                return 2
+            if not baseline_run_id:
+                baseline_run_id = str(baseline_report.get("run_id") or "").strip() or "baseline-report"
+        elif baseline_run_id:
+            baseline_rows = _load_result_rows(baseline_run_id)
+            if not baseline_rows:
+                print(f"quality-gate: baseline run not found or has no results: {baseline_run_id}")
+                return 2
+    else:
+        if not args.run_id:
+            print("quality-gate: provide --run-id or --run-report-json")
+            return 2
+        run_id = str(args.run_id)
+
+        run_meta = _load_run_meta(run_id)
+        if not run_meta:
+            print(f"quality-gate: run not found: {run_id}")
+            return 2
+        if str(run_meta.status or "").lower() != "completed":
+            print(f"quality-gate: run is not completed: {run_id} status={run_meta.status}")
+            return 2
+
+        baseline_run_id = (
+            str(args.baseline_run_id).strip()
+            if args.baseline_run_id
+            else str(run_meta.baseline_run_id or "").strip()
+        ) or None
+
+        run_rows = _load_result_rows(run_id)
+        baseline_rows = _load_result_rows(baseline_run_id) if baseline_run_id else None
+        if baseline_run_id and not baseline_rows:
+            print(f"quality-gate: baseline run not found or has no results: {baseline_run_id}")
+            return 2
 
     required_slices = _parse_list_arg(args.slices, DEFAULT_REQUIRED_SLICES)
     metrics = _parse_list_arg(args.metrics, DEFAULT_METRICS)
@@ -303,7 +394,7 @@ def main() -> int:
     }
 
     report = evaluate_gate(
-        run_id=args.run_id,
+        run_id=run_id or "unknown",
         run_rows=run_rows,
         baseline_id=baseline_run_id,
         baseline_rows=baseline_rows,
