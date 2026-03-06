@@ -80,8 +80,8 @@ RAG_DEVICE = os.getenv("RAG_DEVICE", "cuda")
 # RAG Chunking Configuration (по умолчанию из Open WebUI, адаптировано)
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1800"))  # Размер чанка в символах (~400–800 токенов)
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "300"))  # Перекрытие между чанками в символах
-RAG_TOP_K = int(os.getenv("RAG_TOP_K", "12"))  # Количество лучших результатов для контекста
-RAG_CONTEXT_LENGTH = int(os.getenv("RAG_CONTEXT_LENGTH", "1500"))  # Максимальная длина контекста на источник в символах
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "8"))  # Количество лучших результатов для контекста
+RAG_CONTEXT_LENGTH = int(os.getenv("RAG_CONTEXT_LENGTH", "2500"))  # Максимальная длина контекста на источник в символах
 RAG_ENABLE_CITATIONS = os.getenv("RAG_ENABLE_CITATIONS", "true").lower() == "true"  # Включить inline citations
 RAG_MIN_RERANK_SCORE = float(os.getenv("RAG_MIN_RERANK_SCORE", "0.15"))  # Порог уверенности для ответа (если есть reranker)
 RAG_DEBUG_RETURN_CHUNKS = os.getenv("RAG_DEBUG_RETURN_CHUNKS", "false").lower() == "true"  # Возвращать debug информацию о чанках
@@ -96,7 +96,7 @@ if RAG_BACKEND not in {"legacy", "qdrant"}:
 # Orchestrator switch (Phase D cutover)
 # false -> legacy route-level intent boosts/fallback ranking
 # true  -> v4 primary path without query-specific hardcoded boosts
-RAG_ORCHESTRATOR_V4 = os.getenv("RAG_ORCHESTRATOR_V4", "true").lower() == "true"
+RAG_ORCHESTRATOR_V4 = os.getenv("RAG_ORCHESTRATOR_V4", "false").lower() == "true"
 
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip().rstrip("/")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()

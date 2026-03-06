@@ -44,7 +44,11 @@ class PDFLoader(DocumentLoader):
                         title = f"Страница {i + 1}"
                         if len(page_chunks) > 1:
                             title = f"{title} (фрагмент {idx})"
-                        metadata: Dict[str, object] = {"type": "pdf", "page": i + 1}
+                        metadata: Dict[str, object] = {
+                            "type": "pdf",
+                            "page": i + 1,
+                            "chunk_kind": "list",  # PDF-страницы — перечислительный текст; даёт 2× лимит контекста
+                        }
                         section = _detect_pdf_section(part)
                         if section:
                             metadata["section_title"] = section
