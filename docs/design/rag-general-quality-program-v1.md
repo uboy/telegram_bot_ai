@@ -49,6 +49,12 @@ Rule: one completed step == one commit. No multi-step mixed commits.
 Commit outputs:
 - one commit per step (`P0-1` .. `P0-4`).
 
+P0-1 artifact:
+- `docs/design/rag-quality-metrics-contract-v1.md`.
+
+P0-2 artifact:
+- `docs/design/rag-eval-ready-corpus-v1.md`.
+
 ### Phase 1 - Ingestion Metadata Quality
 - Step P1-1: normalize metadata contract across all loaders.
 - Step P1-2: harden markdown/code chunk metadata consistency.

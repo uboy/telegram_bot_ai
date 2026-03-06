@@ -74,6 +74,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
     - for factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points;
     - for metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing.
   - In Phase D orchestrator mode (`RAG_ORCHESTRATOR_V4=true`), route-level query-specific boosts/fallback are disabled in primary path.
+  - RAG eval uses a fixed, versioned ready-data suite by default (`tests/data/rag_eval_ready_data_v1.yaml`) to keep quality comparisons reproducible.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers.
   - Sanitize command snippets not present in KB context.
@@ -143,6 +144,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Retention lifecycle runs on schedule: old retrieval logs, old document versions/chunks, eval artifacts, and drift audit snapshots are purged by policy with `retention_deletion_audit` entries.
 - Backend exposes eval run lifecycle: `POST /api/v1/rag/eval/run` queues benchmark run and `GET /api/v1/rag/eval/{run_id}` returns run status + per-slice metrics.
 - Statistical quality gate script validates eval run against baseline using thresholds, minimum sample size, and bootstrap 95% CI delta margin.
+- Eval ready-data suite is contract-tested for minimum size, unique case ids, required fields, and required slice coverage before use in regression cycles.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

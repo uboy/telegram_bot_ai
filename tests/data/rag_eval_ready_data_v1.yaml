@@ -1,0 +1,185 @@
+# Fixed ready-data corpus for RAG regression evaluation (v1)
+# Domain-agnostic contract file: queries + expected source/snippets.
+
+test_cases:
+  - id: en_howto_sync_001
+    query: "how to initialize repository and sync source code"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "repo init"
+      - "repo sync"
+
+  - id: en_howto_build_002
+    query: "how to build sdk for windows host"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "build"
+      - "sdk"
+
+  - id: en_howto_test_003
+    query: "how to run xts tests with xdevice"
+    expected_source: "XTS build and run"
+    expected_snippets:
+      - "xdevice"
+      - "python -m xdevice"
+
+  - id: en_factoid_004
+    query: "what python version is recommended for xts workflow"
+    expected_source: "XTS build and run"
+    expected_snippets:
+      - "Python"
+      - "3.10"
+
+  - id: en_factoid_numeric_005
+    query: "how often is local mirror synced every 15 minutes"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "15 minutes"
+
+  - id: en_legal_006
+    query: "what policy or regulation notes are required before release build"
+    expected_source: "Release policy"
+    expected_snippets:
+      - "policy"
+
+  - id: en_numeric_007
+    query: "what is target api level 12 for this build profile"
+    expected_source: "Build profile"
+    expected_snippets:
+      - "api"
+      - "12"
+
+  - id: en_long_context_008
+    query: "how to prepare full host environment and then initialize, sync, and build step by step when I need reproducible results across multiple machines and want to avoid inconsistent prebuilts and dependency drift"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "initialize"
+      - "sync"
+      - "build"
+
+  - id: ru_howto_009
+    query: "как инициализировать репозиторий и синхронизировать исходники"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "repo init"
+      - "repo sync"
+
+  - id: ru_howto_010
+    query: "как собрать sdk для windows"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "sdk"
+      - "windows"
+
+  - id: ru_howto_011
+    query: "как запустить xts тесты"
+    expected_source: "XTS build and run"
+    expected_snippets:
+      - "xdevice"
+
+  - id: ru_factoid_012
+    query: "кто отвечает за запуск тестового набора"
+    expected_source: "XTS build and run"
+    expected_snippets:
+      - "xdevice"
+
+  - id: ru_factoid_013
+    query: "как часто обновляется локальное зеркало"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "minutes"
+
+  - id: ru_legal_014
+    query: "какие правовые требования и policy указаны перед релизом"
+    expected_source: "Release policy"
+    expected_snippets:
+      - "policy"
+
+  - id: ru_numeric_015
+    query: "какая версия sdk 10 используется в примере"
+    expected_source: "Build profile"
+    expected_snippets:
+      - "sdk"
+      - "10"
+
+  - id: ru_long_context_016
+    query: "как пошагово подготовить окружение, проверить зависимости, инициализировать репозиторий, синхронизировать код, выполнить сборку и убедиться, что результаты воспроизводимы на разных машинах без ручных исправлений"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "подготов"
+      - "синхро"
+      - "сборк"
+
+  - id: mixed_howto_017
+    query: "как запустить build.sh on Linux host"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "build.sh"
+
+  - id: mixed_factoid_018
+    query: "кто owns release process and who approves test run"
+    expected_source: "Release process"
+    expected_snippets:
+      - "release"
+
+  - id: mixed_numeric_019
+    query: "какой target level 11 нужен for sdk build"
+    expected_source: "Build profile"
+    expected_snippets:
+      - "11"
+
+  - id: mixed_legal_020
+    query: "какие legal requirements and policy docs apply"
+    expected_source: "Release policy"
+    expected_snippets:
+      - "legal"
+
+  - id: en_howto_021
+    query: "how to configure ccache for faster rebuild"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "ccache"
+
+  - id: ru_howto_022
+    query: "как использовать локальное зеркало при repo init"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "reference"
+
+  - id: en_factoid_023
+    query: "who should run sanity tests before packaging"
+    expected_source: "Test process"
+    expected_snippets:
+      - "test"
+
+  - id: ru_factoid_024
+    query: "какой минимальный набор шагов перед запуском сборки"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "шаг"
+
+  - id: en_numeric_025
+    query: "what is build timeout 30 minutes recommendation"
+    expected_source: "Build policy"
+    expected_snippets:
+      - "30"
+      - "minutes"
+
+  - id: ru_numeric_026
+    query: "сколько потоков 8 рекомендуется для sync"
+    expected_source: "Sync&Build"
+    expected_snippets:
+      - "8"
+      - "sync"
+
+  - id: en_legal_027
+    query: "what regulation constraints should be validated in ci"
+    expected_source: "Compliance"
+    expected_snippets:
+      - "regulation"
+
+  - id: ru_legal_028
+    query: "какие policy ограничения проверяются в ci"
+    expected_source: "Compliance"
+    expected_snippets:
+      - "policy"

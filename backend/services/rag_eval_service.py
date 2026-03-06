@@ -41,7 +41,7 @@ def _suite_path() -> Path:
     raw = (os.getenv("RAG_EVAL_SUITE_FILE", "") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
-    return Path(__file__).resolve().parents[2] / "tests" / "rag_eval.yaml"
+    return Path(__file__).resolve().parents[2] / "tests" / "data" / "rag_eval_ready_data_v1.yaml"
 
 
 def _load_yaml_suite() -> List[Dict[str, Any]]:

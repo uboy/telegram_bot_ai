@@ -601,3 +601,35 @@
   - added backlog tasks `RAGQLTY-001..018` in `coordination/tasks.jsonl`.
 - notes:
   - this update is planning/documentation only; no runtime code behavior changed.
+
+## 2026-03-06 RAGQLTY-001 completion snapshot (P0-1)
+- step:
+  - define generalized RAG quality metrics contract and baseline gate semantics.
+- artifacts:
+  - added `docs/design/rag-quality-metrics-contract-v1.md`.
+  - updated `docs/design/rag-general-quality-program-v1.md` with explicit P0-1 artifact link.
+  - added review artifact `coordination/reviews/ragqlty-p0-1-metrics-contract-2026-03-06.md`.
+  - marked `RAGQLTY-001` completed in `coordination/tasks.jsonl`.
+- verification:
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- notes:
+  - atomic documentation step only; runtime/API behavior unchanged.
+
+## 2026-03-06 RAGQLTY-002 completion snapshot (P0-2)
+- step:
+  - add fixed ready-data eval corpus and enforce dataset contract.
+- implementation:
+  - added corpus: `tests/data/rag_eval_ready_data_v1.yaml`.
+  - switched default eval suite path in `backend/services/rag_eval_service.py` to versioned ready-data corpus.
+  - added contract test `tests/test_rag_eval_dataset_contract.py` (size/unique id/required fields/required slices).
+- docs/spec:
+  - added design note `docs/design/rag-eval-ready-corpus-v1.md`.
+  - updated `docs/design/rag-general-quality-program-v1.md` with P0-2 artifact link.
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/USAGE.md`.
+  - added review artifact `coordination/reviews/ragqlty-p0-2-ready-corpus-2026-03-06.md`.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py` -> PASS
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py` -> PASS (`6 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS

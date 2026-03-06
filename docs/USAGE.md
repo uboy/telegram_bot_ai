@@ -135,6 +135,9 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/diagnostics/<req
 
 ## Запуск RAG eval-run
 
+По умолчанию eval-run использует фиксированный ready-data корпус:
+- `tests/data/rag_eval_ready_data_v1.yaml`
+
 Запустить benchmark suite:
 
 ```bash
@@ -166,7 +169,7 @@ python scripts/rag_orchestrator_compare.py ^
   --v4-base-url http://v4-host:8000 ^
   --api-key <API_KEY> ^
   --kb-id <KB_ID> ^
-  --cases-file tests/rag_eval.yaml ^
+  --cases-file tests/data/rag_eval_ready_data_v1.yaml ^
   --json-out data/rag_compare_report.json
 ```
 
