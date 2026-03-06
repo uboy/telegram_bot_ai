@@ -27,7 +27,7 @@ class BackendClient:
         self.api_prefix = os.getenv("BACKEND_API_PREFIX", "/api/v1")
         self.timeout = timeout
         # Таймаут для RAG-запросов (может быть дольше из-за эмбеддингов/LLM)
-        self.rag_timeout = float(os.getenv("BACKEND_RAG_TIMEOUT", "60.0"))
+        self.rag_timeout = float(os.getenv("BACKEND_RAG_TIMEOUT", "180.0"))
         # Таймаут для длительных операций (ingestion) - по умолчанию 5 минут
         self.ingestion_timeout = float(os.getenv("BACKEND_INGESTION_TIMEOUT", "300.0"))
         # API-ключ для авторизации запросов к backend (опционально)

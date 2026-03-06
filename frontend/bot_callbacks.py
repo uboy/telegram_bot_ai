@@ -572,15 +572,44 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Настройки RAG
     if data == 'rag_settings':
-        from shared.config import RAG_MODEL_NAME, RAG_RERANK_MODEL
-        text = (
-            f"🔧 Настройки RAG\n\n"
-            f"Текущая модель эмбеддингов: {RAG_MODEL_NAME}\n"
-            f"Текущая модель ранкинга: {RAG_RERANK_MODEL}\n\n"
-            f"ℹ️ Изменения сохраняются в .env файл.\n"
-            f"🔄 После изменения модели используйте кнопку 'Перезагрузить модели' для применения без перезапуска бота."
+        from shared.config import (
+            RAG_MODEL_NAME, RAG_RERANK_MODEL, RAG_ENABLE_RERANK,
+            RAG_BACKEND, RAG_ORCHESTRATOR_V4,
+            RAG_MAX_CANDIDATES, RAG_TOP_K, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP,
+            RAG_CONTEXT_LENGTH, RAG_MIN_RERANK_SCORE, RAG_DEVICE,
         )
-        await safe_edit_message_text(query, text, reply_markup=rag_settings_menu())
+        # Проверяем наличие pymorphy (морфологическая нормализация BM25)
+        try:
+            from shared.rag_system import HAS_PYMORPHY
+        except Exception:
+            HAS_PYMORPHY = False
+
+        backend_label = "Qdrant (dense + BM25)" if RAG_BACKEND == "qdrant" else "FAISS (in-process) + BM25"
+        rerank_label = f"✅ {RAG_RERANK_MODEL}" if RAG_ENABLE_RERANK else f"⚪ выключен ({RAG_RERANK_MODEL})"
+        morph_label = "✅ pymorphy (лемматизация)" if HAS_PYMORPHY else "⚪ только стоп-слова"
+        v4_label = "V4 (pure semantic)" if RAG_ORCHESTRATOR_V4 else "V3 (semantic + keyword fallback)"
+
+        text = (
+            "🔧 <b>Настройки RAG</b>\n\n"
+            "<b>— Модели —</b>\n"
+            f"📦 <b>Эмбеддинги:</b> <code>{RAG_MODEL_NAME}</code>\n"
+            f"🏆 <b>Reranker:</b> {rerank_label}\n"
+            f"🔤 <b>Морфология BM25:</b> {morph_label}\n\n"
+            "<b>— Архитектура —</b>\n"
+            f"🗄️ <b>Backend:</b> {backend_label}\n"
+            f"🧭 <b>Оркестратор:</b> {v4_label}\n"
+            f"💻 <b>Устройство:</b> <code>{RAG_DEVICE}</code>\n\n"
+            "<b>— Параметры поиска —</b>\n"
+            f"🔎 <b>Кандидаты (max):</b> {RAG_MAX_CANDIDATES}\n"
+            f"📊 <b>Top-K результатов:</b> {RAG_TOP_K}\n"
+            f"📏 <b>Порог reranker:</b> {RAG_MIN_RERANK_SCORE}\n\n"
+            "<b>— Чанкинг/контекст —</b>\n"
+            f"✂️ <b>Размер чанка:</b> {RAG_CHUNK_SIZE} симв. / перекрытие {RAG_CHUNK_OVERLAP}\n"
+            f"📖 <b>Длина контекста:</b> {RAG_CONTEXT_LENGTH} симв. на источник\n\n"
+            "ℹ️ Изменения сохраняются в .env файл.\n"
+            "🔄 После смены модели нажмите «Перезагрузить модели»."
+        )
+        await safe_edit_message_text(query, text, reply_markup=rag_settings_menu(), parse_mode='HTML')
         return
     
     if data == 'select_embedding_model':
@@ -2016,10 +2045,32 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     
     # Настройки ИИ
     if data == 'admin_ai':
+        from shared.config import OLLAMA_MODEL
         providers = ai_manager.list_providers()
         current = ai_manager.current_provider or 'ollama'
-        text = f"🔧 Настройки ИИ\n\nТекущий провайдер: {current}\nДоступные провайдеры: {', '.join(providers)}"
-        await safe_edit_message_text(query, text, reply_markup=ai_providers_menu(providers, current))
+        provider_obj = ai_manager.get_provider(current)
+
+        # Текущая текстовая модель (in-memory состояние)
+        text_model = getattr(provider_obj, 'model', None) or ''
+        env_model = OLLAMA_MODEL or ''
+
+        lines = ["🔧 <b>Настройки ИИ</b>\n"]
+        lines.append(f"⚡ <b>Провайдер:</b> <code>{current}</code>")
+        if text_model:
+            lines.append(f"💬 <b>Модель текста:</b> <code>{text_model}</code>")
+        if env_model and env_model != text_model:
+            lines.append(f"📋 <b>Дефолт (.env):</b> <code>{env_model}</code> ⚠️ отличается от текущей")
+        elif env_model:
+            lines.append(f"📋 <b>Дефолт (.env):</b> <code>{env_model}</code>")
+        lines.append(f"\n🖼️ <b>Модель изображений:</b> задаётся пользователем (Ollama)")
+        lines.append(f"🌐 <b>Доступные провайдеры:</b> {', '.join(providers) if providers else '—'}")
+        lines.append(
+            "\n<i>Текстовая/image модели — индивидуальные настройки каждого пользователя.\n"
+            "RAG-модели — в разделе «Настройки RAG».</i>"
+        )
+
+        text = "\n".join(lines)
+        await safe_edit_message_text(query, text, reply_markup=ai_providers_menu(providers, current), parse_mode='HTML')
         return
 
     if data == 'admin_asr':
