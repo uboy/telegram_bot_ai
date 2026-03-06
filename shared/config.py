@@ -71,7 +71,7 @@ else:
 # Оптимальные дефолты для RU+EN под GPU (V100 32GB): мультиязычные эмбеддинги + reranker.
 RAG_MODEL_NAME = os.getenv("RAG_MODEL_NAME", "intfloat/multilingual-e5-base")
 RAG_ENABLE = os.getenv("RAG_ENABLE", "true").lower() == "true"
-RAG_MAX_CANDIDATES = int(os.getenv("RAG_MAX_CANDIDATES", "80"))  # Количество кандидатов для векторного поиска перед rerank
+RAG_MAX_CANDIDATES = int(os.getenv("RAG_MAX_CANDIDATES", "150"))  # Количество кандидатов для векторного поиска перед rerank
 RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "BAAI/bge-reranker-base")
 RAG_ENABLE_RERANK = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"  # Мультиязычный reranker
 # Устройство для моделей RAG: 'cpu', 'cuda' (автоматически выберет GPU), 'cuda:0', 'cuda:1' и т.д.
@@ -96,7 +96,7 @@ if RAG_BACKEND not in {"legacy", "qdrant"}:
 # Orchestrator switch (Phase D cutover)
 # false -> legacy route-level intent boosts/fallback ranking
 # true  -> v4 primary path without query-specific hardcoded boosts
-RAG_ORCHESTRATOR_V4 = os.getenv("RAG_ORCHESTRATOR_V4", "false").lower() == "true"
+RAG_ORCHESTRATOR_V4 = os.getenv("RAG_ORCHESTRATOR_V4", "true").lower() == "true"
 
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip().rstrip("/")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()

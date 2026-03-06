@@ -5,6 +5,7 @@ import os
 import json
 import logging
 import threading
+import functools
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 from collections import defaultdict
@@ -33,6 +34,43 @@ try:
     warnings.filterwarnings('ignore', message='.*hf_xet.*', category=RuntimeWarning)
 except ImportError:
     logger.warning("sentence-transformers и faiss не установлены. RAG будет работать в упрощенном режиме.")
+
+# pymorphy для морфологической нормализации (optional, graceful degradation)
+# Поддерживается pymorphy3 (Python 3.11+) и pymorphy2 (fallback)
+HAS_PYMORPHY = False
+_morph = None
+try:
+    import pymorphy3 as _pymorphy_module
+    _morph = _pymorphy_module.MorphAnalyzer()
+    HAS_PYMORPHY = True
+except ImportError:
+    try:
+        import pymorphy2 as _pymorphy_module  # type: ignore[no-redef]
+        _morph = _pymorphy_module.MorphAnalyzer()
+        HAS_PYMORPHY = True
+    except (ImportError, AttributeError):
+        pass
+
+_RU_STOP_WORDS = frozenset({
+    "и", "в", "не", "на", "что", "как", "это", "он", "она", "они",
+    "то", "с", "по", "из", "а", "но", "за", "до", "от", "при",
+    "или", "же", "о", "об", "так", "ещё", "бы", "уже", "если",
+    "его", "её", "им", "их", "нет", "да", "нам", "вам", "всё",
+    "всех", "один", "два", "три", "год", "лет", "только", "также",
+    "более", "может", "этого", "этому", "этим", "этой", "эти",
+    "для", "над", "под", "без", "через", "между", "после",
+    "перед", "чтобы", "когда", "потому", "где", "был", "была",
+    "были", "есть", "быть", "будет", "который", "которая",
+    "которые", "которого",
+})
+
+
+@functools.lru_cache(maxsize=8192)
+def _normalize_ru(token: str) -> str:
+    """Нормализовать токен через pymorphy2 (с кешированием результатов)."""
+    if HAS_PYMORPHY and _morph is not None:
+        return _morph.parse(token)[0].normal_form
+    return token
 
 
 # Классы KnowledgeBase и KnowledgeChunk импортируются из database.py
@@ -244,7 +282,7 @@ class RAGSystem:
                     except ImportError:
                         rerank_model_name = os.getenv(
                             "RAG_RERANK_MODEL",
-                            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                            "BAAI/bge-reranker-base",
                         )
 
                     # Проверить кеш для reranker
@@ -326,7 +364,7 @@ class RAGSystem:
                 self.enable_rerank = enable_rerank
             except ImportError:
                 new_model_name = os.getenv("RAG_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-                new_rerank_model = os.getenv("RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+                new_rerank_model = os.getenv("RAG_RERANK_MODEL", "BAAI/bge-reranker-base")
                 device = os.getenv("RAG_DEVICE", "cpu")
                 enable_rerank = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
                 self.enable_rerank = enable_rerank
@@ -666,7 +704,11 @@ class RAGSystem:
 
     def _tokenize(self, text: str) -> List[str]:
         import re
-        return re.findall(r"\w+", (text or "").lower())
+        tokens = re.findall(r"\w+", (text or "").lower())
+        tokens = [t for t in tokens if len(t) > 2 and t not in _RU_STOP_WORDS]
+        if HAS_PYMORPHY:
+            tokens = [_normalize_ru(t) for t in tokens]
+        return tokens
 
     def _build_bm25_index(self, chunks: List[KnowledgeChunk]) -> Dict:
         df: Dict[str, int] = {}

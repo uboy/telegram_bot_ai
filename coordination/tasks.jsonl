@@ -64,3 +64,4 @@
 {"id":"RAGOUT-027","title":"Add host-ready docker wrapper script for one-command legacy-v4 compare run","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-028","title":"Document wrapper compare script usage in usage/ops/testing guides","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-029","title":"Produce review artifact and sync coordination state for compare wrapper rollout","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
+{"id":"RAGAN-001","title":"TODO: зафиксировать AS-IS анализ текущего RAG алгоритма (технологии, ingestion, retrieval/query path, хранение) и подготовить базу для независимого review слабых мест","status":"todo","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}

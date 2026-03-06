@@ -72,6 +72,8 @@ class DummyDB:
 
 def test_rag_query_definition_prefers_definition_chunk(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):
         return [
@@ -115,6 +117,8 @@ def test_rag_query_definition_prefers_definition_chunk(monkeypatch):
 
 def test_rag_query_point_uses_keyword_fallback_chunk(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):
         return [
@@ -149,6 +153,8 @@ def test_rag_query_point_uses_keyword_fallback_chunk(monkeypatch):
 
 def test_rag_query_factoid_uses_keyword_fallback_chunk(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):
         return [
@@ -184,6 +190,8 @@ def test_rag_query_factoid_uses_keyword_fallback_chunk(monkeypatch):
 
 def test_rag_query_factoid_target_metric_with_year(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):
         return [
@@ -218,6 +226,8 @@ def test_rag_query_factoid_target_metric_with_year(monkeypatch):
 
 def test_rag_query_factoid_strategy_period(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):
         return [
@@ -252,6 +262,8 @@ def test_rag_query_factoid_strategy_period(monkeypatch):
 
 def test_rag_query_factoid_supercomputer_power(monkeypatch):
     from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):
         return [

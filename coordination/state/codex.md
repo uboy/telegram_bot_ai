@@ -514,3 +514,18 @@
   - added `coordination/reviews/rag-outbox-phase-d3-2026-03-05.md`.
 - next step:
   - user executes `bash scripts/run_rag_compare_stack.sh` on target host and shares report for cutover decision.
+
+## 2026-03-06 RAG AS-IS analysis snapshot
+- task:
+  - сформировать детальное описание текущего RAG алгоритма и сохранить анализ как TODO в задачах проекта.
+- artifacts:
+  - added `docs/design/rag-current-algorithm-as-is-v1.md`:
+    - технологический стек RAG,
+    - ingestion pipeline по типам источников,
+    - chunking/metadata/versioning/storage flow,
+    - retrieval algorithm (`rag_system.search`) и route orchestration (`/rag/query`, legacy/v4),
+    - diagnostics/eval/retention/outbox контур.
+  - updated `coordination/tasks.jsonl`:
+    - added `RAGAN-001` со статусом `todo` для формального закрепления анализа и следующего review цикла.
+- notes:
+  - изменения только в документации/координационных артефактах, без изменений runtime-кода.
