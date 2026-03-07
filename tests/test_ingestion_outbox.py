@@ -99,6 +99,49 @@ def test_ingest_web_page_emits_web_outbox_event(monkeypatch):
     assert captured[0]["version"] == 2
 
 
+def test_ingest_web_page_normalizes_chunk_metadata(monkeypatch):
+    db = DummyDB()
+    service = IngestionService(db=db)
+    captured_rows = []
+
+    monkeypatch.setattr(service, "_get_kb_settings", lambda _kb_id: {})
+    monkeypatch.setattr(service, "_classify_from_chunks", lambda _chunks, _path: "instruction")
+    monkeypatch.setattr(service, "_infer_language_from_chunks", lambda _chunks: "en")
+    monkeypatch.setattr(service, "_upsert_document", lambda **kwargs: (77, 4))
+    monkeypatch.setattr(
+        "backend.services.ingestion_service.document_loader_manager.load_document",
+        lambda *_args, **_kwargs: [{"content": "run build", "metadata": {"type": "web"}}],
+    )
+    monkeypatch.setattr("backend.services.ingestion_service.rag_system.delete_chunks_by_source_exact", lambda **_kwargs: 0)
+
+    def _capture_batch(rows):
+        captured_rows.extend(rows)
+        return []
+
+    monkeypatch.setattr("backend.services.ingestion_service.rag_system.add_chunks_batch", _capture_batch)
+    monkeypatch.setattr(service, "_enqueue_index_upsert_event", lambda **_kwargs: None)
+
+    service.ingest_web_page(
+        kb_id=9,
+        url="https://example.org/wiki",
+        telegram_id="42",
+        username="tester",
+    )
+
+    assert len(captured_rows) == 1
+    meta = captured_rows[0]["metadata"]
+    assert meta["type"] == "web"
+    assert meta["title"] == "https://example.org/wiki"
+    assert meta["doc_title"] == "https://example.org/wiki"
+    assert meta["section_title"] == "https://example.org/wiki"
+    assert meta["section_path"] == "https://example.org/wiki"
+    assert meta["chunk_kind"] == "text"
+    assert meta["document_class"] == "instruction"
+    assert meta["language"] == "en"
+    assert meta["doc_version"] == 4
+    assert "source_updated_at" in meta
+
+
 def test_ingest_codebase_path_emits_code_and_codebase_events(monkeypatch, tmp_path: Path):
     db = DummyDB()
     service = IngestionService(db=db)
@@ -143,3 +186,51 @@ def test_ingest_codebase_path_emits_code_and_codebase_events(monkeypatch, tmp_pa
     assert aggregate_event["document_id"] is None
     assert aggregate_event["version"] is None
     assert aggregate_event["chunks_added"] == 1
+
+
+def test_ingest_codebase_path_sets_code_metadata_contract(monkeypatch, tmp_path: Path):
+    db = DummyDB()
+    service = IngestionService(db=db)
+    captured_rows = []
+
+    code_file = tmp_path / "main.py"
+    code_file.write_text("print('ok')\n", encoding="utf-8")
+
+    monkeypatch.setattr(service, "_get_kb_settings", lambda _kb_id: {})
+    monkeypatch.setattr(service, "_get_existing_doc_hash", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_classify_from_chunks", lambda _chunks, _path: "code")
+    monkeypatch.setattr(service, "_infer_language_from_chunks", lambda _chunks: "en")
+    monkeypatch.setattr(service, "_upsert_document", lambda **kwargs: (33, 7))
+    monkeypatch.setattr(
+        "backend.services.ingestion_service.document_loader_manager.load_document",
+        lambda *_args, **_kwargs: [{"content": "print('ok')", "metadata": {}}],
+    )
+    monkeypatch.setattr("backend.services.ingestion_service.rag_system.delete_chunks_by_source_exact", lambda **_kwargs: 0)
+
+    def _capture_batch(rows):
+        captured_rows.extend(rows)
+        return []
+
+    monkeypatch.setattr("backend.services.ingestion_service.rag_system.add_chunks_batch", _capture_batch)
+    monkeypatch.setattr(service, "_enqueue_index_upsert_event", lambda **_kwargs: None)
+
+    service.ingest_codebase_path(
+        kb_id=2,
+        code_path=str(tmp_path),
+        telegram_id="42",
+        username="tester",
+        repo_label="repo",
+    )
+
+    assert len(captured_rows) == 1
+    meta = captured_rows[0]["metadata"]
+    assert meta["type"] == "code"
+    assert meta["chunk_kind"] == "code_file"
+    assert meta["title"] == "main.py"
+    assert meta["doc_title"] == "main.py"
+    assert meta["section_title"] == "main.py"
+    assert meta["section_path"] == "main.py"
+    assert meta["code_lang"] == "python"
+    assert meta["file_path"] == "main.py"
+    assert meta["repo_root"] == "repo"
+    assert meta["doc_version"] == 7

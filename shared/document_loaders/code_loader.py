@@ -74,8 +74,22 @@ class CodeLoader(DocumentLoader):
     def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         try:
             content = _read_text_file(source)
+            doc_title = os.path.basename(source) or ""
+            if "." in doc_title:
+                doc_title = os.path.splitext(doc_title)[0]
+            section_path = doc_title or "ROOT"
             if not content:
-                return [{"content": "", "title": "", "metadata": {"type": "code"}}]
+                return [{
+                    "content": "",
+                    "title": doc_title,
+                    "metadata": {
+                        "type": "code",
+                        "chunk_kind": "code",
+                        "doc_title": doc_title,
+                        "section_title": doc_title,
+                        "section_path": section_path,
+                    },
+                }]
 
             ext = os.path.splitext(source)[1].lower()
             code_lang = _CODE_LANG_BY_EXT.get(ext, "")
@@ -104,6 +118,10 @@ class CodeLoader(DocumentLoader):
                         "chunk_kind": "code",
                         "code_lang": code_lang,
                         "symbols": symbols,
+                        "chunk_no": idx,
+                        "doc_title": doc_title,
+                        "section_title": doc_title,
+                        "section_path": section_path,
                     },
                 })
             return chunks

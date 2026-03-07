@@ -232,3 +232,67 @@ Status: Implementation iteration completed (qdrant + diagnostics), further bench
 - [x] Update `docs/REQUIREMENTS_TRACEABILITY.md` with new AC mappings.
 - [x] Update `docs/USAGE.md` and `docs/OPERATIONS.md` for new knobs/diagnostics.
 - [x] Produce review report artifact for implementation cycle.
+
+## Plan: RAG Search Improvement Program + Wiki Flow Consolidation
+
+Date: 2026-03-07
+Status: Draft for CC approval
+
+### Research Checklist
+- [x] Audit current RAG runtime path (`shared/rag_system.py`, `backend/api/routes/rag.py`).
+- [x] Audit existing design/docs/reviews for RAG quality work.
+- [x] Audit unfinished backlog `RAGQLTY-009..018`.
+- [x] Audit wiki example URL flow and confirm what is already fixed.
+
+### Implementation Checklist
+- [ ] Finish `RAGQLTY-009`:
+  - stabilize hybrid fusion and rerank selection boundaries,
+  - review hidden ranking heuristics still living in `shared/rag_system.py`,
+  - keep generalized behavior as the default path.
+- [ ] Finish `RAGQLTY-010`:
+  - assert retrieval diagnostics content/order in automated tests,
+  - make ranking regressions visible before prompt generation.
+- [ ] Finish `RAGQLTY-011` and `RAGQLTY-012`:
+  - align RU/EN answer prompts to the same grounded direct-answer contract,
+  - remove forced template headings from remaining prompt branches,
+  - add format regressions.
+- [ ] Finish `RAGQLTY-013` to `RAGQLTY-015`:
+  - relax command sanitizer to token-level validation,
+  - preserve context-backed URLs, including wiki/document links,
+  - add positive/negative safety regressions.
+- [ ] Finish `RAGQLTY-016` to `RAGQLTY-018`:
+  - add end-to-end RAG regression suite over representative fixed corpora,
+  - wire CI fail-fast gate,
+  - document local/CI quality workflow.
+- [ ] Add wiki follow-up:
+  - consolidate or retire orphan `wiki_git_load` / `wiki_zip_load` callback branches,
+  - keep the working `waiting_wiki_root` path intact,
+  - add regression coverage for fallback mode visibility and failure handling.
+- [ ] Near-ideal follow-up after `RAGQLTY`:
+  - introduce richer canonical chunk/document structure in runtime,
+  - upgrade parser fidelity for PDF/DOCX/web ingestion,
+  - move context assembly to evidence-pack policy,
+  - expand eval to multi-corpus/source-family slices.
+
+### Verification Checklist
+- [ ] Run focused `pytest` per atomic step.
+- [ ] Run `python -m py_compile <changed_py_files>`.
+- [ ] Run `python scripts/scan_secrets.py`.
+- [ ] Run `python scripts/ci_policy_gate.py --working-tree`.
+- [ ] For quality-impacting steps, run eval baseline + quality gate compare.
+
+### Documentation Checklist
+- [ ] Update `SPEC.md` only when runtime behavior changes begin.
+- [ ] Update/add `docs/design/*` per atomic step.
+- [ ] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [ ] Update `docs/USAGE.md`, `docs/OPERATIONS.md`, `docs/TESTING.md`, `docs/API_REFERENCE.md` when behavior/contracts change.
+- [ ] Produce review reports in `coordination/reviews/*` for each implementation step.
+
+### Security/Policy Gates
+- [ ] No dependency changes by default; if that changes, run dependency security scan per policy.
+- [ ] Keep rollback per step explicit and feature-flag based where possible.
+- [ ] Do not broaden logging to include secrets or full private URLs with credentials.
+
+### Current execution source of truth
+- `docs/design/rag-near-ideal-task-breakdown-v1.md`
+- `coordination/tasks.jsonl` entries `RAGEXEC-001..018`

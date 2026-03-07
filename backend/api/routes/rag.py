@@ -212,6 +212,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 RAG_MIN_RERANK_SCORE,
                 RAG_DEBUG_RETURN_CHUNKS,
                 RAG_ORCHESTRATOR_V4,
+                RAG_LEGACY_QUERY_HEURISTICS,
             )
             top_k_search = payload.top_k or RAG_TOP_K
             top_k_for_context = RAG_TOP_K
@@ -220,6 +221,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             min_rerank_score = RAG_MIN_RERANK_SCORE
             debug_return_chunks = RAG_DEBUG_RETURN_CHUNKS
             orchestrator_v4_enabled = bool(RAG_ORCHESTRATOR_V4)
+            legacy_query_heuristics_enabled = bool(RAG_LEGACY_QUERY_HEURISTICS)
         except Exception:  # noqa: BLE001
             top_k_search = payload.top_k or 10
             top_k_for_context = 8
@@ -228,6 +230,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             min_rerank_score = 0.0
             debug_return_chunks = False
             orchestrator_v4_enabled = False
+            legacy_query_heuristics_enabled = False
         orchestrator_mode = "v4" if orchestrator_v4_enabled else "legacy"
 
         # Настройки KB (single-page и контекст)
@@ -962,14 +965,16 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 total += len(block)
             return context_parts
 
-        if orchestrator_v4_enabled:
+        use_legacy_query_heuristics = (not orchestrator_v4_enabled) and legacy_query_heuristics_enabled
+
+        if not use_legacy_query_heuristics:
             intent = "GENERAL"
             query_hints = {}
         else:
             intent = detect_intent(payload.query)
             query_hints = extract_query_hints(payload.query)
 
-        if (not orchestrator_v4_enabled) and kb_id and (
+        if use_legacy_query_heuristics and kb_id and (
             intent in {"DEFINITION", "FACTOID"}
             or query_hints.get("point_numbers")
             or query_hints.get("year_tokens")
@@ -1053,19 +1058,19 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         for r in results:
             doc_id = get_doc_id(r)
             r["doc_id"] = doc_id
-            if orchestrator_v4_enabled:
+            if not use_legacy_query_heuristics:
                 r["rank_score"] = base_score(r)
             else:
                 r["rank_score"] = apply_boosts(payload.query, r, intent, query_hints)
             ranked_results.append(r)
         ranked_results.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
 
-        if (not orchestrator_v4_enabled) and single_page_mode and intent in {"DEFINITION", "FACTOID"}:
+        if use_legacy_query_heuristics and single_page_mode and intent in {"DEFINITION", "FACTOID"}:
             top_k_for_context = max(top_k_for_context, min(8, len(ranked_results)))
-        if (not orchestrator_v4_enabled) and intent == "FACTOID":
+        if use_legacy_query_heuristics and intent == "FACTOID":
             top_k_for_context = min(max(top_k_for_context, 4), 6)
 
-        selected_docs = select_docs("GENERAL" if orchestrator_v4_enabled else intent, ranked_results)
+        selected_docs = select_docs(intent if use_legacy_query_heuristics else "GENERAL", ranked_results)
         filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("RAG intent=%s selected_docs=%s", intent, selected_docs)
@@ -1073,7 +1078,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         # Формируем контекст для LLM
         context_parts: list[str] = []
-        if (not orchestrator_v4_enabled) and intent == "HOWTO" and selected_docs:
+        if use_legacy_query_heuristics and intent == "HOWTO" and selected_docs:
             token_limit_chars = max(3000, context_length * 5)
             for doc_id in selected_docs:
                 doc_chunks = load_doc_chunks(doc_id)
@@ -1088,7 +1093,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                             top_chunk["id"] = c.get("id")
                             break
                 context_parts.extend(build_context_blocks(top_chunk, doc_chunks, token_limit_chars))
-        elif (not orchestrator_v4_enabled) and intent == "FACTOID":
+        elif use_legacy_query_heuristics and intent == "FACTOID":
             # For factual/numeric questions prefer top direct evidence chunks.
             top_n = min(max(top_k_for_context, 4), 6)
             for r in filtered_results[:top_n]:
@@ -1520,4 +1525,3 @@ def rag_reload_models(db: Session = Depends(get_db_dep)) -> Dict[str, Any]:  # n
         "embedding": bool(result.get("embedding")),
         "reranker": bool(result.get("reranker")),
     }
-

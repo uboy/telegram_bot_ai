@@ -1,5 +1,12 @@
 # Design: RAG General Quality Program v1
 
+Status: OUTDATED / SUPERSEDED on 2026-03-07.
+Current execution source of truth:
+- `docs/design/rag-search-improvement-program-v1.md`
+- `docs/design/rag-near-ideal-task-breakdown-v1.md`
+
+Keep this document for historical context only.
+
 Date: 2026-03-06  
 Type: Architecture + execution program (generalized, non-domain-specific)
 
@@ -63,6 +70,15 @@ P0-4 artifact:
 
 P1-1 artifact:
 - `docs/design/rag-ingestion-metadata-contract-v1.md`.
+
+P1-2 artifact:
+- `docs/design/rag-markdown-code-metadata-consistency-v1.md`.
+
+P1-3 artifact:
+- `docs/design/rag-ingestion-regression-coverage-v1.md`.
+
+P2-1 artifact:
+- `docs/design/rag-route-generalized-ranking-cutover-v1.md`.
 
 ### Phase 1 - Ingestion Metadata Quality
 - Step P1-1: normalize metadata contract across all loaders.

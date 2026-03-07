@@ -136,14 +136,18 @@ class MarkdownLoader(DocumentLoader):
                         })
 
                 if not sections:
-                    sections = [{"content": content, "title": "", "section_path": ""}]
+                    sections = [{
+                        "content": content,
+                        "section_title": doc_title,
+                        "section_path": doc_title or "ROOT",
+                    }]
 
             # Чанкинг внутри каждой секции
             chunks: List[Dict[str, str]] = []
             for sec in sections:
                 sec_text_raw = sec.get("content") or ""
-                sec_title = sec.get("section_title") or ""  # Заголовок секции из metadata
-                sec_path = sec.get("section_path") or ""
+                sec_title = sec.get("section_title") or doc_title or ""  # Заголовок секции из metadata
+                sec_path = sec.get("section_path") or doc_title or "ROOT"
                 
                 sec_text_with_placeholders, code_blocks = _extract_code_blocks(sec_text_raw)
                 sec_text_plain = _markdown_to_plain(sec_text_with_placeholders)
@@ -184,6 +188,9 @@ class MarkdownLoader(DocumentLoader):
                     code_lang = None
                     if chunking_mode == "full":
                         chunk_kind = "full_page"
+                        languages = sorted({(cb.get("language") or "").strip() for cb in code_blocks if (cb.get("language") or "").strip()})
+                        if len(languages) == 1:
+                            code_lang = languages[0]
                     elif "__CODE_BLOCK_START__" in part:
                         chunk_kind = "code"
                         # Найти соответствующий code_block: извлечь код из чанка и найти в code_blocks

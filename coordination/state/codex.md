@@ -690,3 +690,266 @@
   - `.venv\\Scripts\\python.exe -m pytest -q tests/test_ingestion_metadata_contract.py tests/test_ingestion_routes.py tests/test_ingestion_outbox.py` -> PASS (`8 passed`)
   - `python scripts/scan_secrets.py` -> PASS
   - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-06 RAGQLTY-006 completion snapshot (P1-2)
+- step:
+  - harden markdown/code chunk metadata consistency.
+- implementation:
+  - updated `shared/document_loaders/code_loader.py` to include stable `doc_title/section_title/section_path/chunk_no` metadata.
+  - updated `shared/document_loaders/markdown_loader.py` section fallbacks and full-mode `code_lang` inference.
+- tests:
+  - updated `tests/test_code_loader.py`.
+  - added `tests/test_markdown_loader_metadata_contract.py`.
+  - validated with existing `tests/test_markdown_loader_preserves_commands.py`.
+- docs/spec:
+  - added design note `docs/design/rag-markdown-code-metadata-consistency-v1.md`.
+  - updated `docs/design/rag-general-quality-program-v1.md`.
+  - updated `SPEC.md` and `docs/REQUIREMENTS_TRACEABILITY.md`.
+  - added review artifact `coordination/reviews/ragqlty-p1-2-markdown-code-metadata-2026-03-06.md`.
+- verification:
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_code_loader.py tests/test_markdown_loader_preserves_commands.py tests/test_markdown_loader_metadata_contract.py tests/test_ingestion_metadata_contract.py` -> PASS (`6 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-06 RAGQLTY-007 completion snapshot (P1-3)
+- step:
+  - add ingestion metadata regression tests and review evidence.
+- implementation:
+  - extended `tests/test_ingestion_outbox.py` with:
+    - `test_ingest_web_page_normalizes_chunk_metadata`,
+    - `test_ingest_codebase_path_sets_code_metadata_contract`.
+- docs:
+  - added design note `docs/design/rag-ingestion-regression-coverage-v1.md`.
+  - updated `docs/design/rag-general-quality-program-v1.md` and `docs/REQUIREMENTS_TRACEABILITY.md`.
+  - added review artifact `coordination/reviews/ragqlty-p1-3-ingestion-regression-coverage-2026-03-06.md`.
+- verification:
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_ingestion_outbox.py tests/test_ingestion_metadata_contract.py tests/test_ingestion_routes.py` -> PASS (`10 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-06 RAGQLTY-008 completion snapshot (P2-1)
+- step:
+  - remove brittle route-level query-specific boosts from default ranking behavior.
+- implementation:
+  - added `RAG_LEGACY_QUERY_HEURISTICS` config/env switch (default `false`).
+  - updated `backend/api/routes/rag.py` so legacy route uses generalized path by default (`base_score`, no keyword fallback) unless explicit rollback switch is enabled.
+  - kept `RAG_ORCHESTRATOR_V4` behavior unchanged.
+- tests:
+  - updated `tests/test_rag_query_definition_intent.py` to explicitly enable legacy heuristics where required and added generalized-default test.
+  - validated diagnostics compatibility via `tests/test_rag_diagnostics.py`.
+- docs/spec:
+  - added design note `docs/design/rag-route-generalized-ranking-cutover-v1.md`.
+  - updated `docs/design/rag-general-quality-program-v1.md`.
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/OPERATIONS.md`.
+  - added review artifact `coordination/reviews/ragqlty-p2-1-generalized-ranking-cutover-2026-03-06.md`.
+- verification:
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py` -> PASS (`13 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+
+## 2026-03-07 Research kickoff: RAG improvement plan + wiki URL example analysis
+- role: team-lead-orchestrator + architect
+- user ask:
+  - провести глубокое исследование проекта, незавершенных задач, дизайн-документов и текущего подхода,
+  - подготовить план реализации для улучшения RAG-поиска по загруженным знаниям,
+  - отдельно проанализировать исправление загрузки wiki по ссылке из примера.
+- classification: non-trivial
+- startup ritual:
+  - read `coordination/tasks.jsonl` and `coordination/state/codex.md`.
+  - no active `in_progress` task existed for this session; activated `RAGAN-001`.
+- findings so far:
+  - relevant unfinished backlog is `RAGQLTY-009..018`:
+    - hybrid fusion/rerank stabilization,
+    - diagnostics assertions,
+    - answer prompt simplification,
+    - RU/EN grounded-response alignment,
+    - sanitizer/token URL preservation,
+    - e2e regression suite + CI gate + docs finalization.
+  - current RAG design surface is spread across:
+    - `docs/design/rag-current-algorithm-as-is-v1.md`,
+    - `docs/design/rag-generalized-architecture-v2.md`,
+    - `docs/design/rag-general-quality-program-v1.md`,
+    - `docs/design/rag-route-generalized-ranking-cutover-v1.md`,
+    - eval/quality docs under `docs/design/rag-eval-*.md`.
+  - wiki URL flow already has two fixes documented:
+    - `docs/design/wiki-url-crawl-state-fix-v1.md` for missing `waiting_wiki_root` handler,
+    - `docs/design/wiki-url-crawl-state-fix-v2.md` for Gitee JS navigation fallback to git loader.
+  - code entry points confirmed:
+    - bot state/input: `frontend/bot_callbacks.py`, `frontend/bot_handlers.py`,
+    - ingestion: `backend/services/ingestion_service.py`, `backend/api/routes/ingestion.py`,
+    - wiki crawling/loaders: `shared/wiki_scraper.py`, `shared/wiki_git_loader.py`,
+    - retrieval/query path: `backend/api/routes/rag.py`, `shared/rag_system.py`.
+- next_step:
+  - inspect the main RAG docs/code paths and synthesize research + implementation plan artifacts for user review.
+
+## 2026-03-07 Research synthesis snapshot
+- deep findings:
+  - unfinished quality work is concentrated in `RAGQLTY-009..018`; ingestion foundations and eval baseline already exist, so the highest-value next work is retrieval calibration, prompt/safety precision, and e2e gates.
+  - `shared/rag_system.py` still contains hidden ranking heuristics even when route-level query heuristics are disabled:
+    - `compute_source_boost(...)`,
+    - `_is_howto_query(...)`,
+    - how-to-specific candidate expansion/sorting,
+    - `_simple_search(...)` strong-token filtering.
+  - `shared/utils.py` prompt contract is inconsistent:
+    - RU answer path requests direct grounded answers without template headings,
+    - EN answer path still forces `Main Answer` / `Additionally Found`.
+  - `shared/rag_safety.py` still over-filters:
+    - strips wiki URLs by pattern,
+    - keeps only URLs literally present in context text,
+    - removes commands by exact line-presence rather than token-grounding.
+  - wiki example URL (`https://gitee.com/mazurdenis/open-harmony/wikis`) is covered on the active path:
+    - `kb_wiki_crawl` -> `waiting_wiki_root` -> `ingest_wiki_crawl`,
+    - `shared/wiki_scraper.py` routes Gitee wiki URLs to `load_wiki_from_git(...)`.
+  - residual wiki gap remains:
+    - `wiki_git_load` / `wiki_zip_load` callbacks still depend on `context.user_data['wiki_urls']`, but current UI flow does not populate that mapping.
+- subagent status:
+  - backlog/wiki explorer completed and confirmed the same residual callback risk.
+  - architect subagent was started per policy but later interrupted before writing artifacts; continued with self-authored docs-only fallback.
+- artifacts created:
+  - `docs/design/rag-search-improvement-program-v1.md`
+  - appended research section in `.scratchpad/research.md`
+  - appended implementation plan section in `.scratchpad/plan.md`
+  - added backlog follow-up task `WIKIFLOW-001`
+- next_step:
+  - hand off research + plan to user for approval before any implementation.
+
+## 2026-03-07 Research handoff verification
+- artifacts confirmed:
+  - `docs/design/rag-search-improvement-program-v1.md` created (implementation strategy + acceptance criteria + approval block).
+  - `.scratchpad/research.md` updated with RAG/wiki audit section.
+  - `.scratchpad/plan.md` updated with execution checklist for `RAGQLTY-009..018` plus `WIKIFLOW-001`.
+  - `coordination/tasks.jsonl` updated:
+    - `RAGAN-001` -> `completed`,
+    - `WIKIFLOW-001` added as follow-up backlog item.
+- verification:
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- agent notes:
+  - architect subagent and runtime explorer were explicitly closed/interrupted after they did not return in a reasonable timeout.
+  - completed plan is grounded in local code/doc inspection plus completed backlog/wiki explorer output.
+
+## 2026-03-07 Follow-up clarification: design quality vs ingestion maturity
+- user follow-up:
+  - asked whether the current design is already the best possible and whether ingestion is sufficiently complete given its impact on quality.
+- assessment:
+  - current design is the strongest state this repo has had so far, but not the best achievable state yet.
+  - biggest remaining quality gap is now retrieval calibration + prompt/safety precision, not ingestion breadth.
+  - ingestion is broadly sufficient as a base:
+    - normalized metadata contract exists,
+    - markdown/code metadata consistency was improved,
+    - source coverage is broad.
+  - ingestion is still not "max-quality complete":
+    - canonical parser/chunk graph from generalized architecture v2 is not fully implemented,
+    - PDF/DOCX/table/list fidelity can still limit downstream retrieval quality,
+    - representative multi-corpus eval coverage is still narrower than real uploaded-knowledge diversity.
+
+## 2026-03-07 Plan refinement for near-ideal target
+- user follow-up:
+  - asked for a concrete project plan to move the current system toward a near-ideal state.
+- planning updates:
+  - expanded `docs/design/rag-search-improvement-program-v1.md` with file-level change maps for:
+    - retrieval calibration,
+    - prompt/format alignment,
+    - safety/postprocess precision,
+    - e2e quality gates,
+    - wiki flow consolidation.
+  - added explicit near-ideal follow-up phases for:
+    - ingestion excellence,
+    - richer chunk/document structure,
+    - evidence-pack context composer,
+    - multi-corpus evaluation.
+  - added roadmap backlog items `RAGIDEAL-001..005` in `coordination/tasks.jsonl`.
+- outcome:
+  - plan now answers not only "what to improve next" but "which files/modules must change to reach near-ideal quality".
+
+## 2026-03-07 Concrete backlog approval and supersession sync
+- user approval:
+  - approved the concrete task breakdown with `APPROVED:v1`.
+- artifacts synchronized:
+  - created `docs/design/rag-near-ideal-task-breakdown-v1.md` as the current execution backlog,
+  - marked superseded RAG roadmap docs as outdated,
+  - replaced high-level placeholder tasks (`RAGQLTY-009..018`, `RAGIDEAL-001..005`, `WIKIFLOW-001`) with concrete `RAGEXEC-001..018`,
+  - updated `coordination/cycle-contract.json` to `RAGEXEC-001`,
+  - recorded explicit approval in `coordination/approval-overrides.json`.
+- next_step:
+  - implementation should start from `RAGEXEC-001` with mandatory verification and independent review.
+
+### Mid-step update: runtime RAG/control-plane scan
+- runtime findings:
+  - `shared/config.py` shows the stack already has explicit rollout levers:
+    - backend switch `RAG_BACKEND` (`legacy`/`qdrant`),
+    - orchestration switches `RAG_ORCHESTRATOR_V4`, `RAG_LEGACY_QUERY_HEURISTICS`,
+    - search sizing knobs (`RAG_MAX_CANDIDATES`, `RAG_TOP_K`, `RAG_CONTEXT_LENGTH`, `RAG_MIN_RERANK_SCORE`),
+    - control-plane knobs for outbox/retention/eval thresholds.
+  - `shared/rag_system.py` confirms hybrid retrieval is already implemented:
+    - dense channel via Qdrant or legacy FAISS,
+    - lexical BM25 channel,
+    - RRF fusion,
+    - optional reranker pass,
+    - fallback path when reranker is unavailable.
+  - `backend/api/routes/rag.py` still carries route-level orchestration complexity:
+    - intent detection and heuristic boosts for `HOWTO` / `DEFINITION` / `FACTOID`,
+    - optional SQL keyword fallback candidate injection,
+    - generalized path when heuristics are disabled,
+    - degraded-mode + `orchestrator_mode` diagnostics persistence.
+  - quality/ops hooks are already present:
+    - eval endpoints (`rag_eval_run`, `rag_eval_status`),
+    - persisted diagnostics in `retrieval_query_logs` / `retrieval_candidate_logs`,
+    - async index outbox worker + retention service,
+    - baseline runner / quality gate / legacy-v4 compare scripts.
+- emerging conclusion:
+  - the next improvement plan should focus on unfinished ranking/generalization steps (`RAGQLTY-009..018`) and not propose redundant infra that the repo already has.
+
+## 2026-03-07 RAGEXEC-001 kickoff
+- role: developer
+- approved source:
+  - `docs/design/rag-search-improvement-program-v1.md`
+  - `docs/design/rag-near-ideal-task-breakdown-v1.md`
+- task:
+  - implement explicit retrieval channel budgets and rerank top-N window.
+- scoped requirements:
+  - add explicit config/env knobs for dense candidate budget, BM25 candidate budget, and rerank input window,
+  - wire these budgets into `shared/rag_system.py`,
+  - keep behavior rollback-safe and avoid touching prompt/safety/context phases in this task,
+  - add/adjust focused retrieval tests,
+  - update spec/config/traceability docs for the new knobs and behavior.
+- next_step:
+  - inspect `shared/config.py`, `shared/rag_system.py`, and retrieval tests before code edits.
+
+## 2026-03-07 RAGEXEC-001 runtime edit snapshot
+- implementation:
+  - added explicit config fallbacks in `shared/config.py`:
+    - `RAG_DENSE_CANDIDATES`,
+    - `RAG_BM25_CANDIDATES`,
+    - `RAG_RERANK_TOP_N`,
+    - all default back to legacy `RAG_MAX_CANDIDATES`.
+  - updated `shared/rag_system.py` to:
+    - load explicit channel budgets,
+    - stop implicit how-to dense-window expansion in favor of config-driven dense budget,
+    - cap rerank input to `max(top_k, RAG_RERANK_TOP_N)`.
+  - added focused regression harness `tests/test_rag_system_budgets.py`.
+- next_step:
+  - run focused verification on the new runtime slice, then update docs/spec/traceability/configuration artifacts and cycle coordination files.
+
+## 2026-03-07 RAGEXEC-001 docs + verification snapshot
+- docs/config:
+  - updated `env.template`, `docs/CONFIGURATION.md`, `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`.
+  - updated `docs/design/rag-near-ideal-task-breakdown-v1.md` with the concrete config contract for this slice.
+  - updated `coordination/cycle-contract.json` to include `tests/test_rag_system_budgets.py` in required artifacts/commands.
+- verification:
+  - `python -m py_compile shared/config.py shared/rag_system.py tests/test_rag_system_budgets.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_system_budgets.py tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py` -> PASS (`15 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- pending:
+  - independent review artifact for `RAGEXEC-001`,
+  - mark `RAGEXEC-001` completed in `coordination/tasks.jsonl` after review sync.
+
+## 2026-03-07 RAGEXEC-001 completion snapshot
+- review:
+  - independent reviewer agent returned PASS with no findings.
+  - review artifact created: `coordination/reviews/ragexec-001-2026-03-07.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-001` -> `completed`.
+- notes:
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.

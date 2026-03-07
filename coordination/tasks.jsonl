@@ -64,27 +64,51 @@
 {"id":"RAGOUT-027","title":"Add host-ready docker wrapper script for one-command legacy-v4 compare run","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-028","title":"Document wrapper compare script usage in usage/ops/testing guides","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-05"}
 {"id":"RAGOUT-029","title":"Produce review artifact and sync coordination state for compare wrapper rollout","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-05"}
-{"id":"RAGAN-001","title":"TODO: зафиксировать AS-IS анализ текущего RAG алгоритма (технологии, ingestion, retrieval/query path, хранение) и подготовить базу для независимого review слабых мест","status":"todo","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
+{"id":"RAGAN-001","title":"TODO: зафиксировать AS-IS анализ текущего RAG алгоритма (технологии, ingestion, retrieval/query path, хранение) и подготовить базу для независимого review слабых мест","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
 {"id":"WIKIBUG-001","title":"Research root cause for broken \"Собрать вики по URL\" flow and prepare fix plan","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
 {"id":"WIKIBUG-002","title":"Implement waiting_wiki_root text-state handling for wiki URL ingestion without regressions","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"WIKIBUG-003","title":"Add regression test and run focused verification for wiki URL flow + related bot handlers","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
 {"id":"WIKIBUG-004","title":"Update SPEC/design/traceability docs and produce review artifact for wiki URL bugfix","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-06"}
 {"id":"WIKIBUG-005","title":"Harden wiki crawl completeness for Gitee JS navigation via git-loader fallback with regression tests","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"WIKIFLOW-001","title":"[OUTDATED] Placeholder wiki follow-up; superseded by RAGEXEC-011..012","status":"superseded","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
+{"id":"RAGIDEAL-001","title":"[OUTDATED] Placeholder ideal-ingestion roadmap item; superseded by RAGEXEC-013","status":"superseded","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
+{"id":"RAGIDEAL-002","title":"[OUTDATED] Placeholder parser-fidelity roadmap item; superseded by RAGEXEC-014..015","status":"superseded","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
+{"id":"RAGIDEAL-003","title":"[OUTDATED] Placeholder chunk-structure roadmap item; superseded by RAGEXEC-013","status":"superseded","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
+{"id":"RAGIDEAL-004","title":"[OUTDATED] Placeholder evidence-pack roadmap item; superseded by RAGEXEC-016..017","status":"superseded","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
+{"id":"RAGIDEAL-005","title":"[OUTDATED] Placeholder multi-corpus eval roadmap item; superseded by RAGEXEC-018","status":"superseded","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
 {"id":"RAGQLTY-001","title":"P0-1 define generalized RAG quality metrics and acceptance thresholds","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-002","title":"P0-2 add fixed ready-data regression corpus for RAG evaluation","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-003","title":"P0-3 implement evaluation runner and baseline quality report artifact","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-004","title":"P0-4 implement threshold-based quality gate integrated with test workflow","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
 {"id":"RAGQLTY-005","title":"P1-1 normalize ingestion metadata contract across all loaders","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-006","title":"P1-2 harden markdown/code chunk metadata consistency","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-007","title":"P1-3 add ingestion metadata regression tests and review report","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-008","title":"P2-1 remove brittle query-specific route boosts and keep generalized ranking behavior","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-009","title":"P2-2 stabilize hybrid retrieval fusion and rerank selection boundaries","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-010","title":"P2-3 add retrieval diagnostics assertions in automated tests","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-011","title":"P3-1 simplify answer prompts and remove forced template headings","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-012","title":"P3-2 align RU/EN grounded response behavior and add format regressions","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-013","title":"P4-1 relax command sanitizer to token-level validation","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-014","title":"P4-2 preserve context-backed URLs while keeping untrusted URL filtering","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-015","title":"P4-3 add safety positive/negative regression tests and review artifact","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-016","title":"P5-1 add end-to-end RAG regression suite over fixed corpus","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-017","title":"P5-2 wire mandatory CI quality gate with fail-fast thresholds","status":"todo","assignee":"codex","phase":"devops","updated_at":"2026-03-06"}
-{"id":"RAGQLTY-018","title":"P5-3 update ops/testing docs and finalize rollout review with gate evidence","status":"todo","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-006","title":"P1-2 harden markdown/code chunk metadata consistency","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-007","title":"P1-3 add ingestion metadata regression tests and review report","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-008","title":"P2-1 remove brittle query-specific route boosts and keep generalized ranking behavior","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-06"}
+{"id":"RAGQLTY-009","title":"[OUTDATED] Placeholder P2-2 item; superseded by RAGEXEC-001..003","status":"superseded","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-010","title":"[OUTDATED] Placeholder P2-3 item; superseded by RAGEXEC-003","status":"superseded","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-011","title":"[OUTDATED] Placeholder P3-1 item; superseded by RAGEXEC-004","status":"superseded","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-012","title":"[OUTDATED] Placeholder P3-2 item; superseded by RAGEXEC-005","status":"superseded","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-013","title":"[OUTDATED] Placeholder P4-1 item; superseded by RAGEXEC-006","status":"superseded","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-014","title":"[OUTDATED] Placeholder P4-2 item; superseded by RAGEXEC-007","status":"superseded","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-015","title":"[OUTDATED] Placeholder P4-3 item; superseded by RAGEXEC-006..007","status":"superseded","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-016","title":"[OUTDATED] Placeholder P5-1 item; superseded by RAGEXEC-008..009","status":"superseded","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-017","title":"[OUTDATED] Placeholder P5-2 item; superseded by RAGEXEC-010","status":"superseded","assignee":"codex","phase":"devops","updated_at":"2026-03-07"}
+{"id":"RAGQLTY-018","title":"[OUTDATED] Placeholder P5-3 item; superseded by RAGEXEC-009..010..018","status":"superseded","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-001","title":"Implement explicit retrieval channel budgets and rerank top-N window","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-002","title":"Remove hidden default ranking boosts from generalized retrieval path","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-003","title":"Add mandatory retrieval diagnostics assertions and default-mode regressions","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-004","title":"Unify RU/EN grounded direct-answer prompt contract","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-005","title":"Add prompt/format regression suite and remove forced heading dependence","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-006","title":"Refactor command sanitizer to token-level grounding rules","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-007","title":"Preserve context-backed URLs and add safety regression coverage","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-008","title":"Expand fixed eval corpus for wiki/code/long-doc/multilingual uploaded knowledge","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-009","title":"Implement slice-aware baseline reporting and quality gate outputs","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-010","title":"Wire fail-fast CI quality workflow and update testing/ops docs","status":"todo","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-011","title":"Consolidate canonical wiki ingestion UX and remove orphan callback paths","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-012","title":"Add wiki fallback visibility and regression coverage for git-vs-html crawl behavior","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-013","title":"Implement runtime canonical chunk contract and additive schema/design hooks","status":"todo","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-014","title":"Improve PDF/DOCX parser fidelity and structural chunk metadata","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-015","title":"Normalize web/wiki/code structure and stable source semantics","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-016","title":"Implement evidence-pack context composer over top-chunk assembly","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-017","title":"Add context-inclusion diagnostics and regression coverage","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-018","title":"Add multi-corpus quality slices and source-family thresholds for near-ideal evaluation","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}

@@ -1,5 +1,14 @@
 # Design: Generalized RAG Architecture v1
 
+Status: OUTDATED / SUPERSEDED on 2026-03-07.
+Replaced architecturally by:
+- `docs/design/rag-generalized-architecture-v2.md`
+Current execution source of truth:
+- `docs/design/rag-search-improvement-program-v1.md`
+- `docs/design/rag-near-ideal-task-breakdown-v1.md`
+
+Keep this document for historical context only.
+
 Date: 2026-03-05  
 Owner: codex (architect)
 

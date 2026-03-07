@@ -61,12 +61,14 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - RAG pipeline:
   - Chunking with configurable size/overlap and Markdown-aware splitting.
   - Ingestion normalizes core chunk metadata contract (`type`, `title`, `doc_title`, `section_title`, `section_path`, `chunk_kind`, `document_class`, `language`, `doc_version`, `source_updated_at`) across source types.
+  - Markdown and code loaders preserve document/section metadata consistently (`doc_title`, `section_title`, `section_path`, `chunk_no`) to reduce context assembly ambiguity.
   - Embeddings with sentence-transformers; Qdrant for dense retrieval in production mode (`RAG_BACKEND=qdrant`).
   - Legacy in-process FAISS path remains available as rollback mode (`RAG_BACKEND=legacy`).
   - Retrieval orchestrator cutover is controlled by `RAG_ORCHESTRATOR_V4` feature flag.
   - Index sync foundation uses idempotent SQL outbox events (`index_outbox_events`) to support retry-safe delivery into retrieval index backend.
   - Backend outbox worker consumes pending index events with retry/backoff + dead-letter handling and writes periodic drift snapshots into `index_sync_audit`.
-  - Optional reranker with top-N candidates and top-k final results.
+  - Dense/BM25 retrieval budgets are explicitly configurable; dedicated knobs fall back to `RAG_MAX_CANDIDATES` for rollback-safe compatibility.
+  - Optional reranker with explicit top-N input window and top-k final results.
   - Fallback keyword search if embeddings unavailable.
   - Context assembly with `SOURCE_ID` tags for inline citations.
   - In legacy orchestrator mode (`RAG_ORCHESTRATOR_V4=false`), definition/factoid/clause heuristics remain available:
@@ -75,6 +77,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
     - for factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points;
     - for metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing.
   - In Phase D orchestrator mode (`RAG_ORCHESTRATOR_V4=true`), route-level query-specific boosts/fallback are disabled in primary path.
+  - In legacy mode, route-level query-specific boosts/fallback are disabled by default (`RAG_LEGACY_QUERY_HEURISTICS=false`) and can be temporarily re-enabled only as rollback switch.
   - RAG eval uses a fixed, versioned ready-data suite by default (`tests/data/rag_eval_ready_data_v1.yaml`) to keep quality comparisons reproducible.
   - Baseline eval runner persists timestamped JSON/Markdown artifacts plus `latest` snapshots for reviewable quality evidence.
 - Safety/quality:
@@ -150,6 +153,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Eval ready-data suite is contract-tested for minimum size, unique case ids, required fields, and required slice coverage before use in regression cycles.
 - Baseline eval run is reproducibly executable via CLI runner and produces review artifacts (`*.json`, `*.md`) for each run.
 - Quality gate supports both DB run mode (`--run-id`) and artifact mode (`--run-report-json`, optional `--baseline-report-json`) with identical threshold PASS/FAIL semantics.
+- Route-level query-specific boosts/fallback are no longer part of default ranking path; rollback requires explicit `RAG_LEGACY_QUERY_HEURISTICS=true`.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.
@@ -169,6 +173,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Backend includes a runnable RAG API smoke script (`scripts/rag_api_smoke_test.py`) for quick endpoint sanity checks.
 - Backend includes a runnable legacy-vs-v4 compare script (`scripts/rag_orchestrator_compare.py`) for cutover evaluation on real API.
 - Any feature/bugfix that changes behavior updates `SPEC.md`, related design spec, and `docs/REQUIREMENTS_TRACEABILITY.md` in the same task.
+- Retrieval runtime uses explicit dense/BM25 candidate budgets and rerank input window (`RAG_DENSE_CANDIDATES`, `RAG_BM25_CANDIDATES`, `RAG_RERANK_TOP_N`); when dedicated knobs are unset they inherit `RAG_MAX_CANDIDATES`, and rerank window never drops below requested `top_k`.
 
 ## Specification maintenance policy
 - `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.

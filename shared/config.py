@@ -71,7 +71,30 @@ else:
 # Оптимальные дефолты для RU+EN под GPU (V100 32GB): мультиязычные эмбеддинги + reranker.
 RAG_MODEL_NAME = os.getenv("RAG_MODEL_NAME", "intfloat/multilingual-e5-base")
 RAG_ENABLE = os.getenv("RAG_ENABLE", "true").lower() == "true"
-RAG_MAX_CANDIDATES = int(os.getenv("RAG_MAX_CANDIDATES", "150"))  # Количество кандидатов для векторного поиска перед rerank
+try:
+    RAG_MAX_CANDIDATES = max(1, int(os.getenv("RAG_MAX_CANDIDATES", "150")))
+except ValueError:
+    RAG_MAX_CANDIDATES = 150
+try:
+    RAG_DENSE_CANDIDATES = max(1, int(os.getenv("RAG_DENSE_CANDIDATES", str(RAG_MAX_CANDIDATES))))
+except ValueError:
+    RAG_DENSE_CANDIDATES = RAG_MAX_CANDIDATES
+try:
+    RAG_BM25_CANDIDATES = max(1, int(os.getenv("RAG_BM25_CANDIDATES", str(RAG_MAX_CANDIDATES))))
+except ValueError:
+    RAG_BM25_CANDIDATES = RAG_MAX_CANDIDATES
+try:
+    RAG_RERANK_TOP_N = max(
+        1,
+        int(
+            os.getenv(
+                "RAG_RERANK_TOP_N",
+                str(max(RAG_DENSE_CANDIDATES, RAG_BM25_CANDIDATES)),
+            )
+        ),
+    )
+except ValueError:
+    RAG_RERANK_TOP_N = max(RAG_DENSE_CANDIDATES, RAG_BM25_CANDIDATES)
 RAG_RERANK_MODEL = os.getenv("RAG_RERANK_MODEL", "BAAI/bge-reranker-base")
 RAG_ENABLE_RERANK = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"  # Мультиязычный reranker
 # Устройство для моделей RAG: 'cpu', 'cuda' (автоматически выберет GPU), 'cuda:0', 'cuda:1' и т.д.
@@ -97,6 +120,11 @@ if RAG_BACKEND not in {"legacy", "qdrant"}:
 # false -> legacy route-level intent boosts/fallback ranking
 # true  -> v4 primary path without query-specific hardcoded boosts
 RAG_ORCHESTRATOR_V4 = os.getenv("RAG_ORCHESTRATOR_V4", "false").lower() == "true"
+
+# Legacy query heuristics switch (generalization hardening)
+# false -> legacy route works in generalized mode (no route-level query-specific boosts/fallback)
+# true  -> enable legacy query-intent boosts/fallback behavior (temporary rollback switch)
+RAG_LEGACY_QUERY_HEURISTICS = os.getenv("RAG_LEGACY_QUERY_HEURISTICS", "false").lower() == "true"
 
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip().rstrip("/")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()

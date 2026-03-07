@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "id": "2026-03-07-rag-roadmap-supersession",
+      "approved_on": "2026-03-07",
+      "approved_by": "user",
+      "reason": "User approved the new RAG roadmap and explicitly requested breaking it into concrete tasks while marking old RAG planning documents and task placeholders as outdated.",
+      "files": [
+        "docs/design/rag-general-quality-program-v1.md",
+        "docs/design/rag-max-quality-architecture-v1.md",
+        "docs/design/rag-generalized-architecture-v1.md",
+        "docs/design/rag-search-improvement-program-v1.md",
+        "docs/design/rag-near-ideal-task-breakdown-v1.md",
+        "coordination/tasks.jsonl",
+        "coordination/cycle-contract.json"
+      ]
+    }
+  ]
+}

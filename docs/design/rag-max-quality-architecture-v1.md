@@ -1,5 +1,13 @@
 # Design: RAG Max Quality Architecture v1 (Revised: Full Stack Replacement Required)
 
+Status: OUTDATED / SUPERSEDED on 2026-03-07.
+This full-stack-replacement roadmap is no longer the active implementation plan.
+Current execution source of truth:
+- `docs/design/rag-search-improvement-program-v1.md`
+- `docs/design/rag-near-ideal-task-breakdown-v1.md`
+
+Keep this document for historical context only.
+
 Date: 2026-03-04  
 Owner: codex (architect)
 

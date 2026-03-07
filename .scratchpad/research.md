@@ -194,6 +194,63 @@ Agent: codex (team-lead-orchestrator / architect phase)
 - Must keep Telegram UX clean (temporary progress, ordered replies).
 - Must maintain API-key and secrets policy.
 
+## Research: RAG Search Improvement Plan + Wiki URL Example Audit
+
+Date: 2026-03-07
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User Request
+- Perform a deep audit of the project, unfinished tasks, design docs, and the current RAG approach.
+- Prepare an implementation plan to improve RAG search over uploaded knowledge.
+- Separately analyze the wiki loading fix for the example URL flow.
+
+### Current State Summary
+- The stack already has the main quality foundations in place:
+  - hybrid retrieval with Qdrant/FAISS + BM25 + optional rerank,
+  - diagnostics persistence and eval runner,
+  - normalized ingestion metadata contract across loaders,
+  - generalized route cutover with `RAG_LEGACY_QUERY_HEURISTICS=false` by default.
+- The remaining quality backlog is concentrated in `RAGQLTY-009..018`:
+  - retrieval fusion/rerank stabilization,
+  - diagnostics assertions,
+  - prompt/format alignment,
+  - sanitizer/URL preservation,
+  - end-to-end gates and CI enforcement.
+
+### Key Findings
+1. Retrieval is only partially generalized.
+   - Route-level query heuristics are disabled by default, but `shared/rag_system.py` still contains hidden ranking behavior:
+     - `compute_source_boost(...)`,
+     - `_is_howto_query(...)`,
+     - how-to-specific candidate expansion/sorting,
+     - `_simple_search(...)` strong-token prefilter.
+   - This means retrieval behavior can still drift by wording/source-path structure even when route heuristics are "off".
+
+2. The fixed evaluation corpus exists, but it is still narrow relative to the user goal "search over uploaded knowledge".
+   - `tests/data/rag_eval_ready_data_v1.yaml` is useful for deterministic regression checks,
+   - but it is still centered on one document family and does not yet represent arbitrary uploaded KBs, mixed document shapes, or wiki-heavy corpora.
+
+3. Prompting and post-processing still hide user-visible quality debt.
+   - RU prompt already asks for a direct grounded answer without template headings.
+   - EN prompt still forces `Main Answer` / `Additionally Found` structure.
+   - `sanitize_commands_in_answer(...)` still strips lines aggressively and always removes wiki URLs.
+   - `strip_untrusted_urls(...)` preserves only URLs literally present in context text, which is too strict for context-backed links that survive through metadata/citations.
+
+4. The example wiki URL flow is mostly fixed, but the code still contains a legacy split flow.
+   - The real admin path now works through `kb_wiki_crawl -> waiting_wiki_root -> ingest_wiki_crawl`.
+   - For Gitee wiki URLs, `shared/wiki_scraper.py` now prefers `load_wiki_from_git(...)`, which is the correct fix for JS-rendered wiki navigation.
+   - Residual risk: `wiki_git_load` / `wiki_zip_load` callbacks still depend on `context.user_data['wiki_urls']`, but the current UI flow does not produce that mapping anymore.
+
+### Recommended Direction
+- Do not start another retrieval-stack rewrite now.
+- Use the current Qdrant + diagnostics + eval baseline and finish the pending quality program with one additional wiki-flow consolidation slice.
+- Priority order:
+  1. retrieval calibration and visibility,
+  2. answer formatting/prompt grounding consistency,
+  3. safety/postprocess precision,
+  4. end-to-end quality gates,
+  5. cleanup of legacy wiki branches.
+
 # Research: AI Mode v2 (Telemetry + Context Memory + Progress UX)
 
 Date: 2026-03-01

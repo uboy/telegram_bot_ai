@@ -104,19 +104,47 @@ class RAGSystem:
         self.bm25_chunks_all: List[KnowledgeChunk] = []
         # Сессии создаются на каждую операцию, не храним глобальную сессию
         self.reranker = None
-        # Количество кандидатов для векторного поиска перед rerank (минимальный апгрейд)
+        # Явные бюджеты retrieval-каналов; RAG_MAX_CANDIDATES сохраняется как legacy fallback.
+        def _coerce_positive_int(value: Any, fallback: int) -> int:
+            try:
+                return max(1, int(value))
+            except (TypeError, ValueError):
+                return max(1, int(fallback))
+
         try:
-            from shared.config import RAG_ENABLE_RERANK
+            from shared.config import (
+                RAG_ENABLE_RERANK,
+                RAG_MAX_CANDIDATES,
+                RAG_DENSE_CANDIDATES,
+                RAG_BM25_CANDIDATES,
+                RAG_RERANK_TOP_N,
+            )
             self.enable_rerank = RAG_ENABLE_RERANK
+            self.max_candidates = _coerce_positive_int(RAG_MAX_CANDIDATES, 100)
+            self.dense_candidate_budget = _coerce_positive_int(RAG_DENSE_CANDIDATES, self.max_candidates)
+            self.bm25_candidate_budget = _coerce_positive_int(RAG_BM25_CANDIDATES, self.max_candidates)
+            self.rerank_top_n = _coerce_positive_int(
+                RAG_RERANK_TOP_N,
+                max(self.dense_candidate_budget, self.bm25_candidate_budget),
+            )
         except ImportError:
             self.enable_rerank = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
-
-        # Увеличиваем до 100 для лучшей релевантности при больших базах знаний
-        try:
-            from shared.config import RAG_MAX_CANDIDATES
-            self.max_candidates = RAG_MAX_CANDIDATES
-        except ImportError:
-            self.max_candidates = int(os.getenv("RAG_MAX_CANDIDATES", "100"))
+            self.max_candidates = _coerce_positive_int(os.getenv("RAG_MAX_CANDIDATES", "100"), 100)
+            self.dense_candidate_budget = _coerce_positive_int(
+                os.getenv("RAG_DENSE_CANDIDATES", str(self.max_candidates)),
+                self.max_candidates,
+            )
+            self.bm25_candidate_budget = _coerce_positive_int(
+                os.getenv("RAG_BM25_CANDIDATES", str(self.max_candidates)),
+                self.max_candidates,
+            )
+            self.rerank_top_n = _coerce_positive_int(
+                os.getenv(
+                    "RAG_RERANK_TOP_N",
+                    str(max(self.dense_candidate_budget, self.bm25_candidate_budget)),
+                ),
+                max(self.dense_candidate_budget, self.bm25_candidate_budget),
+            )
 
         # Retrieval backend switch (v3)
         self.retrieval_backend = "legacy"
@@ -1083,18 +1111,15 @@ class RAGSystem:
         bm25_chunks = bm25_chunks or []
         total_docs = max(1, len(bm25_chunks))
 
-        # Dense‑поиск: внешний Qdrant backend (v3) или legacy FAISS fallback
-        if is_howto_query:
-            candidate_k = min(max(300, self.max_candidates * 3), total_docs, 500)
-        else:
-            candidate_k = min(self.max_candidates, total_docs)
+        # Dense/BM25 каналы используют явные бюджеты; более широкие окна включаются конфигом, а не скрытой веткой.
+        dense_candidate_k = min(self.dense_candidate_budget, total_docs)
 
         dense_candidates: List[Dict] = []
         if self._qdrant_enabled() and knowledge_base_id is not None:
             dense_candidates = self._qdrant_dense_search(
                 query_embedding=query_embedding,
                 knowledge_base_id=int(knowledge_base_id),
-                top_k=candidate_k,
+                top_k=dense_candidate_k,
             )
         else:
             # Определить, использовать ли индекс по KB или общий
@@ -1115,8 +1140,8 @@ class RAGSystem:
             # Нормализовать query embedding для cosine similarity
             query_embedding_norm = query_embedding.reshape(1, -1).astype('float32')
             faiss.normalize_L2(query_embedding_norm)
-            candidate_k = min(candidate_k, len(chunks))
-            scores, indices = index.search(query_embedding_norm, candidate_k)
+            dense_candidate_k = min(dense_candidate_k, len(chunks))
+            scores, indices = index.search(query_embedding_norm, dense_candidate_k)
 
             for i, idx in enumerate(indices[0]):
                 if idx < len(chunks):
@@ -1152,7 +1177,7 @@ class RAGSystem:
                 self.bm25_index_by_kb[knowledge_base_id] = bm25_index
             else:
                 self.bm25_index_all = bm25_index
-        bm25_ranked = self._bm25_search(query, bm25_index or {}, self.max_candidates)
+        bm25_ranked = self._bm25_search(query, bm25_index or {}, self.bm25_candidate_budget)
         bm25_candidates: List[Dict] = []
         bm25_ranked_keys: List[tuple] = []
         for rank, idx in enumerate(bm25_ranked, start=1):
@@ -1201,18 +1226,21 @@ class RAGSystem:
         # Если есть reranker – пересчитываем релевантность и берём top_k по score
         if self.enable_rerank and HAS_RERANKER and self.reranker is not None:
             try:
-                pairs = [[query, c.get("content", "")] for c in merged]
+                rerank_window = min(len(merged), max(top_k, self.rerank_top_n))
+                rerank_candidates = merged[:rerank_window]
+                pairs = [[query, c.get("content", "")] for c in rerank_candidates]
                 scores = self.reranker.predict(pairs)
 
                 scored = []
-                for cand, score in zip(merged, scores):
+                for cand, score in zip(rerank_candidates, scores):
                     boost = compute_source_boost(cand)
                     scored.append((cand, float(score), boost, float(score) + boost))
                 scored.sort(key=lambda x: x[3], reverse=True)
                 top = scored[: top_k]
 
                 logger.debug(
-                    "Reranker применен: обработано %d кандидатов, выбрано top-%d",
+                    "Reranker применен: обработано %d кандидатов из %d fused, выбрано top-%d",
+                    len(rerank_candidates),
                     len(merged),
                     len(top),
                 )

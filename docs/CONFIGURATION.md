@@ -28,6 +28,10 @@ Copy-Item env.template .env
 - `RAG_ENABLE`
 - `RAG_MODEL_NAME`
 - `RAG_RERANK_MODEL`
+- `RAG_MAX_CANDIDATES` (legacy fallback for dedicated retrieval budgets)
+- `RAG_DENSE_CANDIDATES`
+- `RAG_BM25_CANDIDATES`
+- `RAG_RERANK_TOP_N`
 - `RAG_BACKEND` (`legacy` | `qdrant`)
 - `RAG_ORCHESTRATOR_V4` (`false` | `true`)
 - `RAG_TOP_K`
@@ -42,6 +46,8 @@ Copy-Item env.template .env
 
 `RAG_ORCHESTRATOR_V4=true` включает Phase D primary path без route-level query-specific boosts/fallback.
 `RAG_ORCHESTRATOR_V4=false` оставляет legacy intent/boost/fallback поведение.
+Если `RAG_DENSE_CANDIDATES` и `RAG_BM25_CANDIDATES` не заданы отдельно, оба канала наследуют `RAG_MAX_CANDIDATES`.
+`RAG_RERANK_TOP_N` задает явный размер fused-window для reranker; по умолчанию он равен `max(RAG_DENSE_CANDIDATES, RAG_BM25_CANDIDATES)`.
 
 ### RAG index outbox worker
 - `RAG_INDEX_OUTBOX_WORKER_ENABLED`
