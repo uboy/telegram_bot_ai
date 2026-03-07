@@ -144,9 +144,10 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - In Phase D mode (`RAG_ORCHESTRATOR_V4=true`), `/api/v1/rag/query` disables route-level query-specific hardcoded boosts/keyword fallback and ranks by base retrieval score.
 - RAG query response includes `request_id`, and retrieval diagnostics are available via `GET /api/v1/rag/diagnostics/{request_id}`.
 - Retrieval diagnostics include `orchestrator_mode` marker to identify request execution mode (`legacy`/`v4`).
+- Retrieval diagnostics include `retrieval_core_mode` marker to distinguish generalized retrieval from explicit legacy-heuristic rollback.
 - Ingestion emits idempotent index outbox events for non-empty chunk upserts, enabling retry-safe index synchronization without duplicate writes.
 - Outbox worker processes queued index events asynchronously with bounded retries/dead-letter transition, and periodic drift audit records SQL-vs-Qdrant divergence in `index_sync_audit`.
-- Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and channel/fusion ranking fields for top candidates.
+- Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and always expose non-null candidate trace fields for top candidates: `origin`, `channel`, `channel_rank`, `fusion_rank`, `fusion_score` (with derived defaults for older rows); `rerank_delta` remains optional when no rerank signal exists.
 - Retention lifecycle runs on schedule: old retrieval logs, old document versions/chunks, eval artifacts, and drift audit snapshots are purged by policy with `retention_deletion_audit` entries.
 - Backend exposes eval run lifecycle: `POST /api/v1/rag/eval/run` queues benchmark run and `GET /api/v1/rag/eval/{run_id}` returns run status + per-slice metrics.
 - Statistical quality gate script validates eval run against baseline using thresholds, minimum sample size, and bootstrap 95% CI delta margin.

@@ -50,11 +50,11 @@ class RAGDiagnosticsCandidate(BaseModel):
     source_type: str
     distance: Optional[str] = None
     rerank_score: Optional[str] = None
-    origin: Optional[str] = None
-    channel: Optional[str] = None
-    channel_rank: Optional[int] = None
-    fusion_rank: Optional[int] = None
-    fusion_score: Optional[str] = None
+    origin: str
+    channel: str
+    channel_rank: int
+    fusion_rank: int
+    fusion_score: str
     rerank_delta: Optional[str] = None
     metadata: Optional[Dict] = None
     content_preview: Optional[str] = None
@@ -66,6 +66,7 @@ class RAGDiagnosticsResponse(BaseModel):
     knowledge_base_id: Optional[int] = None
     intent: Optional[str] = None
     orchestrator_mode: Optional[str] = None
+    retrieval_core_mode: Optional[str] = None
     backend_name: Optional[str] = None
     total_candidates: int = 0
     total_selected: int = 0
@@ -107,5 +108,4 @@ class RAGEvalStatusResponse(BaseModel):
     metrics: Optional[Dict] = None
     error_message: Optional[str] = None
     results: List[RAGEvalResultRow] = []
-
 

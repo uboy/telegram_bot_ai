@@ -63,9 +63,10 @@ Most ingestion endpoints return `job_id` for async processing.
 - `instructions`
 
 `GET /rag/diagnostics/{request_id}` returns:
-- request metadata (`intent`, `orchestrator_mode`, `hints`, `filters`, `latency_ms`, `backend_name`)
+- request metadata (`intent`, `orchestrator_mode`, `retrieval_core_mode`, `hints`, `filters`, `latency_ms`, `backend_name`)
 - degraded markers (`degraded_mode`, `degraded_reason`)
 - top candidate diagnostics (`origin`, `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`)
+- candidate trace contract keeps `origin`, `channel`, `channel_rank`, `fusion_rank`, and `fusion_score` non-null even for older persisted rows; `rerank_delta` may be `null` when no rerank signal exists
 
 `POST /rag/eval/run` request body:
 - `suite` (string)

@@ -997,3 +997,48 @@
   - `coordination/tasks.jsonl` updated: `RAGEXEC-002` -> `completed`.
 - notes:
   - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+
+## 2026-03-07 RAGEXEC-003 kickoff
+- role: developer
+- task:
+  - add mandatory retrieval diagnostics assertions and default-mode regressions.
+- scoped requirements:
+  - make diagnostics candidate trace fields strict and testable,
+  - expose retrieval-core execution mode in the diagnostics API response,
+  - tighten route persistence so `channel_rank` / `fusion_rank` / `fusion_score` / `rerank_delta` are meaningful,
+  - add API contract coverage for diagnostics response shape,
+  - update `SPEC.md`, `docs/API_REFERENCE.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and cycle artifacts.
+- next_step:
+  - implement the stricter diagnostics contract in `backend/api/routes/rag.py` and `backend/schemas/rag.py`, then lock it with `tests/test_rag_diagnostics.py` and `tests/test_api_routes_contract.py`.
+
+## 2026-03-07 RAGEXEC-003 diagnostics contract finding
+- current gap confirmed from route inspection:
+  - persisted `channel_rank` and `fusion_rank` were just the final loop rank,
+  - diagnostics response exposed `retrieval_core_mode` only inside raw `hints`,
+  - candidate trace fields were optional in the API schema, so incident triage had no strict contract.
+- implementation in progress:
+  - deriving stable per-channel rank and fusion score defaults in `backend/api/routes/rag.py`,
+  - promoting strict candidate fields plus `retrieval_core_mode` in `backend/schemas/rag.py`,
+  - adding a dedicated contract test file instead of mutating frozen existing tests.
+- focused verification passed:
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `9 passed`
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - send the slice to an independent reviewer agent and close coordination artifacts if verdict is PASS.
+
+## 2026-03-07 RAGEXEC-003 completion snapshot
+- review:
+  - independent reviewer agent returned `PASS` with no MUST-FIX/SHOULD-FIX findings.
+  - review artifact created: `coordination/reviews/ragexec-003-2026-03-07.md`.
+  - reviewer clarification resolved by replacing the stale `REVIEW REQUIRED` footer in `docs/design/rag-near-ideal-task-breakdown-v1.md` with the recorded approval status.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-003` -> `completed`.
+- notes:
+  - `coordination/templates/review-report.md` is absent in this repo; the review artifact was written in the established local format used by prior `ragexec-*` reports.
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+- final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`

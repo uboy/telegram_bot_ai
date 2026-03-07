@@ -77,6 +77,75 @@ def _metric_to_str(value: Any) -> Optional[str]:
         return text[:32] if text else None
 
 
+def _metric_to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except Exception:
+            return None
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    try:
+        coerced = int(value)
+    except Exception:
+        return None
+    return coerced if coerced > 0 else None
+
+
+def _normalize_trace_token(value: Any, *, default: str = "unknown", max_len: int = 32) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return default
+    return token[:max_len]
+
+
+def _derive_distance_score(trace: Dict[str, Any]) -> Optional[float]:
+    distance = _metric_to_float(trace.get("distance"))
+    if distance is None:
+        return None
+    return -distance
+
+
+def _derive_fusion_score_value(trace: Dict[str, Any]) -> Optional[float]:
+    for key in ("fusion_score", "rank_score"):
+        value = _metric_to_float(trace.get(key))
+        if value is not None:
+            return value
+    rerank_score = _metric_to_float(trace.get("rerank_score"))
+    if rerank_score is not None:
+        return rerank_score
+    return _derive_distance_score(trace)
+
+
+def _derive_rerank_delta_value(trace: Dict[str, Any]) -> Optional[float]:
+    explicit_delta = _metric_to_float(trace.get("rerank_delta"))
+    if explicit_delta is not None:
+        return explicit_delta
+    rerank_score = _metric_to_float(trace.get("rerank_score"))
+    base_score = _derive_distance_score(trace)
+    if rerank_score is None or base_score is None:
+        return None
+    return rerank_score - base_score
+
+
+def _extract_hint_mode(hints: Optional[Dict[str, Any]], key: str) -> Optional[str]:
+    if not isinstance(hints, dict):
+        return None
+    raw_value = hints.get(key)
+    if raw_value is None:
+        return None
+    token = str(raw_value).strip().lower()
+    return token or None
+
+
 def _derive_degraded_mode(
     *,
     backend_name: Optional[str],
@@ -129,6 +198,7 @@ def _persist_retrieval_logs(
         hints_payload = dict(hints_payload)
         hints_payload["orchestrator_mode"] = str(orchestrator_mode).strip().lower()
     try:
+        channel_counts: Dict[str, int] = {}
         db.add(
             RetrievalQueryLog(
                 request_id=request_id,
@@ -146,27 +216,33 @@ def _persist_retrieval_logs(
             )
         )
         for rank, candidate in enumerate((candidates or [])[:20], start=1):
-            metadata_obj = candidate.get("metadata") if isinstance(candidate, dict) else {}
+            candidate_trace = dict(candidate) if isinstance(candidate, dict) else {}
+            metadata_obj = candidate_trace.get("metadata") if isinstance(candidate_trace, dict) else {}
             metadata_json = _safe_json_dumps(metadata_obj if isinstance(metadata_obj, dict) else {})
             content_preview = ""
-            if isinstance(candidate, dict):
-                content_preview = (candidate.get("content") or "")[:1200]
+            if isinstance(candidate_trace, dict):
+                content_preview = (candidate_trace.get("content") or "")[:1200]
+            origin = _normalize_trace_token(candidate_trace.get("origin") or candidate_trace.get("channel"))
+            channel = _normalize_trace_token(candidate_trace.get("channel") or candidate_trace.get("origin"))
+            channel_counts[channel] = channel_counts.get(channel, 0) + 1
+            channel_rank = _coerce_positive_int(candidate_trace.get("channel_rank")) or channel_counts[channel]
+            fusion_rank = _coerce_positive_int(candidate_trace.get("fusion_rank")) or rank
+            fusion_score_value = _derive_fusion_score_value(candidate_trace)
+            rerank_delta_value = _derive_rerank_delta_value(candidate_trace)
             db.add(
                 RetrievalCandidateLog(
                     request_id=request_id,
                     rank=rank,
-                    source_path=((candidate.get("source_path") or "")[:500] if isinstance(candidate, dict) else ""),
-                    source_type=((candidate.get("source_type") or "")[:50] if isinstance(candidate, dict) else ""),
-                    distance=_metric_to_str(candidate.get("distance") if isinstance(candidate, dict) else None),
-                    rerank_score=_metric_to_str(candidate.get("rerank_score") if isinstance(candidate, dict) else None),
-                    origin=((candidate.get("origin") or "")[:32] if isinstance(candidate, dict) else ""),
-                    channel=((candidate.get("channel") or candidate.get("origin") or "")[:32] if isinstance(candidate, dict) else ""),
-                    channel_rank=(rank if isinstance(candidate, dict) else None),
-                    fusion_rank=(rank if isinstance(candidate, dict) else None),
-                    fusion_score=_metric_to_str(
-                        candidate.get("fusion_score", candidate.get("rank_score")) if isinstance(candidate, dict) else None
-                    ),
-                    rerank_delta=_metric_to_str(candidate.get("rerank_delta") if isinstance(candidate, dict) else None),
+                    source_path=((candidate_trace.get("source_path") or "")[:500] if isinstance(candidate_trace, dict) else ""),
+                    source_type=((candidate_trace.get("source_type") or "")[:50] if isinstance(candidate_trace, dict) else ""),
+                    distance=_metric_to_str(candidate_trace.get("distance") if isinstance(candidate_trace, dict) else None),
+                    rerank_score=_metric_to_str(candidate_trace.get("rerank_score") if isinstance(candidate_trace, dict) else None),
+                    origin=origin,
+                    channel=channel,
+                    channel_rank=channel_rank,
+                    fusion_rank=fusion_rank,
+                    fusion_score=_metric_to_str(fusion_score_value) or "0.000000",
+                    rerank_delta=_metric_to_str(rerank_delta_value),
                     metadata_json=metadata_json,
                     content_preview=content_preview,
                 )
@@ -200,6 +276,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
     filters_payload: Dict[str, Any] = {}
     results: List[dict] = []
     filtered_results: List[dict] = []
+    ranked_results: List[dict] = []
     orchestrator_mode: str = "legacy"
 
     try:
@@ -1056,7 +1133,6 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
 
-        ranked_results: List[dict] = []
         for r in results:
             doc_id = get_doc_id(r)
             r["doc_id"] = doc_id
@@ -1129,7 +1205,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
                 orchestrator_mode=orchestrator_mode,
-                candidates=filtered_results,
+                candidates=ranked_results or filtered_results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
 
@@ -1248,7 +1324,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
             orchestrator_mode=orchestrator_mode,
-            candidates=filtered_results,
+            candidates=ranked_results or filtered_results,
         )
         return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id, debug_chunks=debug_chunks)
 
@@ -1281,7 +1357,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
             orchestrator_mode=orchestrator_mode,
-            candidates=filtered_results or results,
+            candidates=ranked_results or filtered_results or results,
         )
         return RAGAnswer(answer="", sources=[], request_id=request_id)
 
@@ -1303,34 +1379,40 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
         .all()
     )
     candidates: List[RAGDiagnosticsCandidate] = []
-    for row in candidate_rows:
+    for fallback_rank, row in enumerate(candidate_rows, start=1):
         meta_obj = _safe_json_loads(getattr(row, "metadata_json", None))
+        trace = {
+            "fusion_score": getattr(row, "fusion_score", None),
+            "rerank_score": getattr(row, "rerank_score", None),
+            "distance": getattr(row, "distance", None),
+            "rerank_delta": getattr(row, "rerank_delta", None),
+        }
+        rank = _coerce_positive_int(getattr(row, "rank", None)) or fallback_rank
+        origin = _normalize_trace_token(getattr(row, "origin", None) or getattr(row, "channel", None))
+        channel = _normalize_trace_token(getattr(row, "channel", None) or getattr(row, "origin", None))
+        channel_rank = _coerce_positive_int(getattr(row, "channel_rank", None)) or rank
+        fusion_rank = _coerce_positive_int(getattr(row, "fusion_rank", None)) or rank
         candidates.append(
             RAGDiagnosticsCandidate(
-                rank=int(getattr(row, "rank", 0) or 0),
+                rank=rank,
                 source_path=getattr(row, "source_path", "") or "",
                 source_type=getattr(row, "source_type", "") or "",
                 distance=getattr(row, "distance", None),
                 rerank_score=getattr(row, "rerank_score", None),
-                origin=getattr(row, "origin", None),
-                channel=getattr(row, "channel", None),
-                channel_rank=getattr(row, "channel_rank", None),
-                fusion_rank=getattr(row, "fusion_rank", None),
-                fusion_score=getattr(row, "fusion_score", None),
-                rerank_delta=getattr(row, "rerank_delta", None),
+                origin=origin,
+                channel=channel,
+                channel_rank=channel_rank,
+                fusion_rank=fusion_rank,
+                fusion_score=_metric_to_str(_derive_fusion_score_value(trace)) or "0.000000",
+                rerank_delta=_metric_to_str(_derive_rerank_delta_value(trace)),
                 metadata=meta_obj,
                 content_preview=getattr(row, "content_preview", None),
             )
         )
 
     hints_obj = _safe_json_loads(query_log.hints_json)
-    orchestrator_mode = None
-    if isinstance(hints_obj, dict):
-        raw_mode = hints_obj.get("orchestrator_mode")
-        if raw_mode is not None:
-            mode_token = str(raw_mode).strip().lower()
-            if mode_token:
-                orchestrator_mode = mode_token
+    orchestrator_mode = _extract_hint_mode(hints_obj, "orchestrator_mode")
+    retrieval_core_mode = _extract_hint_mode(hints_obj, "retrieval_core_mode")
 
     return RAGDiagnosticsResponse(
         request_id=query_log.request_id,
@@ -1338,6 +1420,7 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
         knowledge_base_id=query_log.knowledge_base_id,
         intent=query_log.intent,
         orchestrator_mode=orchestrator_mode,
+        retrieval_core_mode=retrieval_core_mode,
         backend_name=query_log.backend_name,
         total_candidates=int(query_log.total_candidates or 0),
         total_selected=int(query_log.total_selected or 0),

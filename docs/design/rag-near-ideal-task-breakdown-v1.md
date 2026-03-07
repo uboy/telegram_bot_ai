@@ -94,12 +94,13 @@ Extra checks for quality-impacting tasks:
 - Files:
   - `backend/api/routes/rag.py`
   - `backend/schemas/rag.py`
-  - `tests/test_rag_diagnostics.py`
+  - `tests/test_rag_diagnostics_contract.py`
 - Checks:
-  - `pytest tests/test_rag_diagnostics.py tests/test_api_routes_contract.py`
+  - `pytest tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py`
 - Review:
   - reviewer must confirm diagnostics are sufficient for incident triage.
 - Docs:
+  - `SPEC.md`
   - `docs/API_REFERENCE.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
 
@@ -337,4 +338,4 @@ Extra checks for quality-impacting tasks:
 
 This backlog becomes the current execution source of truth after approval.
 
-REVIEW REQUIRED — Reply "APPROVED:v1" or "CHANGES:<bullets>"
+Approval status: `APPROVED:v1` recorded in `coordination/approval-overrides.json`.
