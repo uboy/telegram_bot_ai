@@ -95,6 +95,7 @@ def test_rag_query_persists_request_id_and_retrieval_logs(monkeypatch):
     import shared.config as shared_config
 
     monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
+    monkeypatch.setattr(shared_config, "RAG_LEGACY_QUERY_HEURISTICS", False, raising=False)
 
     def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
         return [
@@ -127,6 +128,38 @@ def test_rag_query_persists_request_id_and_retrieval_logs(monkeypatch):
     assert db.retrieval_query_logs[0].backend_name == "qdrant"
     assert db.retrieval_query_logs[0].degraded_mode is False
     assert "\"orchestrator_mode\": \"legacy\"" in (db.retrieval_query_logs[0].hints_json or "")
+    assert "\"retrieval_core_mode\": \"generalized\"" in (db.retrieval_query_logs[0].hints_json or "")
+
+
+def test_rag_query_persists_legacy_retrieval_core_mode_hint(monkeypatch):
+    from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
+    monkeypatch.setattr(shared_config, "RAG_LEGACY_QUERY_HEURISTICS", True, raising=False)
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
+        return [
+            {
+                "content": "Здесь описан порядок выполнения команды sync и build.",
+                "metadata": {"section_title": "How to build", "section_path": "setup"},
+                "source_path": "doc://build",
+                "source_type": "md",
+                "rerank_score": 0.88,
+                "distance": 0.12,
+                "origin": "bm25",
+            }
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search), "retrieval_backend": "qdrant"})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: "Ответ")})())
+
+    db = DummyDB()
+    payload = RAGQuery(query="How to build the project?", knowledge_base_id=1)
+    rag_query(payload, db=db)
+
+    assert len(db.retrieval_query_logs) == 1
+    assert "\"retrieval_core_mode\": \"legacy_heuristic\"" in (db.retrieval_query_logs[0].hints_json or "")
 
 
 def test_rag_query_marks_degraded_on_qdrant_fallback(monkeypatch):

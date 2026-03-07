@@ -131,8 +131,12 @@ Main knobs:
 ## RAG Ranking Mode Switches
 
 - `RAG_ORCHESTRATOR_V4=true` enables v4 route path (generalized ranking).
-- `RAG_LEGACY_QUERY_HEURISTICS=false` (default) keeps legacy route in generalized mode (no route-level query-intent boosts/fallback).
-- Rollback only: set `RAG_LEGACY_QUERY_HEURISTICS=true` to temporarily restore legacy route-level query heuristics.
+- `RAG_LEGACY_QUERY_HEURISTICS=false` (default) keeps legacy route in generalized mode:
+  - no route-level query-intent boosts/fallback,
+  - no retrieval-core `source_boost`,
+  - no legacy how-to fallback sorting or SQL prefilter path.
+- Rollback only: set `RAG_LEGACY_QUERY_HEURISTICS=true` to temporarily restore both route-level query heuristics and retrieval-core legacy ranking behavior.
+- `RAG_ORCHESTRATOR_V4=true` keeps generalized behavior regardless of `RAG_LEGACY_QUERY_HEURISTICS`.
 - Apply quality gate from report artifacts (no DB run lookup):
   - `python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/latest.json --allow-no-baseline --print-json`
   - `python scripts/rag_eval_quality_gate.py --run-report-json <run_report.json> --baseline-report-json <baseline_report.json> --print-json`

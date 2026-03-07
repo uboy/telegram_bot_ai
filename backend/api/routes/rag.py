@@ -966,13 +966,15 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             return context_parts
 
         use_legacy_query_heuristics = (not orchestrator_v4_enabled) and legacy_query_heuristics_enabled
+        retrieval_core_mode = "legacy_heuristic" if use_legacy_query_heuristics else "generalized"
 
         if not use_legacy_query_heuristics:
             intent = "GENERAL"
-            query_hints = {}
+            query_hints = {"retrieval_core_mode": retrieval_core_mode}
         else:
             intent = detect_intent(payload.query)
             query_hints = extract_query_hints(payload.query)
+            query_hints["retrieval_core_mode"] = retrieval_core_mode
 
         if use_legacy_query_heuristics and kb_id and (
             intent in {"DEFINITION", "FACTOID"}

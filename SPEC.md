@@ -76,8 +76,8 @@ Teams and individuals need a Telegram-native assistant that can answer questions
     - for questions with explicit clause references ("пункт N"), retrieval additionally prioritizes chunks containing numeric section markers (`N.`) and `пункт N`;
     - for factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points;
     - for metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing.
-  - In Phase D orchestrator mode (`RAG_ORCHESTRATOR_V4=true`), route-level query-specific boosts/fallback are disabled in primary path.
-  - In legacy mode, route-level query-specific boosts/fallback are disabled by default (`RAG_LEGACY_QUERY_HEURISTICS=false`) and can be temporarily re-enabled only as rollback switch.
+  - In Phase D orchestrator mode (`RAG_ORCHESTRATOR_V4=true`), route-level query-specific boosts/fallback and retrieval-core legacy ranking boosts are disabled in primary path.
+  - In legacy mode, route-level query-specific boosts/fallback and retrieval-core `source_boost` / how-to ranking are disabled by default (`RAG_LEGACY_QUERY_HEURISTICS=false`) and can be temporarily re-enabled only as rollback switch.
   - RAG eval uses a fixed, versioned ready-data suite by default (`tests/data/rag_eval_ready_data_v1.yaml`) to keep quality comparisons reproducible.
   - Baseline eval runner persists timestamped JSON/Markdown artifacts plus `latest` snapshots for reviewable quality evidence.
 - Safety/quality:
@@ -153,7 +153,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Eval ready-data suite is contract-tested for minimum size, unique case ids, required fields, and required slice coverage before use in regression cycles.
 - Baseline eval run is reproducibly executable via CLI runner and produces review artifacts (`*.json`, `*.md`) for each run.
 - Quality gate supports both DB run mode (`--run-id`) and artifact mode (`--run-report-json`, optional `--baseline-report-json`) with identical threshold PASS/FAIL semantics.
-- Route-level query-specific boosts/fallback are no longer part of default ranking path; rollback requires explicit `RAG_LEGACY_QUERY_HEURISTICS=true`.
+- Route-level query-specific boosts/fallback and retrieval-core `source_boost` / how-to ranking are no longer part of the default ranking path; rollback requires explicit `RAG_LEGACY_QUERY_HEURISTICS=true`.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

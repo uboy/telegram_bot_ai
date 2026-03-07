@@ -1,26 +1,26 @@
 {
-  "task_id": "RAGEXEC-001",
+  "task_id": "RAGEXEC-002",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile shared/rag_system.py shared/config.py tests/test_rag_system_budgets.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_system_budgets.py tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py",
+    "python -m py_compile shared/rag_system.py backend/api/routes/rag.py tests/test_rag_system_budgets.py tests/test_rag_diagnostics.py tests/test_rag_quality.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_system_budgets.py tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py tests/test_rag_quality.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
     "shared/rag_system.py",
-    "shared/config.py",
-    "env.template",
+    "backend/api/routes/rag.py",
     "tests/test_rag_system_budgets.py",
     "tests/test_rag_query_definition_intent.py",
     "tests/test_rag_diagnostics.py",
+    "tests/test_rag_quality.py",
     "docs/design/rag-near-ideal-task-breakdown-v1.md",
     "docs/design/rag-search-improvement-program-v1.md",
     "SPEC.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
-    "docs/CONFIGURATION.md",
-    "coordination/reviews/ragexec-001-<date>.md",
+    "docs/OPERATIONS.md",
+    "coordination/reviews/ragexec-002-<date>.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"

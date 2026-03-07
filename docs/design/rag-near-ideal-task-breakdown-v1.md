@@ -70,11 +70,17 @@ Extra checks for quality-impacting tasks:
 ### RAGEXEC-002: Remove hidden default ranking boosts
 - Goal:
   - neutralize `source_boost` and reduce `_is_howto_query` from ranking driver to optional context hint in generalized mode.
+- Runtime contract:
+  - default generalized mode must rank by base retrieval scores without retrieval-core `source_boost`,
+  - how-to detection may remain as a hint but must not change candidate ordering outside explicit rollback mode,
+  - `RAG_LEGACY_QUERY_HEURISTICS=true` is the single rollback switch for both route-level and retrieval-core legacy heuristics.
 - Files:
   - `shared/rag_system.py`
   - `backend/api/routes/rag.py`
+  - `tests/test_rag_system_budgets.py`
+  - `tests/test_rag_diagnostics.py`
 - Checks:
-  - `pytest tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py tests/test_rag_quality.py`
+  - `pytest tests/test_rag_system_budgets.py tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py tests/test_rag_quality.py`
 - Review:
   - compare generalized mode before/after with diagnostics output.
 - Docs:

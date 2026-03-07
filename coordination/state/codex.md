@@ -953,3 +953,47 @@
   - `coordination/tasks.jsonl` updated: `RAGEXEC-001` -> `completed`.
 - notes:
   - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+
+## 2026-03-07 RAGEXEC-002 kickoff
+- role: developer
+- task:
+  - remove hidden default ranking boosts from the generalized retrieval path.
+- scoped requirements:
+  - neutralize retrieval-core `source_boost` in generalized mode,
+  - reduce `_is_howto_query` from ranking driver to rollback-only legacy behavior,
+  - keep rollback safety via the existing `RAG_LEGACY_QUERY_HEURISTICS` switch,
+  - add focused runtime/diagnostics regressions,
+  - update `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/OPERATIONS.md`, and cycle artifacts.
+- next_step:
+  - implement retrieval-core gating in `shared/rag_system.py` and annotate route diagnostics hints in `backend/api/routes/rag.py`.
+
+## 2026-03-07 RAGEXEC-002 implementation snapshot
+- runtime:
+  - added `shared/rag_system.py::_legacy_query_heuristics_enabled()` as the retrieval-core rollback gate.
+  - generalized mode now zeroes retrieval-core `source_boost`.
+  - generalized mode no longer lets `_is_howto_query()` drive dense rerank/fallback ordering or `_simple_search()` prefiltering.
+  - rollback behavior remains available only when `RAG_LEGACY_QUERY_HEURISTICS=true` and `RAG_ORCHESTRATOR_V4=false`.
+- route diagnostics:
+  - `backend/api/routes/rag.py` now persists `retrieval_core_mode` inside retrieval hints (`generalized` / `legacy_heuristic`).
+- tests:
+  - extended `tests/test_rag_system_budgets.py` with generalized-vs-legacy regressions for `source_boost` and how-to fallback sorting.
+  - extended `tests/test_rag_diagnostics.py` with `retrieval_core_mode` persistence assertions.
+- docs:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/OPERATIONS.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- verification:
+  - `python -m py_compile shared/rag_system.py backend/api/routes/rag.py tests/test_rag_system_budgets.py tests/test_rag_diagnostics.py tests/test_rag_quality.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_system_budgets.py tests/test_rag_query_definition_intent.py tests/test_rag_diagnostics.py tests/test_rag_quality.py` -> PASS (`20 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- pending:
+  - independent review artifact for `RAGEXEC-002`,
+  - mark `RAGEXEC-002` completed in `coordination/tasks.jsonl` after review sync.
+
+## 2026-03-07 RAGEXEC-002 completion snapshot
+- review:
+  - independent reviewer agent returned PASS with no findings.
+  - review artifact created: `coordination/reviews/ragexec-002-2026-03-07.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-002` -> `completed`.
+- notes:
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.

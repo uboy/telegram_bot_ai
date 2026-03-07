@@ -95,7 +95,7 @@
 {"id":"RAGQLTY-017","title":"[OUTDATED] Placeholder P5-2 item; superseded by RAGEXEC-010","status":"superseded","assignee":"codex","phase":"devops","updated_at":"2026-03-07"}
 {"id":"RAGQLTY-018","title":"[OUTDATED] Placeholder P5-3 item; superseded by RAGEXEC-009..010..018","status":"superseded","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-001","title":"Implement explicit retrieval channel budgets and rerank top-N window","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-002","title":"Remove hidden default ranking boosts from generalized retrieval path","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-002","title":"Remove hidden default ranking boosts from generalized retrieval path","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-003","title":"Add mandatory retrieval diagnostics assertions and default-mode regressions","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-004","title":"Unify RU/EN grounded direct-answer prompt contract","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-005","title":"Add prompt/format regression suite and remove forced heading dependence","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}

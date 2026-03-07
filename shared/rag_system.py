@@ -469,6 +469,14 @@ class RAGSystem:
             logger.error(f"❌ Критическая ошибка при перезагрузке моделей RAG: {e}", exc_info=True)
         
         return result
+
+    def _legacy_query_heuristics_enabled(self) -> bool:
+        """Явный rollback-режим retrieval ranking heuristics."""
+        try:
+            from shared.config import RAG_ORCHESTRATOR_V4, RAG_LEGACY_QUERY_HEURISTICS
+            return (not bool(RAG_ORCHESTRATOR_V4)) and bool(RAG_LEGACY_QUERY_HEURISTICS)
+        except Exception:
+            return False
     
     def _get_embedding(self, text: str) -> Optional[np.ndarray]:
         """Получить эмбеддинг текста"""
@@ -1064,11 +1072,14 @@ class RAGSystem:
                top_k: int = 5) -> List[Dict]:
         """Поиск в базе знаний (dense + keyword с возможным rerank)."""
         import re
+        legacy_query_heuristics_enabled = self._legacy_query_heuristics_enabled()
         # Токенизация запроса для использования в how-to бустах
         query_words = re.findall(r'\w+', query.lower())
         query_lower = query.lower()
 
         def compute_source_boost(candidate: Dict) -> float:
+            if not legacy_query_heuristics_enabled:
+                return 0.0
             tokens = [t for t in query_words if len(t) >= 3]
             if not tokens:
                 return 0.0
@@ -1104,8 +1115,9 @@ class RAGSystem:
         if query_embedding is None:
             return self._simple_search(query, knowledge_base_id, top_k)
 
-        # Определить режим поиска (how-to или обычный)
+        # В generalized режиме how-to определяется только как hint, но не меняет ranking.
         is_howto_query = self._is_howto_query(query)
+        use_legacy_howto_ranking = legacy_query_heuristics_enabled and is_howto_query
 
         bm25_chunks = self.bm25_chunks_by_kb.get(knowledge_base_id) if knowledge_base_id is not None else self.bm25_chunks_all
         bm25_chunks = bm25_chunks or []
@@ -1148,7 +1160,7 @@ class RAGSystem:
                     chunk = chunks[idx]
                     metadata = json.loads(chunk.chunk_metadata) if chunk.chunk_metadata else {}
                     similarity = float(scores[0][i])
-                    if is_howto_query:
+                    if use_legacy_howto_ranking:
                         chunk_kind = metadata.get("chunk_kind", "text")
                         if chunk_kind in ("code", "code_file", "list"):
                             similarity *= 1.5
@@ -1272,10 +1284,8 @@ class RAGSystem:
                 logger.debug("Traceback reranker: %s", traceback.format_exc())
                 # fallthrough к сортировке merged (dense + keyword)
         
-        # Если reranker недоступен — fallback: смешанный ранжир для how-to запросов
-        # Для how-to: приоритет code/list, затем bm25, затем distance
-        # Для обычных: сортировка по distance
-        if is_howto_query:
+        # Если reranker недоступен — legacy how-to ранжир остается только в rollback-режиме.
+        if use_legacy_howto_ranking:
             # Для how-to: is_code_or_list (code/list выше) → origin_priority (bm25 выше) → distance
             def sort_key_howto(c):
                 metadata = c.get("metadata") or {}
@@ -1347,13 +1357,14 @@ class RAGSystem:
         """Упрощенный поиск по ключевым словам"""
         import re
         import json
+        legacy_query_heuristics_enabled = self._legacy_query_heuristics_enabled()
         # Улучшенная токенизация: разбиваем по пробелам и специальным символам
         query_lower = query.lower()
         # Разбиваем по пробелам, амперсандам, дефисам и другим разделителям
         query_words = re.findall(r'\w+', query_lower)
         
-        # Определить режим поиска
-        is_howto = self._is_howto_query(query)
+        # В generalized режиме how-to не должен менять SQL prefilter или ranking.
+        is_howto = legacy_query_heuristics_enabled and self._is_howto_query(query)
         
         # Сильные токены для how-to запросов (команды, флаги, ключевые слова)
         strong_tokens = ['repo', '--depth', '--reference', 'mkdir', 'cd', 'git', 'init', 'sync', 
