@@ -530,7 +530,8 @@ def format_for_telegram_answer(text: str, enable_citations: bool = True) -> str:
     # Шаг 0: Удаление служебных тегов и блоков (страховка от утечек)
     text = strip_service_markup(text)
 
-    # Нормализуем заголовки разделов для читаемого форматирования
+    # Legacy section labels remain compatibility-only for older model outputs.
+    # Headingless direct answers must format correctly without these labels.
     text = re.sub(r'(?m)^\s*(Main Answer)\s*:\s*', r'## \1\n', text)
     text = re.sub(r'(?m)^\s*(Additionally Found|Additional Information)\s*:\s*', r'## \1\n', text)
     text = re.sub(r'(?m)^\s*(Основной ответ)\s*:\s*', r'## \1\n', text)

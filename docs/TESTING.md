@@ -31,6 +31,9 @@
 # RAG summary and safety
 .venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_summary_date_filter.py tests/test_rag_summary_modes.py tests/test_rag_safety.py
 
+# RAG prompt contract and formatter regressions
+.venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_prompt_contract.py tests/test_rag_prompt_format.py tests/test_rag_summary_modes.py
+
 # RAG eval + statistical quality gate logic
 .venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_eval_api.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py
 

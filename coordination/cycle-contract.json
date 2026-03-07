@@ -1,21 +1,22 @@
 {
-  "task_id": "RAGEXEC-004",
+  "task_id": "RAGEXEC-005",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile shared/utils.py tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py",
+    "python -m py_compile shared/utils.py tests/test_rag_prompt_format.py tests/test_rag_summary_modes.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_prompt_format.py tests/test_rag_summary_modes.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
     "shared/utils.py",
-    "tests/test_rag_prompt_contract.py",
+    "tests/test_rag_prompt_format.py",
     "tests/test_rag_summary_modes.py",
     "docs/design/rag-near-ideal-task-breakdown-v1.md",
     "SPEC.md",
+    "docs/TESTING.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
-    "coordination/reviews/ragexec-004-<date>.md",
+    "coordination/reviews/ragexec-005-<date>.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"

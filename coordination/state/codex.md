@@ -1107,3 +1107,60 @@
 - final gates:
   - `python scripts/scan_secrets.py` -> `PASS`
   - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+
+## 2026-03-07 RAGEXEC-005 kickoff
+- role: reviewer
+- task:
+  - add prompt/format regression suite and remove forced heading dependence.
+- scoped requirements:
+  - add dedicated regressions for headingless direct answers, deterministic no-evidence refusal, and prompt output without forced answer headings,
+  - verify `format_for_telegram_answer(...)` formats direct answers correctly without depending on legacy section labels,
+  - update `docs/TESTING.md` and `docs/REQUIREMENTS_TRACEABILITY.md`,
+  - avoid broad prompt-contract rewrites already handled by `RAGEXEC-004`.
+- next_step:
+  - add `tests/test_rag_prompt_format.py`, make any minimal formatter clarification needed in `shared/utils.py`, and run focused verification.
+
+## 2026-03-07 RAGEXEC-005 implementation snapshot
+- formatter surface confirmed:
+  - `format_for_telegram_answer(...)` still normalizes legacy section labels, but the code path does not require them for headingless direct answers.
+- implementation in progress:
+  - added a compatibility-only note next to legacy heading normalization in `shared/utils.py`,
+  - added `tests/test_rag_prompt_format.py` to lock:
+    - headingless direct-answer formatting,
+    - deterministic no-evidence refusal output,
+    - prompt contract without forced headings,
+    - legacy heading support as backward-compatible input only.
+- focused verification passed:
+  - `python -m py_compile shared/utils.py tests/test_rag_prompt_format.py tests/test_rag_summary_modes.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_prompt_format.py tests/test_rag_summary_modes.py` -> `7 passed`
+- next_step:
+  - sync `docs/TESTING.md` and traceability, then run final gates and independent review.
+- policy-gate finding:
+  - because `shared/utils.py` changed, governance still requires `SPEC.md` and a design-doc delta even for this reviewer-oriented slice.
+- correction:
+  - recorded formatter compatibility behavior in `SPEC.md`,
+  - extended `RAGEXEC-005` runtime contract in `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - send the prompt/format regression diff to an independent reviewer and close coordination artifacts if verdict is PASS.
+
+## 2026-03-07 RAGEXEC-005 review follow-up
+- reviewer SHOULD-FIX:
+  - `coordination/cycle-contract.json` was missing `SPEC.md` in `required_artifacts` even though this slice updated it.
+- correction in progress:
+  - aligning the cycle contract with the actual slice deliverables before writing the final review artifact.
+
+## 2026-03-07 RAGEXEC-005 completion snapshot
+- review:
+  - independent reviewer agent returned `PASS` on the full slice and `PASS` again after the cycle-contract follow-up.
+  - review artifact created: `coordination/reviews/ragexec-005-2026-03-07.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-005` -> `completed`.
+- notes:
+  - `coordination/templates/review-report.md` is absent in this repo; the review artifact was written in the established local format used by prior `ragexec-*` reports.
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+- final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`

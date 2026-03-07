@@ -121,6 +121,9 @@ Extra checks for quality-impacting tasks:
 ### RAGEXEC-005: Prompt/format regressions
 - Goal:
   - add dedicated regressions for direct answers, empty-evidence refusal, and no forced headings.
+- Runtime contract:
+  - `format_for_telegram_answer(...)` must keep headingless direct answers readable without injecting or requiring legacy section labels,
+  - legacy `Main Answer` / `Additionally Found` style headings may remain as backward-compatible input normalization only.
 - Files:
   - `shared/utils.py`
   - `tests/test_rag_prompt_format.py`
