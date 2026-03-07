@@ -1042,3 +1042,68 @@
 - final gates:
   - `python scripts/scan_secrets.py` -> `PASS`
   - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+
+## 2026-03-07 RAGEXEC-004 kickoff
+- role: developer
+- task:
+  - unify RU/EN grounded direct-answer prompt contract.
+- scoped requirements:
+  - remove the English `Main Answer` / `Additionally Found` template contract from `task="answer"` with context,
+  - keep RU and EN answer prompts on one direct grounded-response policy,
+  - preserve grounded no-evidence refusal behavior and citation grounding instructions,
+  - add focused prompt contract coverage without consuming the fuller regression-suite scope reserved for `RAGEXEC-005`,
+  - update `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and cycle artifacts.
+- next_step:
+  - implement the shared answer-contract helper in `shared/utils.py`, add a small prompt contract test file, and run focused verification.
+
+## 2026-03-07 RAGEXEC-004 implementation snapshot
+- prompt gap confirmed:
+  - RU `task="answer"` branch already enforced direct grounded answers,
+  - EN `task="answer"` branch still forced `Main Answer` / `Additionally Found` headings and a much heavier template.
+- implementation in progress:
+  - extracted a shared `_create_grounded_answer_prompt(...)` helper in `shared/utils.py`,
+  - routed both RU and EN contextual answer prompts through the same direct-answer contract,
+  - added focused prompt builder coverage in `tests/test_rag_prompt_contract.py` without consuming the broader formatter regression scope reserved for `RAGEXEC-005`.
+- first verification finding:
+  - prompt tests failed because the new helper still mentioned forbidden heading names inside the instruction text itself.
+- correction:
+  - removed literal legacy heading names from the direct-answer rule so the contract forbids templates without reintroducing them.
+- second verification finding:
+  - the English response-format note still contained the legacy heading label in prose, and the Russian format note still used its old extra-section label.
+- correction:
+  - removed the remaining literal legacy labels from both localized format blocks.
+- focused verification passed:
+  - `python -m py_compile shared/utils.py tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py` -> `5 passed`
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - send the prompt-contract diff to an independent reviewer and close coordination artifacts if verdict is PASS.
+
+## 2026-03-07 RAGEXEC-004 review follow-up
+- reviewer SHOULD-FIX:
+  - RU prompt still contained an English citation instruction inside the new shared helper.
+- correction in progress:
+  - localizing the citation rule and remaining Russian helper wording,
+  - extending `tests/test_rag_prompt_contract.py` so RU prompt coverage fails if English citation instructions leak back in.
+- follow-up verification passed:
+  - `python -m py_compile shared/utils.py tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py` -> `5 passed`
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - request a short reviewer re-check on the localized citation rule before writing the final review artifact.
+
+## 2026-03-07 RAGEXEC-004 completion snapshot
+- review:
+  - independent reviewer agent returned final `PASS` with no MUST-FIX/SHOULD-FIX findings after the localized citation-rule follow-up.
+  - review artifact created: `coordination/reviews/ragexec-004-2026-03-07.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-004` -> `completed`.
+- notes:
+  - `coordination/templates/review-report.md` is absent in this repo; the review artifact was written in the established local format used by prior `ragexec-*` reports.
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+- final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`

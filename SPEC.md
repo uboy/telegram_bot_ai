@@ -155,6 +155,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Baseline eval run is reproducibly executable via CLI runner and produces review artifacts (`*.json`, `*.md`) for each run.
 - Quality gate supports both DB run mode (`--run-id`) and artifact mode (`--run-report-json`, optional `--baseline-report-json`) with identical threshold PASS/FAIL semantics.
 - Route-level query-specific boosts/fallback and retrieval-core `source_boost` / how-to ranking are no longer part of the default ranking path; rollback requires explicit `RAG_LEGACY_QUERY_HEURISTICS=true`.
+- RU and EN RAG answer prompts use the same direct grounded-answer contract: no forced answer-section headings, deterministic no-evidence refusal, and citations only when grounded by `SOURCE_ID`.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.

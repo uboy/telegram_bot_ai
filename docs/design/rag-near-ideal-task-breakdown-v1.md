@@ -109,8 +109,9 @@ Extra checks for quality-impacting tasks:
   - use one direct grounded-answer contract for both languages.
 - Files:
   - `shared/utils.py`
+  - `tests/test_rag_prompt_contract.py`
 - Checks:
-  - `pytest tests/test_rag_summary_modes.py`
+  - `pytest tests/test_rag_prompt_contract.py tests/test_rag_summary_modes.py`
 - Review:
   - reviewer must inspect prompt contract diff, not only tests.
 - Docs:

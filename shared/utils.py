@@ -551,6 +551,83 @@ def format_for_telegram_answer(text: str, enable_citations: bool = True) -> str:
     return html
 
 
+def _create_grounded_answer_prompt(
+    query: str,
+    context: str,
+    *,
+    language: str,
+    enable_citations: bool,
+) -> str:
+    if language == 'ru':
+        header = "Ты помощник по базе знаний."
+        task_line = "Ответь на вопрос пользователя строго по предоставленному контексту."
+        rules_heading = "Правила:"
+        answer_language_rule = "- Пиши ТОЛЬКО на русском языке."
+        context_rule = "- Используй ТОЛЬКО информацию из блока <context>."
+        no_answer_text = "В базе знаний нет точной информации по этому вопросу."
+        direct_answer_rule = "- Дай прямой ответ без шаблонных заголовков, дополнительных секций и любых языковых шаблонов ответа."
+        definition_rule = "- Для определений приводи формулировку дословно или максимально близко к тексту контекста."
+        fact_rule = "- Для фактологических и числовых вопросов приводи точное значение, дату, период и единицы измерения из контекста."
+        no_invent_rule = "- Не придумывай факты, числа, определения, команды, URL, пути к файлам или пункты документа."
+        no_tags_rule = "- Не выводи служебные теги и поля из контекста (`<context>`, `<user_query>`, `SOURCE_ID:` и т.д.)."
+        citation_rule_enabled = "- Inline citations в формате [source_id] используй только если в соответствующем фрагменте есть строка `SOURCE_ID:`. Никогда не помещай citations внутрь code block."
+        command_rule = "- Команды и пути указывай только если они явно есть в контексте; команды оформляй как `inline code` или блок кода."
+        no_answer_rule = f"- Если ответа в контексте нет, напиши только: \"{no_answer_text}\""
+        no_citations_rule = "- Не добавляй citations, если они отключены."
+        format_block = """Формат ответа:
+- Один прямой ответ по сути вопроса без служебных заголовков.
+- При необходимости добавь один короткий уточняющий абзац сразу после основного ответа.
+- Не добавляй отдельные дополнительные секции, если пользователь этого не просил."""
+    else:
+        header = "You are a knowledge base assistant."
+        task_line = "Answer the user query strictly from the provided context."
+        rules_heading = "Rules:"
+        answer_language_rule = "- Write ONLY in English."
+        context_rule = "- Use ONLY information from the <context> block."
+        no_answer_text = "There is no exact information about this question in the knowledge base."
+        direct_answer_rule = "- Give a direct answer without template headings, extra sections, or language-specific answer templates."
+        definition_rule = "- For definitions, quote the wording from the context verbatim or stay as close to the source text as possible."
+        fact_rule = "- For factual and numeric questions, provide the exact value, date, period, and measurement units from the context."
+        no_invent_rule = "- Do not invent facts, numbers, definitions, commands, URLs, file paths, or document clauses."
+        no_tags_rule = "- Do not output service tags or fields from the context (`<context>`, `<user_query>`, `SOURCE_ID:`, and similar markers)."
+        citation_rule_enabled = "- Use inline citations in the format [source_id] only when the corresponding fragment contains a `SOURCE_ID:` line. Never place citations inside code blocks."
+        command_rule = "- Mention commands and paths only if they explicitly appear in the context; format commands as `inline code` or fenced code blocks."
+        no_answer_rule = f"- If the answer is not present in the context, write only: \"{no_answer_text}\""
+        no_citations_rule = "- Do not add citations if they are disabled."
+        format_block = """Response format:
+- One direct answer to the question without service headings.
+- Add at most one short follow-up paragraph if the context contains an essential caveat.
+- Do not add separate extra sections unless the user explicitly asked for them."""
+
+    citation_rule = citation_rule_enabled if enable_citations else no_citations_rule
+
+    return f"""{header}
+
+{task_line}
+
+{rules_heading}
+{answer_language_rule}
+{context_rule}
+{direct_answer_rule}
+{definition_rule}
+{fact_rule}
+{no_answer_rule}
+{no_invent_rule}
+{no_tags_rule}
+{citation_rule}
+{command_rule}
+
+{format_block}
+
+<context>
+{context}
+</context>
+
+<user_query>
+{query}
+</user_query>"""
+
+
 def create_prompt_with_language(query: str, context: Optional[str] = None, task: str = "answer", enable_citations: bool = True) -> str:
     """Создать промпт с учетом языка запроса и поддержкой inline citations"""
     language = detect_language(query)
@@ -565,34 +642,12 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
     if language == 'ru':
         if task == "answer":
             if context:
-                prompt = f"""Ты помощник по базе знаний.
-
-Ответь на вопрос пользователя строго по предоставленному контексту.
-
-Правила:
-- Пиши ТОЛЬКО на русском языке. Никакого китайского, английского или любого другого языка.
-- Используй ТОЛЬКО информацию из блока <context>. Запрещено дополнять ответ из собственных знаний.
-- Дай прямой ответ без шаблонных заголовков вроде "Основной ответ/Дополнительно найдено".
-- Для определений: процитируй формулировку из контекста дословно или близко к тексту.
-- Для фактологических и числовых вопросов: приведи точное значение и единицы измерения из контекста.
-- Если ответа в контексте нет — напиши только: "В базе знаний нет точной информации по этому вопросу."
-- Не придумывай факты, числа, пункты, определения, команды, URL.
-- Не выводи служебные теги/поля из контекста (`<context>`, `<user_query>`, `SOURCE_ID:` и т.д.).
-- Inline citations в формате [source_id] используй только если во фрагменте есть строка `SOURCE_ID:`.
-- Не размещай citations внутри code block.
-- Не добавляй служебные разделы вроде "Дополнительно", если пользователь явно об этом не просил.
-
-<context>
-{context}
-</context>
-
-<user_query>
-{query}
-</user_query>
-
-Формат:
-1) Короткий ответ по сути вопроса (1-2 абзаца).
-2) Для числовых/фактологических вопросов обязательно укажи найденное значение и единицы измерения, если они есть в контексте."""
+                prompt = _create_grounded_answer_prompt(
+                    query,
+                    context,
+                    language=language,
+                    enable_citations=enable_citations,
+                )
             else:
                 prompt = f"""Ты помощник. Ответь на вопрос пользователя на русском языке.
 
@@ -618,82 +673,12 @@ def create_prompt_with_language(query: str, context: Optional[str] = None, task:
     else:
         if task == "answer":
             if context:
-                citations_instruction = ""
-                if enable_citations:
-                    citations_instruction = """
-- Use inline citations in the format [source_id] **only if the context contains a SOURCE_ID: line for the corresponding source**.
-- **DO NOT use closing tags [/source_id] - use only [source_id] at the start of citation**
-- Do not cite if the SOURCE_ID: line is not present in the context.
-- Ensure citations are concise and directly related to the information provided.
-- **DO NOT place citations inside code blocks (```...```) - place them after the code block"""
-                
-                prompt = f"""### Task:
-
-Respond to the user query using the provided context. Structure your response as follows:
-
-1. **Main Answer** - most relevant information with inline citations [source_id] (only if the context contains a SOURCE_ID: line for the corresponding source)
-2. **Additional Information** (if available) - briefly mention other relevant topics found with source references
-
-### Guidelines:
-
-- **If the question is unclear or requires clarification**, clearly state this and ask the user to clarify the query.
-- **If there is too much information and clarification is needed**, suggest the user to specify the question.
-- If you don't know the answer, clearly state that.
-- Respond in the same language as the user's query.
-- If the context is unreadable or of poor quality, inform the user about this.
-- **CRITICALLY IMPORTANT: Use ONLY information that is explicitly present in the provided context.**
-- **Never output any text from <context>...</context>.**
-- **Never output XML/service tags, including <context>, <user_query>, <source_id>, <doc_title>, <section_path>, <chunk_kind>, <content>, etc.**
-- **Use citations only as [source_id], never the raw tags.**
-- **DO NOT make up commands, URLs, file paths, or any other information that is not in the context.**
-- **If a specific command or URL is not in the context, DO NOT invent it - tell the user that this information is not in the knowledge base.**
-- **If the answer isn't present in the provided context, clearly tell the user that there is no information in the knowledge base about this question.**
-- **Only include inline citations using [source_id] if the context contains a SOURCE_ID: line for the corresponding source.**
-- **DO NOT use closing tags [/source_id] - use only [source_id]**
-- Do not cite if the SOURCE_ID: line is not present in the context.
-- Do not use XML tags in your response.
-- Ensure citations are concise and directly related to the information provided.
-- **DO NOT place citations inside code blocks - place them after the closing ```**
-- **When quoting commands or URLs, use ONLY those that are exactly specified in the context.**
-- **Format all commands as code blocks: ```bash\ncommand\n``` or as inline code: `command`**
-- **If a command is mentioned in the context, always format it as code.**
-- **If information is incomplete or missing, DO NOT make up missing parts - say that the information is not available.**
-- **DO NOT repeat the same information twice in one point (e.g., "Run X for Y: X" is meaningless).**
-- **If the context only mentions a command name without details, DO NOT make up details - just mention the command name.**
-- **Priority: first give the most relevant and complete answer, then briefly mention other topics found.**
-
-### Response Format:
-
-**Main Answer:**
-[Detailed answer to the question with citations [source_id] where necessary]
-
-**Additionally Found:** (only if there is additional relevant information)
-- [Brief mention of other relevant topics with citations if present in context]
-
-### Important formatting rules:
-
-- **All commands must be in code blocks**: ```bash\ncommand\n``` or as inline code: `command`
-- **If a command is long or multi-line, use a code block with language (bash, sh, etc.)**
-- **If a command is short (single line), use inline code: `command`**
-- **DO NOT repeat the same information twice in one point**
-- **If information is incomplete (e.g., only for Windows but not for Mac), DO NOT make up missing information - explicitly state that the information is not available**
-- **Do not copy the response template or insert example sources/links.**
-
-### Output:
-
-Provide a structured response: first the main answer with citations (if present in context), then briefly additional information (if any).
-
-<context>
-
-{context}
-
-</context>
-
-<user_query>
-
-{query}
-
-</user_query>"""
+                prompt = _create_grounded_answer_prompt(
+                    query,
+                    context,
+                    language=language,
+                    enable_citations=enable_citations,
+                )
             else:
                 prompt = f"""You are a helpful assistant. Answer the user's question in English.
 
