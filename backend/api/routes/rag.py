@@ -28,7 +28,7 @@ from backend.schemas.rag import (
 # Используем существующую RAG-систему и AI-менеджер из основного проекта.
 from shared.rag_system import rag_system  # type: ignore
 from shared.ai_providers import ai_manager  # type: ignore
-from shared.utils import create_prompt_with_language  # type: ignore
+from shared.utils import create_prompt_with_language, normalize_wiki_url_for_display  # type: ignore
 from shared.rag_safety import (  # type: ignore
     strip_unknown_citations,
     strip_untrusted_urls,
@@ -134,6 +134,37 @@ def _derive_rerank_delta_value(trace: Dict[str, Any]) -> Optional[float]:
     if rerank_score is None or base_score is None:
         return None
     return rerank_score - base_score
+
+
+def _collect_grounded_url_allowlist(results: Optional[List[Dict[str, Any]]]) -> List[str]:
+    allowlist: List[str] = []
+    seen: set[str] = set()
+
+    def add_url(candidate: Any) -> None:
+        if not isinstance(candidate, str):
+            return
+        value = candidate.strip()
+        if not value.startswith(("http://", "https://")):
+            return
+        display_value = normalize_wiki_url_for_display(value)
+        for url in (value, display_value):
+            normalized = (url or "").strip()
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            allowlist.append(normalized)
+
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        add_url(row.get("source_path"))
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        for key in ("source_path", "url", "source_url", "wiki_url", "wiki_root"):
+            add_url(metadata.get(key))
+    return allowlist
 
 
 def _extract_hint_mode(hints: Optional[Dict[str, Any]], key: str) -> Optional[str]:
@@ -1229,6 +1260,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     preview_blocks.append(block[:500])
                 logger.debug("RAG context preview: %s", preview_blocks)
 
+        grounded_url_allowlist = _collect_grounded_url_allowlist(filtered_results)
+
         # Вызываем LLM через общий ai_manager
         logger.debug("Creating prompt for LLM query")
         prompt = create_prompt_with_language(
@@ -1243,7 +1276,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         logger.debug("Calling AI manager with prompt length %d", len(prompt))
         ai_answer = ai_manager.query(prompt)
         ai_answer = strip_unknown_citations(ai_answer, context_text)
-        ai_answer = strip_untrusted_urls(ai_answer, context_text)
+        ai_answer = strip_untrusted_urls(ai_answer, context_text, allowed_urls=grounded_url_allowlist)
         ai_answer = sanitize_commands_in_answer(ai_answer, context_text)
         logger.debug("AI manager returned answer length %d", len(ai_answer) if ai_answer else 0)
         
@@ -1573,6 +1606,7 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
             ))
 
     context_text = "\n\n".join(context_parts)
+    grounded_url_allowlist = _collect_grounded_url_allowlist(results[:top_k])
 
     if mode == "faq":
         system_task = "Составь FAQ: 5-10 вопросов и краткие ответы. Опирайся только на контекст."
@@ -1589,7 +1623,7 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
 
     answer = ai_manager.query(prompt)
     answer = strip_unknown_citations(answer, context_text)
-    answer = strip_untrusted_urls(answer, context_text)
+    answer = strip_untrusted_urls(answer, context_text, allowed_urls=grounded_url_allowlist)
     answer = sanitize_commands_in_answer(answer, context_text)
 
     return RAGSummaryAnswer(answer=answer, sources=sources)

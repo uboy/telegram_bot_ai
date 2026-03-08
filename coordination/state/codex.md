@@ -1258,3 +1258,47 @@
 - final gates:
   - `python scripts/scan_secrets.py` -> `PASS`
   - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+
+## 2026-03-08 RAGEXEC-007 kickoff
+- role: developer
+- task:
+  - preserve context-backed URLs and add safety regression coverage.
+- scoped requirements:
+  - keep source-backed document and wiki URLs when they are grounded in retrieval results,
+  - continue stripping untrusted markdown links and bare URLs,
+  - keep the change slice-local to `shared/rag_safety.py`, `backend/api/routes/rag.py`, and additive tests,
+  - add focused coverage for Gitee wiki URL preservation scenarios,
+  - update `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and execution backlog notes if behavior changes.
+- current finding:
+  - `strip_untrusted_urls(...)` only trusts URLs that already appear in `context_text`, but `rag_query` and `rag_summary` build `context_text` from content blocks without `source_path`, so grounded source URLs are stripped even when they are present in retrieval results and returned `sources`.
+- next_step:
+  - add an explicit grounded-URL allowlist path from retrieval results into the safety layer, then cover markdown + bare URL preservation with focused tests.
+
+## 2026-03-08 RAGEXEC-007 implementation snapshot
+- implementation in progress:
+  - extended `strip_untrusted_urls(...)` with grounded URL allowlist support and placeholder-safe markdown-link preservation so allowed markdown URLs are not stripped again by the bare-URL pass,
+  - added `_collect_grounded_url_allowlist(...)` in `backend/api/routes/rag.py` and wired it into both `rag_query` and `rag_summary`,
+  - added focused coverage in `tests/test_rag_url_preservation.py` for direct allowlist behavior and `rag_query` preservation of a grounded Gitee wiki page URL while stripping an unrelated link,
+  - kept allowlist-based URL preservation working even when the raw `context_text` does not itself contain any URL.
+- focused verification passed:
+  - `python -m py_compile shared/rag_safety.py backend/api/routes/rag.py tests/test_rag_safety.py tests/test_rag_url_preservation.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_safety.py tests/test_rag_url_preservation.py` -> `7 passed`
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - send the URL-preservation slice to an independent reviewer and close coordination artifacts if verdict is PASS.
+
+## 2026-03-08 RAGEXEC-007 completion snapshot
+- review:
+  - independent reviewer agent returned final `PASS` with no MUST-FIX or SHOULD-FIX findings.
+  - review artifact created: `coordination/reviews/ragexec-007-2026-03-08.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-007` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-008`.
+- notes:
+  - `coordination/templates/review-report.md` is absent in this repo; the review artifact was written in the established local format used by prior `ragexec-*` reports.
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+- final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`

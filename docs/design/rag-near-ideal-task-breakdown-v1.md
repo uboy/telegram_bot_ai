@@ -157,6 +157,10 @@ Extra checks for quality-impacting tasks:
 ### RAGEXEC-007: Context-backed URL preservation
 - Goal:
   - preserve grounded document/wiki URLs and still strip untrusted links.
+- Runtime contract:
+  - URL safety filtering must accept an explicit allowlist of grounded source-backed URLs in addition to raw context text,
+  - markdown links and bare URLs backed by retrieval results must survive filtering,
+  - unrelated URLs must still be stripped from generated answers.
 - Files:
   - `shared/rag_safety.py`
   - `backend/api/routes/rag.py`

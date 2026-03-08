@@ -81,7 +81,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - RAG eval uses a fixed, versioned ready-data suite by default (`tests/data/rag_eval_ready_data_v1.yaml`) to keep quality comparisons reproducible.
   - Baseline eval runner persists timestamped JSON/Markdown artifacts plus `latest` snapshots for reviewable quality evidence.
 - Safety/quality:
-  - Strip unknown citations and untrusted URLs in answers.
+  - Strip unknown citations and untrusted URLs in answers while preserving grounded source-backed document/wiki URLs.
   - Sanitize command snippets not present in KB context.
 - Storage:
   - SQL DB tables for users, knowledge bases, chunks, and import logs.
@@ -130,6 +130,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Ingested chunks keep a normalized metadata baseline so retrieval/context assembly can rely on consistent title/section/document fields across loaders.
 - RAG query returns an answer plus a list of sources with path/URL and metadata.
 - Inline citations are present when enabled and only reference provided sources.
+- Grounded source-backed document/wiki URLs survive answer safety filtering even when they are not present verbatim in the assembled context text; untrusted links are still removed.
 - Command snippets in answers are filtered by token-level grounding against KB context: grounded command variants survive small formatting differences, while invented options/arguments are removed.
 - Web search uses DuckDuckGo and returns summarized results with source links.
 - Direct AI mode works from reply keyboard button "🤖 Задать вопрос ИИ" and accepts text plus voice/audio (voice/audio are transcribed first, then sent to AI).

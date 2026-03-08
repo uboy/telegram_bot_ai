@@ -3,7 +3,8 @@ Safety helpers for RAG responses.
 """
 import re
 import shlex
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 
 COMMAND_PREFIXES = (
@@ -53,19 +54,73 @@ def strip_unknown_citations(answer: str, context: str) -> str:
     return answer
 
 
-def strip_untrusted_urls(answer: str, context: str) -> str:
-    if not answer or not context:
+def _clean_url_candidate(url: str) -> str:
+    candidate = (url or "").strip().strip("`").strip("<>").strip("'\"")
+    return candidate.rstrip(".,;")
+
+
+def _url_variants(url: str) -> Set[str]:
+    candidate = _clean_url_candidate(url)
+    if not candidate.startswith(("http://", "https://")):
+        return set()
+
+    variants = {candidate, candidate.lower()}
+    try:
+        parsed = urlsplit(candidate)
+        canonical = urlunsplit(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                parsed.path or "",
+                parsed.query or "",
+                parsed.fragment or "",
+            )
+        )
+        variants.add(canonical)
+        variants.add(canonical.lower())
+        decoded = unquote(canonical)
+        variants.add(decoded)
+        variants.add(decoded.lower())
+        if canonical.endswith("/") and parsed.path not in ("", "/"):
+            variants.add(canonical.rstrip("/"))
+            variants.add(canonical.rstrip("/").lower())
+        if decoded.endswith("/") and parsed.path not in ("", "/"):
+            variants.add(decoded.rstrip("/"))
+            variants.add(decoded.rstrip("/").lower())
+    except Exception:
+        pass
+    return {variant for variant in variants if variant}
+
+
+def _build_allowed_url_set(context: str, allowed_urls: Optional[Iterable[str]] = None) -> Set[str]:
+    allowed: Set[str] = set()
+    for match in re.findall(r"(https?://\S+)", context or ""):
+        allowed.update(_url_variants(match))
+    for url in allowed_urls or []:
+        if isinstance(url, str):
+            allowed.update(_url_variants(url))
+    return allowed
+
+
+def strip_untrusted_urls(answer: str, context: str, allowed_urls: Optional[Iterable[str]] = None) -> str:
+    if not answer or (not context and not allowed_urls):
         return answer
 
-    context_norm = re.sub(r"\s+", " ", context).lower()
+    allowed_url_set = _build_allowed_url_set(context, allowed_urls)
 
     def url_in_context(url: str) -> bool:
-        return url.lower() in context_norm
+        return any(variant in allowed_url_set for variant in _url_variants(url))
+
+    preserved_links: List[str] = []
 
     def replace_markdown_link(match: re.Match) -> str:
         text = match.group(1) or ""
         url = match.group(2) or ""
-        return match.group(0) if url_in_context(url) else text
+        if url_in_context(url):
+            placeholder = f"__URL_LINK_{len(preserved_links)}__"
+            preserved_links.append(match.group(0))
+            return placeholder
+        return text
 
     answer = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", replace_markdown_link, answer)
 
@@ -74,6 +129,8 @@ def strip_untrusted_urls(answer: str, context: str) -> str:
         return url if url_in_context(url) else ""
 
     answer = re.sub(r"(https?://\S+)", replace_bare_url, answer)
+    for index, link in enumerate(preserved_links):
+        answer = answer.replace(f"__URL_LINK_{index}__", link)
     answer = re.sub(r"\s{2,}", " ", answer).strip()
     return answer
 
