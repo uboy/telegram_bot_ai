@@ -138,11 +138,16 @@ Extra checks for quality-impacting tasks:
 ### RAGEXEC-006: Token-level command grounding sanitizer
 - Goal:
   - preserve grounded commands while still rejecting invented ones.
+- Runtime contract:
+  - command grounding must validate command signature and argument tokens separately instead of requiring exact full-line context matches,
+  - grounded command variants with small formatting differences may survive,
+  - invented options/arguments must still be removed.
 - Files:
   - `shared/rag_safety.py`
   - `tests/test_rag_safety.py`
+  - `tests/test_rag_safety_token_grounding.py`
 - Checks:
-  - `pytest tests/test_rag_safety.py`
+  - `pytest tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py`
 - Review:
   - reviewer must inspect false-positive/false-negative balance.
 - Docs:

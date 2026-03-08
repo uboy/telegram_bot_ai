@@ -1164,3 +1164,97 @@
 - final gates:
   - `python scripts/scan_secrets.py` -> `PASS`
   - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+
+## 2026-03-07 RAGEXEC-006 kickoff
+- role: developer
+- task:
+  - refactor command sanitizer to token-level grounding rules.
+- scoped requirements:
+  - preserve grounded commands when formatting differs slightly from context,
+  - continue removing invented commands and current untrusted wiki-link lines,
+  - keep the change slice-local to `shared/rag_safety.py` plus additive regression coverage,
+  - use a new dedicated test file for the new cases to respect test-freeze on existing suites,
+  - update `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and execution backlog notes.
+- next_step:
+  - implement token-level command grounding helpers in `shared/rag_safety.py`, add focused regression cases in a new safety test file, and run targeted verification.
+
+## 2026-03-07 RAGEXEC-006 implementation snapshot
+- root cause confirmed:
+  - `sanitize_commands_in_answer(...)` used exact normalized line inclusion against the whole context string, so minor formatting differences (`$` prompt, `-j8` vs `-j 8`, grounded subset commands) were dropped as if invented.
+- implementation in progress:
+  - added command tokenization/signature helpers in `shared/rag_safety.py`,
+  - switched sanitizer grounding from full-line containment to signature + token-subset matching against a context command catalog,
+  - kept current wiki-url stripping and fallback messaging unchanged for this slice,
+  - added additive regression coverage in `tests/test_rag_safety_token_grounding.py` to respect test-freeze on existing safety tests.
+- focused verification passed:
+  - `python -m py_compile shared/rag_safety.py tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py` -> `8 passed`
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - send the token-grounding diff to an independent reviewer and close coordination artifacts if verdict is PASS.
+
+## 2026-03-07 RAGEXEC-006 review failure follow-up
+- independent reviewer verdict:
+  - `FAIL` on the first token-grounding attempt.
+- must-fix findings:
+  - token-set matching preserved semantically altered commands when the same argument bag was reused with different option/value bindings,
+  - command detection still skipped non-allowlisted shell families such as `tar`,
+  - chained context lines such as `cd out && make test` were not split into grounded subcommands.
+- correction in progress:
+  - replacing token-set grounding with shape-aware matching over ordered option/value pairs and positional arguments,
+  - broadening command recognition for generic shell-like commands that carry CLI syntax,
+  - cataloging connector-split context segments so grounded subcommands survive.
+- follow-up verification passed:
+  - `python -m py_compile shared/rag_safety.py tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py` -> `12 passed`
+  - reviewer probe cases now behave as intended:
+    - swapped option values -> rejected,
+    - dropped option marker -> rejected,
+    - `make test` from `cd out && make test` -> preserved,
+    - compact `repo sync -c -j8` -> preserved,
+    - unrelated `tar -c -z -f ...` -> rejected.
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - resend the slice to the independent reviewer and close coordination artifacts if verdict is PASS.
+
+## 2026-03-07 RAGEXEC-006 second review follow-up
+- independent reviewer verdict:
+  - `FAIL` on the first re-check.
+- must-fix finding:
+  - generic two-token commands such as `pytest tests/test_rag_safety.py` still bypassed `_is_command_line(...)` because generic detection consumed the path operand into the signature and saw an empty remainder.
+- correction in progress:
+  - shifting generic command detection to inspect the first executable token plus the remaining raw CLI tail instead of the post-signature remainder,
+  - adding a regression that rejects unrelated `pytest tests/...` snippets.
+- follow-up verification passed:
+  - `python -m py_compile shared/rag_safety.py tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_safety.py tests/test_rag_safety_token_grounding.py` -> `13 passed`
+  - reviewer probe cases now behave as intended:
+    - unrelated `pytest tests/test_rag_safety.py` -> rejected,
+    - swapped option values -> rejected,
+    - dropped option marker -> rejected,
+    - `make test` from `cd out && make test` -> preserved,
+    - compact `repo sync -c -j8` -> preserved,
+    - unrelated `tar -c -z -f ...` -> rejected.
+- gate verification passed:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - resend the slice to the independent reviewer and close coordination artifacts if verdict is PASS.
+
+## 2026-03-07 RAGEXEC-006 completion snapshot
+- review:
+  - independent reviewer agent returned final `PASS` after the generic two-token command follow-up.
+  - review artifact created: `coordination/reviews/ragexec-006-2026-03-07.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-006` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-007`.
+- notes:
+  - `coordination/templates/review-report.md` is absent in this repo; the review artifact was written in the established local format used by prior `ragexec-*` reports.
+  - review-report validation script referenced by policy is still absent in `scripts/`, so no automated validation command could be run for the artifact.
+- final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`

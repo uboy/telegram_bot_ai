@@ -99,7 +99,7 @@
 {"id":"RAGEXEC-003","title":"Add mandatory retrieval diagnostics assertions and default-mode regressions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-004","title":"Unify RU/EN grounded direct-answer prompt contract","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-005","title":"Add prompt/format regression suite and remove forced heading dependence","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-006","title":"Refactor command sanitizer to token-level grounding rules","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-006","title":"Refactor command sanitizer to token-level grounding rules","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-007","title":"Preserve context-backed URLs and add safety regression coverage","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-008","title":"Expand fixed eval corpus for wiki/code/long-doc/multilingual uploaded knowledge","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-009","title":"Implement slice-aware baseline reporting and quality gate outputs","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}

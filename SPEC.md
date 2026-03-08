@@ -130,7 +130,7 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Ingested chunks keep a normalized metadata baseline so retrieval/context assembly can rely on consistent title/section/document fields across loaders.
 - RAG query returns an answer plus a list of sources with path/URL and metadata.
 - Inline citations are present when enabled and only reference provided sources.
-- Command snippets in answers are filtered to those present in KB context.
+- Command snippets in answers are filtered by token-level grounding against KB context: grounded command variants survive small formatting differences, while invented options/arguments are removed.
 - Web search uses DuckDuckGo and returns summarized results with source links.
 - Direct AI mode works from reply keyboard button "🤖 Задать вопрос ИИ" and accepts text plus voice/audio (voice/audio are transcribed first, then sent to AI).
 - Direct AI mode handles empty input with validation prompt and does not fail on long model outputs (responses are split into safe chunks).
