@@ -76,6 +76,26 @@ Copy-Item env.template .env
 - `RAG_EVAL_THRESHOLD_RECALL_AT10`
 - `RAG_EVAL_THRESHOLD_MRR_AT10`
 - `RAG_EVAL_THRESHOLD_NDCG_AT10`
+- `RAG_EVAL_ENABLE_ANSWER_METRICS`
+- `RAG_EVAL_ENABLE_JUDGE_METRICS`
+- `RAG_EVAL_KB_ID`
+- `RAG_EVAL_JUDGE_PROVIDER`
+- `RAG_EVAL_JUDGE_MODEL`
+- `RAG_EVAL_OLLAMA_BASE_URL`
+- `RAG_EVAL_THRESHOLD_FAITHFULNESS`
+- `RAG_EVAL_THRESHOLD_RESPONSE_RELEVANCY`
+- `RAG_EVAL_THRESHOLD_ANSWER_CORRECTNESS`
+- `RAG_EVAL_THRESHOLD_CITATION_VALIDITY`
+- `RAG_EVAL_THRESHOLD_REFUSAL_ACCURACY`
+- `RAG_EVAL_THRESHOLD_SECURITY_RESILIENCE`
+
+По умолчанию `RAG_EVAL_SUITE_FILE` указывает на `tests/data/rag_eval_ready_data_v2.yaml`.
+Коммитимый source manifest фиксирован в `tests/data/rag_eval_source_manifest_v1.yaml`; реальные локальные корпуса для верификации должны оставаться вне git и подключаться только в developer-local workflow.
+Для local-only manifest placeholders используйте:
+- `RAG_EVAL_LOCAL_OPENHARMONY_PATH`
+- `RAG_EVAL_LOCAL_TELEGRAM_EXPORT_PATH`
+
+`RAG_EVAL_ENABLE_ANSWER_METRICS=true` включает local-only answer-level scoring в eval artifacts. По умолчанию eval answer lane использует основной provider/model из `.env` (`AI_DEFAULT_PROVIDER` + provider-specific model env). `RAG_EVAL_ENABLE_JUDGE_METRICS=true` дополнительно включает judge lane; при необходимости его можно отдельно переопределить через `RAG_EVAL_JUDGE_PROVIDER` и `RAG_EVAL_JUDGE_MODEL`. `RAG_EVAL_KB_ID` опционально фиксирует eval на одной подготовленной KB. `RAG_EVAL_OLLAMA_BASE_URL` нужен только если текущий answer/judge provider = `ollama`. Эти env vars не должны выставляться в committed-safe CI.
 
 ### AI providers
 - Ollama:

@@ -56,6 +56,10 @@ class RAGDiagnosticsCandidate(BaseModel):
     fusion_rank: int
     fusion_score: str
     rerank_delta: Optional[str] = None
+    included_in_context: bool
+    context_rank: Optional[int] = None
+    context_reason: Optional[str] = None
+    context_anchor_rank: Optional[int] = None
     metadata: Optional[Dict] = None
     content_preview: Optional[str] = None
 
@@ -108,4 +112,3 @@ class RAGEvalStatusResponse(BaseModel):
     metrics: Optional[Dict] = None
     error_message: Optional[str] = None
     results: List[RAGEvalResultRow] = []
-

@@ -70,13 +70,15 @@ python scripts/start_stack.py
 1. Откройте `👨‍💼 Админ-панель` -> `📚 Управление базами знаний`.
 2. Нажмите `➕ Создать базу знаний`.
 3. Отправьте название базы обычным текстовым сообщением.
-4. Бот возвращает явный результат (`✅`/`❌`) и показывает админ-меню.
+4. При успехе бот возвращает явный результат (`✅`) и сразу показывает меню действий этой базы знаний: загрузка документов, wiki, настройки, очистка и т.д.
+5. При ошибке бот возвращает `❌` и оставляет обычное админ-меню.
 
 ### 1.2) Сбор wiki по URL
 1. Откройте `👨‍💼 Админ-панель` -> `📚 Управление базами знаний` и выберите нужную БЗ.
 2. Нажмите `🌐 Собрать вики по URL`.
 3. Отправьте корневой URL wiki-раздела (например, `https://gitee.com/<org>/<repo>/wikis`).
-4. Бот запускает backend wiki-crawl и возвращает итог: корневой URL, число удаленных старых фрагментов, обработанных страниц и добавленных фрагментов.
+4. Бот запускает backend wiki-crawl и возвращает итог: корневой URL, режим синхронизации (`git fallback` или `HTML crawl`), число удаленных старых фрагментов, обработанных страниц и добавленных фрагментов.
+5. Если вы нажали старую кнопку загрузки wiki через git/zip из устаревшего сообщения, бот не будет запускать отдельную orphan-ветку, а попросит вернуться к шагу `🌐 Собрать вики по URL`.
 
 ### 2) Вопрос по KB
 1. Выберите режим поиска в KB.
@@ -136,7 +138,7 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/api/v1/rag/diagnostics/<req
 ## Запуск RAG eval-run
 
 По умолчанию eval-run использует фиксированный ready-data корпус:
-- `tests/data/rag_eval_ready_data_v1.yaml`
+- `tests/data/rag_eval_ready_data_v2.yaml`
 
 Запустить benchmark suite:
 
@@ -162,13 +164,13 @@ python scripts/rag_eval_quality_gate.py --run-id <run_id> --baseline-run-id <bas
 Прогнать quality gate по report-артефактам (без чтения run из БД):
 
 ```bash
-python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/latest.json --allow-no-baseline --print-json
+python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/latest/baseline_v1.json --allow-no-baseline --print-json
 ```
 
 С baseline report comparison:
 
 ```bash
-python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/current.json --baseline-report-json data/rag_eval_baseline/baseline.json --print-json
+python scripts/rag_eval_quality_gate.py --run-report-json data/rag_eval_baseline/latest/candidate_v1.json --baseline-report-json data/rag_eval_baseline/latest/baseline_v1.json --print-json
 ```
 
 Сформировать baseline-отчет с артефактами (`json` + `md`):
@@ -178,9 +180,25 @@ python scripts/rag_eval_baseline_runner.py --suite rag-general-v1 --label baseli
 ```
 
 После запуска будут созданы:
-- timestamped `*.json` и `*.md` отчеты,
-- `data/rag_eval_baseline/latest.json`,
-- `data/rag_eval_baseline/latest.md`.
+- timestamped `*.json` и `*.md` отчеты в `data/rag_eval_baseline/runs/<label>/`,
+- стабильные snapshots `data/rag_eval_baseline/latest/<label>.json` и `data/rag_eval_baseline/latest/<label>.md`,
+- append-only history `data/rag_eval_baseline/trends/<label>.jsonl`.
+
+### Локальная fail-fast последовательность для quality lane
+
+Для public-safe локальной проверки повторяйте тот же порядок, что и CI:
+
+```bash
+python scripts/ci_policy_gate.py --working-tree
+python scripts/scan_secrets.py
+python -m py_compile scripts/ci_policy_gate.py scripts/scan_secrets.py scripts/rag_eval_quality_gate.py scripts/rag_eval_baseline_runner.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py
+.venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py
+.venv\Scripts\python -m pytest -q -p no:cacheprovider tests/test_security_api_key.py tests/test_rag_safety.py
+```
+
+Примечания:
+- этот committed lane использует только synthetic/public-safe данные;
+- локальные реальные корпуса и Ollama-проверки остаются developer-local и не должны попадать в CI, docs или артефакты репозитория.
 
 ## Сравнение legacy vs v4 orchestrator на реальном API
 

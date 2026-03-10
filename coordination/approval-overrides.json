@@ -1,6 +1,69 @@
 {
   "entries": [
     {
+      "id": "2026-03-09-rag-backlog-extension-query-rewrite-answer-metrics",
+      "approved_on": "2026-03-09",
+      "approved_by": "user",
+      "reason": "User explicitly requested that any still-missing answer-quality improvement ideas be added in the following steps, including query rewriting/multi-query retrieval and stronger local answer-quality evaluation.",
+      "files": [
+        "docs/design/rag-near-ideal-task-breakdown-v1.md",
+        "coordination/tasks.jsonl",
+        "coordination/approval-overrides.json"
+      ]
+    },
+    {
+      "id": "2026-03-09-ragexec-013-canonical-chunk-contract",
+      "approved_on": "2026-03-09",
+      "approved_by": "user",
+      "reason": "User explicitly approved the canonical chunk contract design and authorized proceeding with implementation of RAGEXEC-013.",
+      "files": [
+        "docs/design/rag-runtime-canonical-chunk-contract-v1.md",
+        "backend/services/ingestion_service.py",
+        "shared/database.py",
+        "SPEC.md",
+        "docs/OPERATIONS.md",
+        "docs/REQUIREMENTS_TRACEABILITY.md",
+        "docs/design/rag-near-ideal-task-breakdown-v1.md",
+        "coordination/tasks.jsonl",
+        "coordination/cycle-contract.json"
+      ]
+    },
+    {
+      "id": "2026-03-08-rag-embedded-quality-eval-security-design",
+      "approved_on": "2026-03-08",
+      "approved_by": "user",
+      "reason": "User explicitly requested design-only research, planning, and a new security-first design spec for the embedded local RAG quality-evaluation system.",
+      "files": [
+        ".scratchpad/research.md",
+        ".scratchpad/plan.md",
+        "docs/design/rag-embedded-quality-eval-security-system-v1.md"
+      ]
+    },
+    {
+      "id": "2026-03-08-rag-embedded-quality-eval-design",
+      "approved_on": "2026-03-08",
+      "approved_by": "user",
+      "reason": "User explicitly requested a design-only task to create/update scratchpad research+plan artifacts and add a new design spec for the embedded local RAG quality-evaluation system.",
+      "files": [
+        ".scratchpad/research.md",
+        ".scratchpad/plan.md",
+        "docs/design/rag-embedded-quality-eval-system-v1.md"
+      ]
+    },
+    {
+      "id": "2026-03-08-rag-local-only-eval-scope",
+      "approved_on": "2026-03-08",
+      "approved_by": "user",
+      "reason": "User approved implementation planning with the stricter rule that real verification corpora are local-only and must never be committed, quoted, or hardcoded in code, tests, docs, or artifacts.",
+      "files": [
+        "docs/design/rag-embedded-quality-eval-security-system-v1.md",
+        "docs/design/rag-embedded-quality-eval-system-v1.md",
+        "docs/design/rag-near-ideal-task-breakdown-v1.md",
+        "coordination/cycle-contract.json",
+        "coordination/tasks.jsonl"
+      ]
+    },
+    {
       "id": "2026-03-07-rag-roadmap-supersession",
       "approved_on": "2026-03-07",
       "approved_by": "user",

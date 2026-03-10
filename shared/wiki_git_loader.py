@@ -17,6 +17,39 @@ from shared.document_loaders import document_loader_manager
 from shared.wiki_scraper import _normalize_base_url
 
 
+def _normalize_wiki_rel_path(path: str) -> str:
+    return (path or "").replace("\\", "/").strip("/")
+
+
+def _wiki_page_path_from_file_path(file_path: str) -> str:
+    normalized = _normalize_wiki_rel_path(file_path)
+    if normalized.lower().endswith(".md"):
+        normalized = normalized[:-3]
+    return normalized
+
+
+def _decorate_wiki_chunk_metadata(metadata: Dict[str, object], file_path: str) -> Dict[str, object]:
+    normalized_path = _normalize_wiki_rel_path(file_path)
+    wiki_page_path = _wiki_page_path_from_file_path(normalized_path)
+    page_doc_title = Path(wiki_page_path).name or Path(normalized_path).stem or "wiki"
+
+    enriched = dict(metadata or {})
+    enriched["file_path"] = normalized_path
+    enriched["wiki_page_path"] = wiki_page_path
+    enriched["doc_title"] = page_doc_title
+    enriched["section_title"] = str(enriched.get("section_title") or page_doc_title)
+
+    section_path = str(enriched.get("section_path") or "").strip()
+    if section_path:
+        if wiki_page_path and not section_path.startswith(wiki_page_path):
+            enriched["section_path"] = f"{wiki_page_path} > {section_path}"
+        else:
+            enriched["section_path"] = section_path
+    else:
+        enriched["section_path"] = wiki_page_path or page_doc_title or "ROOT"
+    return enriched
+
+
 def _extract_repo_info_from_wiki_url(wiki_url: str) -> Optional[Dict[str, str]]:
     """
     Извлечь информацию о репозитории из URL вики Gitee.
@@ -146,12 +179,12 @@ def _restore_wiki_url_from_path(file_path: str, wiki_root: str) -> str:
     """
     try:
         # Убрать расширение .md
-        original_path = file_path
-        if file_path.endswith('.md'):
-            file_path = file_path[:-3]
+        original_path = _normalize_wiki_rel_path(file_path)
+        if original_path.endswith('.md'):
+            original_path = original_path[:-3]
         
         # Разделить путь на части
-        path_parts = [p for p in file_path.split('/') if p]  # Убираем пустые части
+        path_parts = [p for p in original_path.split('/') if p]  # Убираем пустые части
         
         if not path_parts:
             logger.warning(f"[wiki-git] Пустой путь после обработки: {original_path}")
@@ -236,7 +269,7 @@ def load_wiki_from_git(
                 
                 full_path = os.path.join(root, file)
                 # Относительный путь от корня репозитория
-                rel_path = os.path.relpath(full_path, repo_path)
+                rel_path = _normalize_wiki_rel_path(os.path.relpath(full_path, repo_path))
                 
                 # Восстановить URL страницы вики
                 wiki_page_url = _restore_wiki_url_from_path(rel_path, wiki_root)
@@ -254,19 +287,30 @@ def load_wiki_from_git(
                 
                 file_chunks = 0
                 # Добавить чанки в базу знаний
-                for chunk in chunks:
-                    metadata = dict(chunk.get("metadata") or {})
+                for chunk_no, chunk in enumerate(chunks, start=1):
+                    metadata = _decorate_wiki_chunk_metadata(dict(chunk.get("metadata") or {}), rel_path)
                     metadata["wiki_root"] = wiki_root
                     metadata["original_url"] = wiki_page_url
                     metadata["wiki_page_url"] = wiki_page_url
-                    metadata["file_path"] = rel_path  # Сохраняем путь к файлу для отладки
-                    
+                    canonical_payload = rag_system._build_canonical_chunk_payload(
+                        content=chunk.get("content", ""),
+                        source_type="web",
+                        source_path=wiki_page_url,
+                        metadata=metadata,
+                        chunk_no=chunk_no,
+                        chunk_title=str(chunk.get("title") or rel_path),
+                        chunk_columns={"parser_profile": "loader:web:wiki_git:v1"},
+                    )
                     rag_system.add_chunk(
                         knowledge_base_id=knowledge_base_id,
                         content=chunk.get("content", ""),
                         source_type="web",
                         source_path=wiki_page_url,  # Используем восстановленный URL
-                        metadata=metadata,
+                        metadata=canonical_payload["metadata"],
+                        metadata_json=canonical_payload["metadata_json"],
+                        chunk_columns=canonical_payload["chunk_columns"],
+                        chunk_no=chunk_no,
+                        chunk_title=str(chunk.get("title") or rel_path),
                     )
                     chunks_added += 1
                     file_chunks += 1
@@ -357,7 +401,8 @@ def load_wiki_from_zip(
                 
                 try:
                     # Восстановить URL страницы вики из пути файла
-                    wiki_page_url = _restore_wiki_url_from_path(file_name, wiki_root)
+                    normalized_file_name = _normalize_wiki_rel_path(file_name)
+                    wiki_page_url = _restore_wiki_url_from_path(normalized_file_name, wiki_root)
                     
                     # Загрузить содержимое файла
                     chunks = document_loader_manager.load_document(temp_file_path, "md", options=loader_options)
@@ -367,33 +412,44 @@ def load_wiki_from_zip(
                     
                     file_chunks = 0
                     # Добавить чанки в базу знаний
-                    for chunk in chunks:
-                        metadata = dict(chunk.get("metadata") or {})
+                    for chunk_no, chunk in enumerate(chunks, start=1):
+                        metadata = _decorate_wiki_chunk_metadata(dict(chunk.get("metadata") or {}), normalized_file_name)
                         metadata["wiki_root"] = wiki_root
                         metadata["original_url"] = wiki_page_url
                         metadata["wiki_page_url"] = wiki_page_url
-                        metadata["file_path"] = file_name  # Сохраняем путь к файлу для отладки
-                        
+                        canonical_payload = rag_system._build_canonical_chunk_payload(
+                            content=chunk.get("content", ""),
+                            source_type="web",
+                            source_path=wiki_page_url,
+                            metadata=metadata,
+                            chunk_no=chunk_no,
+                            chunk_title=str(chunk.get("title") or file_name),
+                            chunk_columns={"parser_profile": "loader:web:wiki_zip:v1"},
+                        )
                         rag_system.add_chunk(
                             knowledge_base_id=knowledge_base_id,
                             content=chunk.get("content", ""),
                             source_type="web",
                             source_path=wiki_page_url,  # Используем восстановленный URL
-                            metadata=metadata,
+                            metadata=canonical_payload["metadata"],
+                            metadata_json=canonical_payload["metadata_json"],
+                            chunk_columns=canonical_payload["chunk_columns"],
+                            chunk_no=chunk_no,
+                            chunk_title=str(chunk.get("title") or file_name),
                         )
                         chunks_added += 1
                         file_chunks += 1
                     
                     files_processed += 1
                     processed_files.append({
-                        'file_name': file_name,
+                        'file_name': normalized_file_name,
                         'wiki_url': wiki_page_url,
                         'chunks': file_chunks
                     })
-                    logger.info(f"[wiki-zip] Обработан файл: {file_name} -> {wiki_page_url} ({file_chunks} чанков)")
+                    logger.info(f"[wiki-zip] Обработан файл: {normalized_file_name} -> {wiki_page_url} ({file_chunks} чанков)")
                 except Exception as e:
                     files_with_errors += 1
-                    logger.warning(f"[wiki-zip] Ошибка обработки файла {file_name}: {e}", exc_info=True)
+                    logger.warning(f"[wiki-zip] Ошибка обработки файла {normalized_file_name}: {e}", exc_info=True)
                 finally:
                     # Удалить временный файл
                     try:

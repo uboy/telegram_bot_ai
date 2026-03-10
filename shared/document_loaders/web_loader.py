@@ -1,12 +1,57 @@
 """
 Загрузчик для веб-страниц
 """
+import os
 import re
 import requests
 import time
 from typing import List, Dict
+from urllib.parse import urlparse
 from .base import DocumentLoader
-from .chunking import split_text_structurally, split_text_into_chunks
+from .chunking import split_text_structurally_with_metadata, split_text_into_chunks
+
+
+def _fallback_web_doc_title(source: str, page_title: str) -> str:
+    if page_title:
+        return page_title.strip()
+    parsed = urlparse(source or "")
+    path = (parsed.path or "").rstrip("/")
+    if path:
+        return os.path.basename(path) or path.split("/")[-1]
+    return parsed.netloc or source or "web"
+
+
+def _build_overlap_chunk_records(parts: List[str], base_text: str, overlap: int | None) -> List[Dict[str, int | str]]:
+    try:
+        effective_overlap = int(overlap) if overlap is not None else 0
+    except (ValueError, TypeError):
+        effective_overlap = 0
+    if effective_overlap < 0:
+        effective_overlap = 0
+
+    records: List[Dict[str, int | str]] = []
+    search_start = 0
+    for idx, part in enumerate(parts):
+        if not part:
+            continue
+        char_start = base_text.find(part, search_start)
+        if char_start < 0:
+            char_start = search_start
+        char_end = char_start + len(part)
+        content = part
+        if effective_overlap > 0 and idx > 0:
+            prev = parts[idx - 1]
+            overlap_text = prev[-effective_overlap:] if len(prev) > effective_overlap else prev
+            if overlap_text:
+                content = overlap_text + "\n\n" + part
+        records.append({
+            "content": content,
+            "char_start": char_start,
+            "char_end": char_end,
+            "chunk_kind": "text",
+        })
+        search_start = char_end
+    return records
 
 
 class WebLoader(DocumentLoader):
@@ -69,6 +114,7 @@ class WebLoader(DocumentLoader):
             
             if page_title:
                 text = f"{page_title}\n\n{text}"
+            doc_title = _fallback_web_doc_title(source, page_title)
 
             chunking_mode = (options or {}).get("chunking_mode") or "section"
             max_chars = (options or {}).get("max_chars")
@@ -88,66 +134,103 @@ class WebLoader(DocumentLoader):
                     content = content[:max_chars]
                 return [{
                     "content": content,
-                    "title": page_title or source,
+                    "title": doc_title or source,
                     "metadata": {
                         "type": "web",
                         "url": source,
+                        "doc_title": doc_title,
                         "page_title": page_title,
-                        "section_title": page_title,
+                        "section_title": doc_title,
+                        "section_path": doc_title or "ROOT",
                         "chunk_kind": "full_page",
+                        "chunk_no": 1,
+                        "parser_profile": "loader:web:v1",
                         "truncated": bool(max_chars and len(text) > max_chars),
                     },
                 }]
 
             sections: List[Dict[str, str]] = []
-            current_section = ""
-            current_title = page_title or ""
+            current_section_lines: List[str] = []
+            header_stack: List[tuple[int, str]] = []
             
             lines = text.split('\n')
             for line in lines:
                 header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
                 if header_match:
-                    if current_section:
-                        sections.append({"content": current_section.strip(), "title": current_title})
-                    current_title = header_match.group(2).strip()
-                    current_section = line + "\n"
+                    if current_section_lines:
+                        section_content = "\n".join(current_section_lines).strip()
+                        if section_content:
+                            prev_title = header_stack[-1][1] if header_stack else doc_title
+                            prev_path = " > ".join([doc_title] + [item[1] for item in header_stack if item[1]]) if header_stack else (doc_title or "ROOT")
+                            sections.append({
+                                "content": section_content,
+                                "section_title": prev_title or doc_title,
+                                "section_path": prev_path,
+                            })
+                    level = len(header_match.group(1))
+                    header_text = header_match.group(2).strip()
+                    while header_stack and header_stack[-1][0] >= level:
+                        header_stack.pop()
+                    header_stack.append((level, header_text))
+                    current_section_lines = [line]
                 else:
-                    current_section += line + "\n"
+                    current_section_lines.append(line)
             
-            if current_section:
-                sections.append({"content": current_section.strip(), "title": current_title})
+            if current_section_lines:
+                section_content = "\n".join(current_section_lines).strip()
+                if section_content:
+                    section_title = header_stack[-1][1] if header_stack else doc_title
+                    section_path = " > ".join([doc_title] + [item[1] for item in header_stack if item[1]]) if header_stack else (doc_title or "ROOT")
+                    sections.append({
+                        "content": section_content,
+                        "section_title": section_title or doc_title,
+                        "section_path": section_path,
+                    })
             
             if not sections:
-                sections = [{"content": text, "title": page_title or ""}]
+                sections = [{"content": text, "section_title": doc_title, "section_path": doc_title or "ROOT"}]
 
             chunks: List[Dict[str, str]] = []
+            global_chunk_no = 1
+            document_char_offset = 0
             for sec in sections:
                 sec_text = sec.get("content") or ""
-                sec_title = sec.get("title") or ""
+                sec_title = sec.get("section_title") or doc_title or ""
+                sec_path = sec.get("section_path") or doc_title or "ROOT"
 
                 if chunking_mode == "fixed":
-                    sec_chunks = split_text_into_chunks(sec_text, max_chars=max_chars, overlap=overlap)
+                    sec_base_chunks = split_text_into_chunks(sec_text, max_chars=max_chars, overlap=0)
+                    sec_records = _build_overlap_chunk_records(sec_base_chunks, sec_text, overlap)
                 else:
-                    sec_chunks = split_text_structurally(sec_text, max_chars=max_chars, overlap=overlap)
+                    sec_records = split_text_structurally_with_metadata(sec_text, max_chars=max_chars, overlap=overlap)
 
-                for idx, part in enumerate(sec_chunks, start=1):
-                    title = sec_title or f"Фрагмент {idx}"
-                    if len(sec_chunks) > 1:
-                        title = f"{title} (фрагмент {idx})" if sec_title else f"Фрагмент {idx}"
+                for section_chunk_no, record in enumerate(sec_records, start=1):
+                    part = str(record["content"])
+                    title = sec_title or doc_title or f"Фрагмент {section_chunk_no}"
+                    if len(sec_records) > 1 and title:
+                        title = f"{title} (фрагмент {section_chunk_no})"
                     chunks.append({
                         "content": part,
                         "title": title,
                         "metadata": {
                             "type": "web",
                             "url": source,
+                            "doc_title": doc_title,
                             "page_title": page_title,
                             "section_title": sec_title,
-                            "chunk_kind": "text",
+                            "section_path": sec_path,
+                            "chunk_kind": record.get("chunk_kind") or "text",
+                            "chunk_no": global_chunk_no,
+                            "char_start": document_char_offset + int(record.get("char_start") or 0),
+                            "char_end": document_char_offset + int(record.get("char_end") or 0),
+                            "parser_profile": "loader:web:v1",
                         },
                     })
+                    global_chunk_no += 1
+                document_char_offset += len(sec_text) + 2
             
             return chunks if chunks else [
-                {"content": text[:5000], "title": "", "metadata": {"type": "web", "url": source}}
+                {"content": text[:5000], "title": "", "metadata": {"type": "web", "url": source, "doc_title": doc_title, "parser_profile": "loader:web:v1"}}
             ]
         except ImportError:
             return [{'content': 'Библиотеки beautifulsoup4 и html2text не установлены', 'title': '', 'metadata': {}}]

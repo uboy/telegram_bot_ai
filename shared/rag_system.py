@@ -6,6 +6,8 @@ import json
 import logging
 import threading
 import functools
+import hashlib
+import re
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 from collections import defaultdict
@@ -63,6 +65,328 @@ _RU_STOP_WORDS = frozenset({
     "были", "есть", "быть", "будет", "который", "которая",
     "которые", "которого",
 })
+_SPACE_RE = re.compile(r"\s+")
+_WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9_]+", flags=re.UNICODE)
+_SECTION_SEPARATOR_RE = re.compile(r"\s*>\s*")
+_CONTEXT_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n{2,}", flags=re.UNICODE)
+_CONTEXT_LIST_SPLIT_RE = re.compile(r"(?:\r?\n|;\s+)", flags=re.UNICODE)
+_CREDENTIAL_URL_RE = re.compile(r"([a-z][a-z0-9+\-.]*://)([^/@:\s]+):([^/@\s]+)@", flags=re.IGNORECASE)
+_AUTH_HEADER_RE = re.compile(r"(?i)\b(authorization\b\s*:\s*(?:bearer|basic|token)\s+)([^\s,;]+)")
+_BEARER_TOKEN_RE = re.compile(r"(?i)\b(bearer\s+)([^\s,;]+)")
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret)\b(\s*[:=]\s*)([^\s,;]+)"
+)
+_CONTEXT_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _coerce_non_negative_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    return coerced if coerced >= 0 else None
+
+
+def _normalize_section_path_norm_value(section_path: str) -> str:
+    normalized = str(section_path or "").replace("\\", "/").strip()
+    normalized = _SECTION_SEPARATOR_RE.sub(" > ", normalized)
+    normalized = _SPACE_RE.sub(" ", normalized).strip().lower()
+    return normalized or "root"
+
+
+def _estimate_token_count_value(content: str) -> int:
+    return len(_WORD_RE.findall(content or ""))
+
+
+def _tokenize_focus_terms(text: str) -> List[str]:
+    tokens = []
+    seen = set()
+    for token in _WORD_RE.findall((text or "").lower()):
+        if len(token) < 3:
+            continue
+        if token in _RU_STOP_WORDS:
+            continue
+        normalized = _normalize_ru(token) if HAS_PYMORPHY else token
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        tokens.append(normalized)
+    return tokens
+
+
+def _clip_excerpt(text: str, max_length: int) -> str:
+    normalized = str(text or "").strip()
+    if len(normalized) <= max_length:
+        return normalized
+    cut_point = normalized.rfind("\n", 0, max_length)
+    if cut_point < max_length * 0.6:
+        cut_point = normalized.rfind(" ", 0, max_length)
+    if cut_point < max_length * 0.6:
+        cut_point = max_length
+    return normalized[:cut_point].rstrip() + "..."
+
+
+def _split_context_units(text: str, chunk_kind: str) -> List[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    if chunk_kind == "list":
+        parts = _CONTEXT_LIST_SPLIT_RE.split(raw)
+        units = [part.strip(" -•\t") for part in parts if part and part.strip(" -•\t")]
+        return units or [raw]
+    if chunk_kind in {"code", "code_file"}:
+        lines = [line.rstrip() for line in raw.splitlines() if line.strip()]
+        return lines or [raw]
+    parts = _CONTEXT_SENTENCE_SPLIT_RE.split(raw)
+    units = [part.strip() for part in parts if part and part.strip()]
+    if len(units) <= 1 and ";" in raw:
+        parts = _CONTEXT_LIST_SPLIT_RE.split(raw)
+        units = [part.strip() for part in parts if part and part.strip()]
+    merged_units: List[str] = []
+    index = 0
+    while index < len(units):
+        unit = units[index]
+        if re.fullmatch(r"\d+[.)]?", unit) and index + 1 < len(units):
+            merged_units.append(f"{unit} {units[index + 1]}".strip())
+            index += 2
+            continue
+        merged_units.append(unit)
+        index += 1
+    return merged_units or [raw]
+
+
+def _score_context_unit(unit: str, *, focus_terms: List[str], number_tokens: List[str]) -> float:
+    lower = unit.lower()
+    tokens = set(_tokenize_focus_terms(lower))
+    score = float(len(tokens.intersection(focus_terms)))
+    for number in number_tokens:
+        if number in lower:
+            score += 2.0
+        if re.search(rf"(?:^|\s){re.escape(number)}[.)]", lower):
+            score += 1.0
+    if any(term in lower for term in focus_terms[:6]):
+        score += 0.5
+    return score
+
+
+def describe_context_chunk(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = row or {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    content = str(payload.get("content") or "")
+    source_path = str(payload.get("source_path") or "").strip()
+    source_type = str(payload.get("source_type") or metadata.get("type") or "unknown").strip() or "unknown"
+    doc_title = str(metadata.get("doc_title") or metadata.get("title") or source_path or "Без названия").strip() or "Без названия"
+    section_title = str(metadata.get("section_title") or metadata.get("title") or doc_title).strip() or doc_title
+    section_path = str(metadata.get("section_path") or doc_title or source_path or "ROOT").strip() or "ROOT"
+    section_path_norm = str(metadata.get("section_path_norm") or _normalize_section_path_norm_value(section_path)).strip() or "root"
+    chunk_kind = str(metadata.get("chunk_kind") or metadata.get("chunk_type") or metadata.get("block_type") or "text").strip() or "text"
+    block_type = str(metadata.get("block_type") or chunk_kind or "text").strip() or "text"
+    row_id = _coerce_non_negative_int(payload.get("id", payload.get("chunk_id")))
+    chunk_no = _coerce_non_negative_int(payload.get("chunk_no", metadata.get("chunk_no")))
+    page_no = _coerce_non_negative_int(metadata.get("page_no", metadata.get("page")))
+    token_count_est = _coerce_non_negative_int(metadata.get("token_count_est")) or _estimate_token_count_value(content)
+    chunk_hash = str(metadata.get("chunk_hash") or "").strip()
+    if not chunk_hash:
+        hash_basis = "\n".join(
+            [
+                source_type,
+                source_path,
+                str(chunk_no or 0),
+                _SPACE_RE.sub(" ", content).strip(),
+            ]
+        )
+        chunk_hash = hashlib.sha256(hash_basis.encode("utf-8", errors="ignore")).hexdigest()
+    doc_key = (source_path or doc_title).strip().lower() or source_type.lower()
+    if section_path_norm and section_path_norm != "root":
+        scope_key = f"section:{section_path_norm}"
+    elif page_no is not None:
+        scope_key = f"page:{page_no}"
+    else:
+        scope_key = f"doc:{doc_key}"
+    identity = f"id:{row_id}" if row_id is not None else f"{doc_key}#chunk:{chunk_no or 0}#{chunk_hash[:12]}"
+    return {
+        "id": row_id,
+        "source_path": source_path,
+        "source_type": source_type,
+        "doc_title": doc_title,
+        "doc_key": doc_key,
+        "section_title": section_title,
+        "section_path": section_path,
+        "section_path_norm": section_path_norm,
+        "scope_key": scope_key,
+        "chunk_kind": chunk_kind,
+        "block_type": block_type,
+        "chunk_no": chunk_no,
+        "page_no": page_no,
+        "chunk_hash": chunk_hash,
+        "token_count_est": token_count_est,
+        "identity": identity,
+        "content": content,
+    }
+
+
+def _candidate_rank_score(candidate: Dict[str, Any]) -> float:
+    for key in ("multi_query_score", "rerank_score", "rank_score"):
+        value = candidate.get(key)
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    try:
+        distance = float(candidate.get("distance", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return -distance
+
+
+def merge_multi_query_candidates(
+    candidate_batches: List[List[Dict[str, Any]]],
+    *,
+    rrf_k: int = 20,
+) -> List[Dict[str, Any]]:
+    """Fuse bounded multi-query retrieval batches by stable chunk identity."""
+    k = max(1, int(rrf_k))
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    for batch in candidate_batches or []:
+        for rank, candidate in enumerate(batch or [], start=1):
+            if not isinstance(candidate, dict):
+                continue
+            row = dict(candidate)
+            info = describe_context_chunk(row)
+            identity = str(info.get("identity") or "").strip()
+            if not identity:
+                identity = f"{row.get('source_path') or ''}::{str(row.get('content') or '')[:200]}"
+            mode = str(row.get("query_variant_mode") or "original").strip().lower() or "original"
+            variant_query = str(row.get("query_variant_query") or "").strip()
+            variant_reason = str(row.get("query_variant_reason") or "").strip()
+            score = _candidate_rank_score(row)
+            rrf_score = 1.0 / float(k + rank)
+
+            entry = merged.get(identity)
+            if entry is None:
+                merged[identity] = {
+                    "row": row,
+                    "best_score": score,
+                    "rrf_score": rrf_score,
+                    "hit_count": 1,
+                    "variant_modes": [mode],
+                    "variant_queries": ([variant_query] if variant_query else []),
+                    "variant_reasons": ([variant_reason] if variant_reason else []),
+                }
+                continue
+
+            entry["rrf_score"] = float(entry.get("rrf_score", 0.0)) + rrf_score
+            entry["hit_count"] = int(entry.get("hit_count", 1)) + 1
+            variant_modes = entry.setdefault("variant_modes", [])
+            if mode and mode not in variant_modes:
+                variant_modes.append(mode)
+            variant_queries = entry.setdefault("variant_queries", [])
+            if variant_query and variant_query not in variant_queries:
+                variant_queries.append(variant_query)
+            variant_reasons = entry.setdefault("variant_reasons", [])
+            if variant_reason and variant_reason not in variant_reasons:
+                variant_reasons.append(variant_reason)
+
+            best_score = float(entry.get("best_score", 0.0))
+            current_mode = str(entry.get("row", {}).get("query_variant_mode") or "original").strip().lower() or "original"
+            should_replace = score > best_score or (
+                score == best_score and mode == "original" and current_mode != "original"
+            )
+            if should_replace:
+                entry["row"] = row
+                entry["best_score"] = score
+
+    fused: List[Dict[str, Any]] = []
+    for entry in merged.values():
+        row = dict(entry.get("row") or {})
+        best_score = float(entry.get("best_score", 0.0))
+        rrf_score = float(entry.get("rrf_score", 0.0))
+        row["multi_query_score"] = best_score + rrf_score
+        row["multi_query_rrf"] = rrf_score
+        row["multi_query_hit_count"] = int(entry.get("hit_count", 1))
+        row["query_variant_modes"] = list(entry.get("variant_modes") or [])
+        row["query_variant_queries"] = list(entry.get("variant_queries") or [])
+        row["query_variant_reasons"] = list(entry.get("variant_reasons") or [])
+        fused.append(row)
+
+    fused.sort(
+        key=lambda item: (
+            _candidate_rank_score(item),
+            int(item.get("multi_query_hit_count", 1)),
+            float(item.get("multi_query_rrf", 0.0)),
+        ),
+        reverse=True,
+    )
+    return fused
+
+
+def build_query_focused_excerpt(
+    query: str,
+    content: str,
+    *,
+    max_length: int,
+    chunk_kind: str = "text",
+) -> str:
+    raw = str(content or "").strip()
+    if not raw:
+        return ""
+    focus_terms = _tokenize_focus_terms(query)
+    number_tokens = list(dict.fromkeys(_CONTEXT_NUMBER_RE.findall(query or "")))
+    if chunk_kind in {"code", "code_file"}:
+        return _clip_excerpt(raw, max_length)
+
+    units = _split_context_units(raw, chunk_kind)
+    if len(raw) <= max_length and (len(units) <= 1 or (not focus_terms and not number_tokens)):
+        return raw
+    if len(units) <= 1:
+        return _clip_excerpt(raw, max_length)
+    if not focus_terms and not number_tokens:
+        return _clip_excerpt(raw, max_length)
+
+    scored = [
+        (_score_context_unit(unit, focus_terms=focus_terms, number_tokens=number_tokens), index, unit)
+        for index, unit in enumerate(units)
+    ]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    best_score, best_index, _best_unit = scored[0]
+    if best_score <= 0:
+        return _clip_excerpt(raw, max_length)
+
+    chosen: List[tuple[int, str]] = [(best_index, units[best_index])]
+    used_chars = len(units[best_index])
+    for distance in range(1, len(units)):
+        added = False
+        for candidate_index in (best_index - distance, best_index + distance):
+            if candidate_index < 0 or candidate_index >= len(units):
+                continue
+            if any(existing_index == candidate_index for existing_index, _ in chosen):
+                continue
+            unit = units[candidate_index]
+            unit_score = _score_context_unit(unit, focus_terms=focus_terms, number_tokens=number_tokens)
+            min_support_score = 0.0
+            if number_tokens:
+                min_support_score = max(1.5, best_score * 0.7)
+            elif best_score > 1.5:
+                min_support_score = best_score * 0.45
+            if unit_score < min_support_score:
+                continue
+            projected = used_chars + len(unit) + 1
+            if projected > max_length:
+                continue
+            chosen.append((candidate_index, unit))
+            used_chars = projected
+            added = True
+        if not added and used_chars >= max_length * 0.75:
+            break
+
+    chosen.sort(key=lambda item: item[0])
+    separator = "\n" if chunk_kind == "list" else " "
+    excerpt = separator.join(unit for _, unit in chosen).strip()
+    return _clip_excerpt(excerpt or raw, max_length)
 
 
 @functools.lru_cache(maxsize=8192)
@@ -828,6 +1152,219 @@ class RAGSystem:
         """Список всех баз знаний"""
         with get_session() as session:
             return session.query(KnowledgeBase).all()
+
+    def _coerce_optional_int(self, value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced >= 0 else None
+
+    def _coerce_optional_float(self, value: Any) -> Optional[float]:
+        if value is None or value == "":
+            return None
+        try:
+            coerced = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, coerced))
+
+    def _sanitize_parser_warning(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = _SPACE_RE.sub(" ", str(value)).strip()
+        if not cleaned:
+            return None
+        cleaned = _CREDENTIAL_URL_RE.sub(r"\1***:***@", cleaned)
+        cleaned = _AUTH_HEADER_RE.sub(r"\1***", cleaned)
+        cleaned = _BEARER_TOKEN_RE.sub(r"\1***", cleaned)
+        cleaned = _SECRET_VALUE_RE.sub(r"\1\2***", cleaned)
+        return cleaned[:500]
+
+    def _normalize_section_path_norm(self, section_path: str) -> str:
+        return _normalize_section_path_norm_value(section_path)
+
+    def _estimate_token_count(self, content: str) -> int:
+        return _estimate_token_count_value(content)
+
+    def _build_chunk_hash_fallback(self, source_type: str, source_path: str, chunk_no: int, content: str) -> str:
+        normalized_content = _SPACE_RE.sub(" ", content or "").strip()
+        hash_basis = "\n".join(
+            [
+                str(source_type or "").strip(),
+                str(source_path or "").strip(),
+                str(chunk_no),
+                normalized_content,
+            ]
+        )
+        return hashlib.sha256(hash_basis.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _canonical_chunk_columns(
+        self,
+        *,
+        content: str,
+        source_type: str,
+        source_path: str,
+        metadata: Optional[Dict],
+        metadata_json: Optional[Dict],
+        chunk_columns: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        merged_meta: Dict[str, Any] = {}
+        if isinstance(metadata, dict):
+            merged_meta.update(metadata)
+        if isinstance(metadata_json, dict):
+            merged_meta.update(metadata_json)
+
+        explicit_columns = dict(chunk_columns or {})
+        section_path = str(
+            explicit_columns.get("section_path_norm")
+            or merged_meta.get("section_path")
+            or merged_meta.get("doc_title")
+            or merged_meta.get("title")
+            or source_path
+            or "ROOT"
+        )
+        block_type = str(
+            explicit_columns.get("block_type")
+            or merged_meta.get("block_type")
+            or merged_meta.get("chunk_type")
+            or merged_meta.get("chunk_kind")
+            or "text"
+        ).strip() or "text"
+        stable_chunk_no = self._coerce_optional_int(explicit_columns.get("chunk_no", merged_meta.get("chunk_no"))) or 1
+
+        return {
+            "chunk_hash": str(
+                explicit_columns.get("chunk_hash")
+                or merged_meta.get("chunk_hash")
+                or self._build_chunk_hash_fallback(source_type, source_path, stable_chunk_no, content)
+            ).strip(),
+            "chunk_no": stable_chunk_no,
+            "block_type": block_type,
+            "parent_chunk_id": str(
+                explicit_columns.get("parent_chunk_id")
+                or merged_meta.get("parent_chunk_id")
+                or ""
+            ).strip() or None,
+            "prev_chunk_id": str(
+                explicit_columns.get("prev_chunk_id")
+                or merged_meta.get("prev_chunk_id")
+                or ""
+            ).strip() or None,
+            "next_chunk_id": str(
+                explicit_columns.get("next_chunk_id")
+                or merged_meta.get("next_chunk_id")
+                or ""
+            ).strip() or None,
+            "section_path_norm": str(
+                explicit_columns.get("section_path_norm")
+                or merged_meta.get("section_path_norm")
+                or self._normalize_section_path_norm(section_path)
+            ).strip(),
+            "page_no": self._coerce_optional_int(explicit_columns.get("page_no", merged_meta.get("page_no", merged_meta.get("page")))),
+            "char_start": self._coerce_optional_int(explicit_columns.get("char_start", merged_meta.get("char_start"))),
+            "char_end": self._coerce_optional_int(explicit_columns.get("char_end", merged_meta.get("char_end"))),
+            "token_count_est": self._coerce_optional_int(
+                explicit_columns.get("token_count_est", merged_meta.get("token_count_est"))
+            ) or self._estimate_token_count(content),
+            "parser_profile": str(
+                explicit_columns.get("parser_profile")
+                or merged_meta.get("parser_profile")
+                or f"loader:{source_type}:legacy"
+            ).strip() or f"loader:{source_type}:legacy",
+            "parser_confidence": self._coerce_optional_float(
+                explicit_columns.get("parser_confidence", merged_meta.get("parser_confidence"))
+            ),
+            "parser_warning": self._sanitize_parser_warning(
+                explicit_columns.get("parser_warning", merged_meta.get("parser_warning"))
+            ),
+        }
+
+    def _build_canonical_chunk_payload(
+        self,
+        *,
+        content: str,
+        source_type: str,
+        source_path: str,
+        metadata: Optional[Dict] = None,
+        metadata_json: Optional[Dict] = None,
+        chunk_columns: Optional[Dict] = None,
+        chunk_no: Optional[int] = None,
+        chunk_title: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        effective_metadata = dict(metadata or {})
+        effective_metadata_json = dict(metadata_json or effective_metadata)
+        merged_meta: Dict[str, Any] = {}
+        merged_meta.update(effective_metadata)
+        merged_meta.update(effective_metadata_json)
+
+        title = str(merged_meta.get("title") or chunk_title or source_path or "").strip()
+        doc_title = str(merged_meta.get("doc_title") or title or source_path or "").strip()
+        section_title = str(merged_meta.get("section_title") or title or doc_title or "").strip()
+        section_path = str(merged_meta.get("section_path") or doc_title or source_path or "ROOT").strip()
+        chunk_kind = str(
+            merged_meta.get("chunk_kind")
+            or merged_meta.get("chunk_type")
+            or merged_meta.get("block_type")
+            or "text"
+        ).strip() or "text"
+        stable_chunk_no = (
+            self._coerce_optional_int(chunk_no)
+            or self._coerce_optional_int(merged_meta.get("chunk_no"))
+            or self._coerce_optional_int((chunk_columns or {}).get("chunk_no"))
+            or 1
+        )
+
+        canonical_seed = dict(merged_meta)
+        canonical_seed["type"] = str(merged_meta.get("type") or source_type or "unknown")
+        canonical_seed["title"] = title
+        canonical_seed["doc_title"] = doc_title
+        canonical_seed["section_title"] = section_title
+        canonical_seed["section_path"] = section_path
+        canonical_seed["chunk_kind"] = chunk_kind
+        canonical_seed["chunk_no"] = stable_chunk_no
+
+        effective_chunk_columns = self._canonical_chunk_columns(
+            content=content,
+            source_type=source_type,
+            source_path=source_path,
+            metadata=canonical_seed,
+            metadata_json=canonical_seed,
+            chunk_columns=chunk_columns,
+        )
+
+        canonical_seed["section_path_norm"] = effective_chunk_columns["section_path_norm"]
+        canonical_seed["block_type"] = effective_chunk_columns["block_type"]
+        canonical_seed["chunk_hash"] = effective_chunk_columns["chunk_hash"]
+        canonical_seed["chunk_no"] = effective_chunk_columns["chunk_no"]
+        canonical_seed["token_count_est"] = effective_chunk_columns["token_count_est"]
+        canonical_seed["parser_profile"] = effective_chunk_columns["parser_profile"]
+        if effective_chunk_columns.get("page_no") is not None:
+            canonical_seed["page_no"] = effective_chunk_columns["page_no"]
+        if effective_chunk_columns.get("char_start") is not None:
+            canonical_seed["char_start"] = effective_chunk_columns["char_start"]
+        if effective_chunk_columns.get("char_end") is not None:
+            canonical_seed["char_end"] = effective_chunk_columns["char_end"]
+        if effective_chunk_columns.get("parser_confidence") is not None:
+            canonical_seed["parser_confidence"] = effective_chunk_columns["parser_confidence"]
+        if effective_chunk_columns.get("parser_warning"):
+            canonical_seed["parser_warning"] = effective_chunk_columns["parser_warning"]
+        if effective_chunk_columns.get("parent_chunk_id"):
+            canonical_seed["parent_chunk_id"] = effective_chunk_columns["parent_chunk_id"]
+        if effective_chunk_columns.get("prev_chunk_id"):
+            canonical_seed["prev_chunk_id"] = effective_chunk_columns["prev_chunk_id"]
+        if effective_chunk_columns.get("next_chunk_id"):
+            canonical_seed["next_chunk_id"] = effective_chunk_columns["next_chunk_id"]
+
+        effective_metadata.update(canonical_seed)
+        effective_metadata_json.update(canonical_seed)
+        return {
+            "metadata": effective_metadata,
+            "metadata_json": effective_metadata_json,
+            "chunk_columns": effective_chunk_columns,
+        }
     
     def add_chunk(self, knowledge_base_id: int, content: str, 
                   source_type: str = "text", source_path: str = "",
@@ -835,6 +1372,9 @@ class RAGSystem:
                   document_id: Optional[int] = None,
                   version: Optional[int] = None,
                   metadata_json: Optional[Dict] = None,
+                  chunk_columns: Optional[Dict] = None,
+                  chunk_no: Optional[int] = None,
+                  chunk_title: Optional[str] = None,
                   is_deleted: bool = False) -> KnowledgeChunk:
         """Добавить фрагмент знания с retry логикой для обработки блокировок БД"""
         import time
@@ -845,6 +1385,19 @@ class RAGSystem:
         # Подготовить embedding заранее, чтобы минимизировать время транзакции
         embedding = self._get_embedding(content)
         embedding_json = json.dumps(embedding.tolist()) if embedding is not None else None
+        canonical_payload = self._build_canonical_chunk_payload(
+            content=content,
+            source_type=source_type,
+            source_path=source_path,
+            metadata=metadata,
+            metadata_json=metadata_json,
+            chunk_columns=chunk_columns,
+            chunk_no=chunk_no,
+            chunk_title=chunk_title,
+        )
+        effective_metadata = canonical_payload["metadata"]
+        effective_metadata_json = canonical_payload["metadata_json"]
+        canonical_columns = canonical_payload["chunk_columns"]
         
         with _db_write_lock:
             for attempt in range(max_retries):
@@ -855,8 +1408,9 @@ class RAGSystem:
                             document_id=document_id,
                             version=version or 1,
                             content=content,
-                            chunk_metadata=json.dumps(metadata or {}),
-                            metadata_json=json.dumps(metadata_json or {}) if metadata_json is not None else None,
+                            chunk_metadata=json.dumps(effective_metadata),
+                            metadata_json=json.dumps(effective_metadata_json),
+                            **canonical_columns,
                             embedding=embedding_json,
                             source_type=source_type,
                             source_path=source_path,
@@ -935,7 +1489,20 @@ class RAGSystem:
                 content = chunk_data.get('content', '')
                 embedding = self._get_embedding(content)
                 embedding_json = json.dumps(embedding.tolist()) if embedding is not None else None
-                prepared_data.append((chunk_data, embedding, embedding_json))
+                canonical_payload = self._build_canonical_chunk_payload(
+                    content=content,
+                    source_type=chunk_data.get('source_type', 'text'),
+                    source_path=chunk_data.get('source_path', ''),
+                    metadata=chunk_data.get('metadata'),
+                    metadata_json=chunk_data.get('metadata_json'),
+                    chunk_columns=chunk_data.get('chunk_columns'),
+                    chunk_no=chunk_data.get('chunk_no'),
+                    chunk_title=chunk_data.get('chunk_title'),
+                )
+                effective_metadata = canonical_payload["metadata"]
+                effective_metadata_json = canonical_payload["metadata_json"]
+                canonical_columns = canonical_payload["chunk_columns"]
+                prepared_data.append((chunk_data, effective_metadata, effective_metadata_json, canonical_columns, embedding, embedding_json))
             
             all_chunks = []
             chunks_with_embeddings = []  # (chunk_id, embedding_json, embedding) для второй фазы
@@ -950,14 +1517,15 @@ class RAGSystem:
                             chunks_to_add = []
                             batch_embeddings = []
                             
-                            for chunk_data, embedding, embedding_json in batch_data:
+                            for chunk_data, effective_metadata, effective_metadata_json, canonical_columns, embedding, embedding_json in batch_data:
                                 chunk = KnowledgeChunk(
                                     knowledge_base_id=chunk_data['knowledge_base_id'],
                                     document_id=chunk_data.get('document_id'),
                                     version=chunk_data.get('version') or 1,
                                     content=chunk_data.get('content', ''),
-                                    chunk_metadata=json.dumps(chunk_data.get('metadata') or {}),
-                                    metadata_json=json.dumps(chunk_data.get('metadata_json') or {}) if chunk_data.get('metadata_json') is not None else None,
+                                    chunk_metadata=json.dumps(effective_metadata),
+                                    metadata_json=json.dumps(effective_metadata_json),
+                                    **canonical_columns,
                                     embedding=None,  # Вставляем без embedding сначала
                                     source_type=chunk_data.get('source_type', 'text'),
                                     source_path=chunk_data.get('source_path', ''),

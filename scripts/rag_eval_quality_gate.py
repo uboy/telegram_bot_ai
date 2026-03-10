@@ -11,16 +11,44 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 DEFAULT_REQUIRED_SLICES = [
+    "overall",
     "ru",
     "en",
     "mixed",
     "factoid",
     "howto",
+    "definition",
     "legal",
     "numeric",
     "long-context",
+    "refusal-expected",
 ]
 DEFAULT_METRICS = ["recall_at_10", "mrr_at_10", "ndcg_at_10"]
+DEFAULT_THRESHOLDS = {
+    "recall_at_10": 0.6,
+    "mrr_at_10": 0.45,
+    "ndcg_at_10": 0.5,
+    "faithfulness": 0.80,
+    "response_relevancy": 0.75,
+    "answer_correctness": 0.75,
+    "citation_validity": 0.95,
+    "refusal_accuracy": 0.90,
+    "security_resilience": 0.90,
+}
+
+
+def _canonicalize_slice_name(value: str) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    token = token.replace(" ", "_")
+    aliases = {
+        "long_context": "long-context",
+        "refusal_expected": "refusal-expected",
+        "direct_prompt_injection": "direct_injection",
+        "indirect_prompt_injection": "indirect_injection",
+    }
+    return aliases.get(token, token)
 
 
 def _safe_json_loads(raw: Optional[str]) -> Dict[str, Any]:
@@ -35,16 +63,39 @@ def _safe_json_loads(raw: Optional[str]) -> Dict[str, Any]:
 
 def _parse_list_arg(raw: Optional[str], default: Sequence[str]) -> List[str]:
     if not raw:
-        return [str(item).strip().lower() for item in default if str(item).strip()]
+        return [_canonicalize_slice_name(str(item)) for item in default if _canonicalize_slice_name(str(item))]
     out: List[str] = []
     for item in str(raw).split(","):
-        token = item.strip().lower()
+        token = _canonicalize_slice_name(item)
         if not token:
             continue
         if token in out:
             continue
         out.append(token)
-    return out or [str(item).strip().lower() for item in default if str(item).strip()]
+    return out or [_canonicalize_slice_name(str(item)) for item in default if _canonicalize_slice_name(str(item))]
+
+
+def _derive_metrics(
+    requested_raw: Optional[str],
+    default: Sequence[str],
+    run_metrics: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    if requested_raw:
+        return _parse_list_arg(requested_raw, default)
+    metrics_obj = run_metrics if isinstance(run_metrics, dict) else {}
+    available = [
+        str(item).strip().lower()
+        for item in (metrics_obj.get("available_metrics") or [])
+        if str(item).strip()
+    ]
+    if available:
+        deduped: List[str] = []
+        for item in available:
+            if item in deduped:
+                continue
+            deduped.append(item)
+        return deduped
+    return _parse_list_arg(None, default)
 
 
 def _load_db_handles():
@@ -118,6 +169,109 @@ def _load_status_report(path: str) -> Dict[str, Any]:
     return data
 
 
+def _metrics_from_report_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = payload.get("metrics")
+    return metrics if isinstance(metrics, dict) else {}
+
+
+def _metrics_from_run_meta(run_meta: Any) -> Dict[str, Any]:
+    return _safe_json_loads(getattr(run_meta, "metrics_json", None))
+
+
+def _derive_required_slices(
+    *,
+    requested_raw: Optional[str],
+    default: Sequence[str],
+    metrics: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    if requested_raw:
+        return _parse_list_arg(requested_raw, default)
+
+    derived = _parse_list_arg(None, default)
+    metrics_obj = metrics if isinstance(metrics, dict) else {}
+
+    def add_if_present(values: Sequence[str]) -> None:
+        for value in values:
+            token = _canonicalize_slice_name(value)
+            if not token or token in derived:
+                continue
+            derived.append(token)
+
+    add_if_present([str(item) for item in (metrics_obj.get("slices") or [])])
+    add_if_present([str(item) for item in (metrics_obj.get("source_families") or [])])
+    add_if_present([str(item) for item in (metrics_obj.get("security_scenarios") or [])])
+    add_if_present([str(item) for item in (metrics_obj.get("failure_modes") or [])])
+    return derived
+
+
+def _build_slice_groups(required_slices: Sequence[str], metrics: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]]:
+    metrics_obj = metrics if isinstance(metrics, dict) else {}
+    source_family_set = {
+        _canonicalize_slice_name(str(item))
+        for item in (metrics_obj.get("source_families") or [])
+        if _canonicalize_slice_name(str(item))
+    }
+    security_set = {
+        _canonicalize_slice_name(str(item))
+        for item in (metrics_obj.get("security_scenarios") or [])
+        if _canonicalize_slice_name(str(item))
+    }
+    failure_mode_set = {
+        _canonicalize_slice_name(str(item))
+        for item in (metrics_obj.get("failure_modes") or [])
+        if _canonicalize_slice_name(str(item))
+    }
+    grouped = {
+        "source_families": [slice_name for slice_name in required_slices if slice_name in source_family_set],
+        "security_scenarios": [slice_name for slice_name in required_slices if slice_name in security_set],
+        "failure_modes": [slice_name for slice_name in required_slices if slice_name in failure_mode_set],
+        "other": [
+            slice_name
+            for slice_name in required_slices
+            if (
+                slice_name not in source_family_set
+                and slice_name not in security_set
+                and slice_name not in failure_mode_set
+            )
+        ],
+    }
+    return grouped
+
+
+def _resolve_threshold_value(
+    *,
+    slice_name: str,
+    metric_name: str,
+    row: Optional[Dict[str, Any]],
+    thresholds: Dict[str, float],
+    run_metrics: Optional[Dict[str, Any]],
+) -> float:
+    row_threshold = None
+    if isinstance(row, dict):
+        raw_row_threshold = row.get("threshold_value")
+        if raw_row_threshold is not None:
+            try:
+                row_threshold = float(raw_row_threshold)
+            except Exception:
+                row_threshold = None
+    if row_threshold is not None:
+        return row_threshold
+
+    metrics_obj = run_metrics if isinstance(run_metrics, dict) else {}
+    slice_thresholds = metrics_obj.get("slice_thresholds")
+    if isinstance(slice_thresholds, dict):
+        per_slice = slice_thresholds.get(slice_name)
+        if isinstance(per_slice, dict):
+            raw_value = per_slice.get(metric_name)
+            if raw_value is not None:
+                try:
+                    return float(raw_value)
+                except Exception:
+                    pass
+
+    return float(thresholds.get(metric_name, 0.0))
+
+
 def _extract_sample_size(details: Dict[str, Any]) -> int:
     try:
         return int(details.get("sample_size") or 0)
@@ -181,6 +335,7 @@ def evaluate_gate(
     seed: int,
     allow_no_baseline: bool,
     allow_missing_bootstrap: bool,
+    run_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     checks: List[Dict[str, Any]] = []
     passed = True
@@ -199,7 +354,13 @@ def evaluate_gate(
         for metric_name in metrics:
             key = (slice_name, metric_name)
             row = run_rows.get(key)
-            threshold = float(thresholds.get(metric_name, 0.0))
+            threshold = _resolve_threshold_value(
+                slice_name=slice_name,
+                metric_name=metric_name,
+                row=row,
+                thresholds=thresholds,
+                run_metrics=run_metrics,
+            )
             check: Dict[str, Any] = {
                 "slice": slice_name,
                 "metric": metric_name,
@@ -277,6 +438,7 @@ def evaluate_gate(
         "run_id": run_id,
         "baseline_run_id": baseline_id,
         "required_slices": list(required_slices),
+        "slice_groups": _build_slice_groups(required_slices, run_metrics),
         "metrics": list(metrics),
         "min_sample_size": int(min_sample_size),
         "negative_margin": float(negative_margin),
@@ -337,6 +499,7 @@ def main() -> int:
         if not run_rows:
             print("quality-gate: run report has no metric rows")
             return 2
+        run_metrics = _metrics_from_report_payload(run_report)
 
         baseline_run_id = (str(args.baseline_run_id).strip() if args.baseline_run_id else "") or (
             str(run_report.get("baseline_run_id") or "").strip() or None
@@ -372,6 +535,7 @@ def main() -> int:
         if str(run_meta.status or "").lower() != "completed":
             print(f"quality-gate: run is not completed: {run_id} status={run_meta.status}")
             return 2
+        run_metrics = _metrics_from_run_meta(run_meta)
 
         baseline_run_id = (
             str(args.baseline_run_id).strip()
@@ -385,13 +549,20 @@ def main() -> int:
             print(f"quality-gate: baseline run not found or has no results: {baseline_run_id}")
             return 2
 
-    required_slices = _parse_list_arg(args.slices, DEFAULT_REQUIRED_SLICES)
-    metrics = _parse_list_arg(args.metrics, DEFAULT_METRICS)
-    thresholds = {
-        "recall_at_10": float(args.threshold_recall_at10),
-        "mrr_at_10": float(args.threshold_mrr_at10),
-        "ndcg_at_10": float(args.threshold_ndcg_at10),
-    }
+    required_slices = _derive_required_slices(
+        requested_raw=args.slices,
+        default=DEFAULT_REQUIRED_SLICES,
+        metrics=run_metrics,
+    )
+    metrics = _derive_metrics(args.metrics, DEFAULT_METRICS, run_metrics)
+    thresholds = dict(DEFAULT_THRESHOLDS)
+    thresholds.update(
+        {
+            "recall_at_10": float(args.threshold_recall_at10),
+            "mrr_at_10": float(args.threshold_mrr_at10),
+            "ndcg_at_10": float(args.threshold_ndcg_at10),
+        }
+    )
 
     report = evaluate_gate(
         run_id=run_id or "unknown",
@@ -407,6 +578,7 @@ def main() -> int:
         seed=int(args.seed),
         allow_no_baseline=bool(args.allow_no_baseline),
         allow_missing_bootstrap=bool(args.allow_missing_bootstrap),
+        run_metrics=run_metrics,
     )
 
     if args.json_out:

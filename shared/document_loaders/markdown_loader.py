@@ -13,6 +13,7 @@ class MarkdownLoader(DocumentLoader):
     def load(self, source: str, options: Dict[str, str] | None = None) -> List[Dict[str, str]]:
         """Загрузить markdown файл"""
         import os
+        storage_safe_full_max = 60000
         try:
             with open(source, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -162,12 +163,34 @@ class MarkdownLoader(DocumentLoader):
                     restored_code = f"\n__CODE_BLOCK_START__\n{code_content}\n__CODE_BLOCK_END__\n"
                     sec_text_plain = sec_text_plain.replace(code_block['placeholder'], restored_code)
                 
+                effective_chunking_mode = chunking_mode
                 if chunking_mode == "full":
-                    sec_chunks = [sec_text_plain]
+                    effective_full_max = min(max_chars or storage_safe_full_max, storage_safe_full_max)
+                    if len(sec_text_plain) <= effective_full_max:
+                        sec_chunks = [sec_text_plain]
+                    else:
+                        # Full-page mode is a preference, not permission to exceed storage-safe chunk sizes.
+                        sec_chunks = split_markdown_section_into_chunks(
+                            sec_text_plain,
+                            max_chars=effective_full_max,
+                            overlap=0,
+                        )
+                        effective_chunking_mode = "section"
                 elif chunking_mode == "fixed":
                     sec_chunks = split_text_into_chunks(sec_text_plain, max_chars=max_chars, overlap=overlap)
                 else:
                     sec_chunks = split_markdown_section_into_chunks(sec_text_plain, max_chars=max_chars, overlap=overlap)
+
+                if chunking_mode == "full" and effective_chunking_mode != "full":
+                    bounded_chunks = []
+                    for chunk in sec_chunks:
+                        if len(chunk) <= effective_full_max:
+                            bounded_chunks.append(chunk)
+                            continue
+                        bounded_chunks.extend(
+                            split_text_into_chunks(chunk, max_chars=effective_full_max, overlap=0)
+                        )
+                    sec_chunks = bounded_chunks
 
                 def _restore_code_fences(chunk_text: str) -> str:
                     if "__CODE_BLOCK_START__" not in chunk_text:
@@ -186,7 +209,7 @@ class MarkdownLoader(DocumentLoader):
                     # Определить chunk_kind по маркерам и найти language для code чанков
                     chunk_kind = "text"
                     code_lang = None
-                    if chunking_mode == "full":
+                    if effective_chunking_mode == "full":
                         chunk_kind = "full_page"
                         languages = sorted({(cb.get("language") or "").strip() for cb in code_blocks if (cb.get("language") or "").strip()})
                         if len(languages) == 1:

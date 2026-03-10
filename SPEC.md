@@ -39,8 +39,10 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - For AI requests, request/model metrics are persisted in DB and used to estimate expected latency.
   - If AI request is predicted (or observed) to exceed 5 seconds, bot shows temporary progress status and removes it after response/error.
   - Admin menu for users/KBs/ingestion/AI settings.
-  - Wiki crawl flow from admin KB actions is stateful: after pressing "Собрать вики по URL" and sending root URL, bot must call backend wiki-crawl ingestion and return explicit result stats instead of falling back to unrelated default flow.
-  - For Gitee wiki URLs, wiki-crawl uses git-based loader fallback to ensure full recursive synchronization when HTML pages expose wiki navigation mostly via JS.
+- Wiki crawl flow from admin KB actions is stateful: after pressing "Собрать вики по URL" and sending root URL, bot must call backend wiki-crawl ingestion and return explicit result stats instead of falling back to unrelated default flow.
+- For Gitee wiki URLs, wiki-crawl uses git-based loader fallback to ensure full recursive synchronization when HTML pages expose wiki navigation mostly via JS.
+- Admin bot UI uses one canonical wiki-ingestion path: `kb_wiki_crawl -> waiting_wiki_root -> /ingestion/wiki-crawl`; stale legacy git/zip callback buttons must not start orphan flows and must redirect user back to the canonical URL-based path.
+- Wiki-crawl result stats must expose the actual synchronization mode (`git` vs `html`) plus whether git fallback was attempted, and admin bot messages must show that mode explicitly so Gitee fallback behavior is visible.
   - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
   - In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
   - In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
@@ -60,8 +62,12 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - Job status endpoint for ingestion progress (where implemented).
 - RAG pipeline:
   - Chunking with configurable size/overlap and Markdown-aware splitting.
+  - Oversized Markdown documents in `full` chunking mode automatically fall back to storage-safe structural splitting instead of writing single overlong chunks beyond DB limits.
   - Ingestion normalizes core chunk metadata contract (`type`, `title`, `doc_title`, `section_title`, `section_path`, `chunk_kind`, `document_class`, `language`, `doc_version`, `source_updated_at`) across source types.
+  - New runtime ingestion writes, including direct wiki HTML/git/zip paths, dual-write a canonical chunk contract into `chunk_metadata`, `metadata_json`, and additive `knowledge_chunks` columns (`chunk_hash`, `chunk_no`, `block_type`, `section_path_norm`, `token_count_est`, `parser_profile`), while optional page/offset/parser/adjacency fields remain nullable.
   - Markdown and code loaders preserve document/section metadata consistently (`doc_title`, `section_title`, `section_path`, `chunk_no`) to reduce context assembly ambiguity.
+  - PDF and DOCX loaders preserve structural metadata (`doc_title`, `section_title`, `section_path`, `chunk_no`, `parser_profile`) and emit page/paragraph or character-span hints where the parser can derive them.
+  - Web/wiki/code loaders preserve stable source semantics: web chunks keep `doc_title` + hierarchical `section_path`, code chunks expose chunk-level symbol/section spans, and wiki git/zip paths normalize to stable forward-slash page identities.
   - Embeddings with sentence-transformers; Qdrant for dense retrieval in production mode (`RAG_BACKEND=qdrant`).
   - Legacy in-process FAISS path remains available as rollback mode (`RAG_BACKEND=legacy`).
   - Retrieval orchestrator cutover is controlled by `RAG_ORCHESTRATOR_V4` feature flag.
@@ -77,9 +83,12 @@ Teams and individuals need a Telegram-native assistant that can answer questions
     - for factoid/legal/numeric questions ("кто", "как часто", "какой целевой показатель", "на 2030 год"), retrieval applies dedicated factual intent ranking + lexical fallback by terms/years/points;
     - for metric/factoid questions, ranking additionally prioritizes key phrase overlap + numeric evidence and uses narrowed context packing.
   - In Phase D orchestrator mode (`RAG_ORCHESTRATOR_V4=true`), route-level query-specific boosts/fallback and retrieval-core legacy ranking boosts are disabled in primary path.
+  - In generalized retrieval mode, short/ambiguous KB questions use bounded corpus-agnostic query rewriting (`max 3` variants including original) plus stable-identity multi-query fusion; rewrites are canonical lexical projections only and do not use LLM expansion or corpus-specific synonym lists.
   - In legacy mode, route-level query-specific boosts/fallback and retrieval-core `source_boost` / how-to ranking are disabled by default (`RAG_LEGACY_QUERY_HEURISTICS=false`) and can be temporarily re-enabled only as rollback switch.
-  - RAG eval uses a fixed, versioned ready-data suite by default (`tests/data/rag_eval_ready_data_v1.yaml`) to keep quality comparisons reproducible.
+  - RAG eval uses a fixed, versioned ready-data suite by default (`tests/data/rag_eval_ready_data_v2.yaml`) plus committed source-manifest contract (`tests/data/rag_eval_source_manifest_v1.yaml`) to keep quality comparisons reproducible while keeping real verification corpora local-only.
   - Baseline eval runner persists timestamped JSON/Markdown artifacts plus `latest` snapshots for reviewable quality evidence.
+- Local-only eval runs may additionally score answer-level metrics (`faithfulness`, `response_relevancy`, `answer_correctness`, `citation_validity`, `refusal_accuracy`, `security_resilience`) using the already configured main provider/model by default, with optional judge override support; committed artifacts record only scores/provider-model ids/git revision/security summaries when answer metrics are enabled, never local corpus paths, raw private content, or dormant answer-lane metadata in retrieval-only runs.
+- When local answer metrics are enabled, developer-local artifacts may also persist compact per-case failure-analysis entries (`case_analysis`) with truncated query/answer previews, failure reasons, suspicious events, metric snapshots, and source-path hints to speed up regression triage; retrieval-only artifacts remain free of this answer-lane debug payload.
 - Safety/quality:
   - Strip unknown citations and untrusted URLs in answers while preserving grounded source-backed document/wiki URLs.
   - Sanitize command snippets not present in KB context.
@@ -122,8 +131,11 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Bot can register users and requires admin approval for non-admins.
 - Admin can create, list, clear, and delete knowledge bases via bot UI.
 - KB creation flow in admin panel is stateful: after "Создать базу знаний" and name input, bot must call backend create endpoint and return explicit success/failure instead of falling back to welcome screen.
+- After successful KB creation in the admin text-state flow, bot lands the admin directly in the created KB action menu so document upload/wiki/settings are one tap away.
 - Wiki crawl flow in admin panel is stateful: after "Собрать вики по URL" and root URL input, bot must call backend `/ingestion/wiki-crawl`, return crawl stats, and clear temporary wiki state keys.
 - For Gitee wiki URLs, `/ingestion/wiki-crawl` must synchronize full wiki content (not only root page) by using git-loader fallback when plain HTML crawl cannot discover recursive links.
+- Stale legacy wiki callback buttons (`wiki_git_load:*`, `wiki_zip_load:*`) must not rely on missing `wiki_urls` state; they should clear legacy temp keys and point admin back to the canonical "Собрать вики по URL" flow.
+- `/ingestion/wiki-crawl` response must distinguish successful git-based full sync from HTML crawl fallback; when git fallback is attempted but HTML crawl is used instead, the result must still say so explicitly.
 - Admin KB upload does not require manual file-type selection; bot auto-detects document type, supports multiple files in one flow, validates Telegram file limits, and returns per-file success/failure report.
 - Global admin-level "upload documents" entry is removed; document upload starts from a selected KB only.
 - Admin can ingest: Markdown, PDF, Word, Excel, text, image, web URL, and wiki (crawl/git/zip).
@@ -149,18 +161,27 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Ingestion emits idempotent index outbox events for non-empty chunk upserts, enabling retry-safe index synchronization without duplicate writes.
 - Outbox worker processes queued index events asynchronously with bounded retries/dead-letter transition, and periodic drift audit records SQL-vs-Qdrant divergence in `index_sync_audit`.
 - Retrieval diagnostics include degraded-mode flags (`degraded_mode`, `degraded_reason`) and always expose non-null candidate trace fields for top candidates: `origin`, `channel`, `channel_rank`, `fusion_rank`, `fusion_score` (with derived defaults for older rows); `rerank_delta` remains optional when no rerank signal exists.
+- Retrieval diagnostics also expose final-context inclusion decisions per candidate: `included_in_context`, optional `context_rank`, `context_reason`, and `context_anchor_rank`; support rows injected by evidence-pack expansion may appear as synthetic `origin/channel=context_support` candidates even when they were not part of the original retrieval top-N.
+- Retrieval diagnostics persistence must flush the parent `retrieval_query_logs` row before inserting `retrieval_candidate_logs` rows so the request-level trace remains durable on real MySQL deployments without FK-ordering warnings.
 - Retention lifecycle runs on schedule: old retrieval logs, old document versions/chunks, eval artifacts, and drift audit snapshots are purged by policy with `retention_deletion_audit` entries.
 - Backend exposes eval run lifecycle: `POST /api/v1/rag/eval/run` queues benchmark run and `GET /api/v1/rag/eval/{run_id}` returns run status + per-slice metrics.
 - Statistical quality gate script validates eval run against baseline using thresholds, minimum sample size, and bootstrap 95% CI delta margin.
-- Eval ready-data suite is contract-tested for minimum size, unique case ids, required fields, and required slice coverage before use in regression cycles.
-- Baseline eval run is reproducibly executable via CLI runner and produces review artifacts (`*.json`, `*.md`) for each run.
-- Quality gate supports both DB run mode (`--run-id`) and artifact mode (`--run-report-json`, optional `--baseline-report-json`) with identical threshold PASS/FAIL semantics.
+- Eval ready-data suite v2 and source-manifest contract are checked before regression runs: minimum size, unique case ids, required source-family/security fields, required slice coverage, manifest invariants, and absence of raw local-corpus markers in committed artifacts.
+- Baseline eval run is reproducibly executable via CLI runner, reports source-family/security slice summaries, and writes per-label review artifacts under `runs/`, stable snapshots under `latest/`, plus append-only trend history.
+- Auto local eval runs derive their reported `metrics.slices` from actual suite coverage so filtered developer-local reports do not emit irrelevant zero-sample rows; explicitly requested `--slices` remain strict and may still fail on uncovered slices by design.
+- Quality gate supports both DB run mode (`--run-id`) and artifact mode (`--run-report-json`, optional `--baseline-report-json`) with identical threshold PASS/FAIL semantics, deriving required slices from explicit `--slices` or run metadata (`metrics.slices`, plus present source-family/security slices) without silently dropping zero-sample recorded/core slices.
+- Near-ideal eval thresholds are slice-aware: source families (`pdf`, `open_harmony_docs`, `open_harmony_code`, `telegram_chat`) and failure/security slices (`direct_injection`, `indirect_injection`, `prompt_leak_probe`, `secret_leak_probe`, `access_scope_probe`, `refuse_prompt_leak`, `flag_poisoned_context`, `redact_sensitive`) carry explicit per-slice threshold policy in eval artifacts and gate checks.
+- Local eval may optionally pin retrieval and answer checks to one prepared KB via `RAG_EVAL_KB_ID`; when set, both retrieval search and answer generation must use that KB consistently.
 - Route-level query-specific boosts/fallback and retrieval-core `source_boost` / how-to ranking are no longer part of the default ranking path; rollback requires explicit `RAG_LEGACY_QUERY_HEURISTICS=true`.
+- In generalized retrieval mode, `/api/v1/rag/query` may expand a user query into at most three bounded canonical variants (original + definition/point/fact/keyword focus rewrites when applicable), fuse retrieval hits by stable chunk identity, and keep legacy rollback mode on the original single-query path.
+- Local-only answer-eval runs can enable optional answer/judge metrics, persist `available_metrics`, provider/model ids, sanitized Ollama base-url metadata when Ollama is actually used, `git_sha`, `git_dirty`, screening/security summaries, and commit-to-commit trend artifacts; by default the lane reuses the main `.env` provider/model, and when answer metrics are absent the committed-safe eval lane remains retrieval-only without answer-lane provider/base-url metadata.
 - RU and EN RAG answer prompts use the same direct grounded-answer contract: no forced answer-section headings, deterministic no-evidence refusal, and citations only when grounded by `SOURCE_ID`.
+- `/rag/query` and `/rag/summary` must deterministically refuse malicious or overbroad requests before LLM generation when the query asks for hidden prompts/internal instructions, secrets/credentials, or unrelated private messages; retrieved poisoned-context instructions must also trigger refusal instead of being followed.
 - Telegram answer formatting supports headingless direct answers without requiring legacy section labels; old `Main Answer` / `Additionally Found` style headings remain compatibility-only input.
 - In KB search mode, multiple user questions sent without waiting are answered in the same order and each bot reply is attached to its source user message.
 - For long KB-search requests, bot shows temporary wait/progress message and deletes it after answer delivery.
 - Re-entering KB search mode resets stale queue/pending items from previous KB query session so old questions are not answered unexpectedly.
+- Transient Telegram transport/protocol disconnects (for example `NetworkError` / `RemoteProtocolError` style connection drops) are logged for triage but do not trigger admin-facing "critical error" notifications; non-transient exceptions still do.
 - **ASR results: technical metadata is hidden by default or toggleable by user.**
 - ASR formatting: metadata is displayed as an expandable HTML block (`<blockquote expandable>`) in Telegram.
 - **ASR Latency: transcription of 1 minute of audio completes in under 10 seconds using optimized engines on 3090 GPU.**
@@ -178,6 +199,12 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Backend includes a runnable legacy-vs-v4 compare script (`scripts/rag_orchestrator_compare.py`) for cutover evaluation on real API.
 - Any feature/bugfix that changes behavior updates `SPEC.md`, related design spec, and `docs/REQUIREMENTS_TRACEABILITY.md` in the same task.
 - Retrieval runtime uses explicit dense/BM25 candidate budgets and rerank input window (`RAG_DENSE_CANDIDATES`, `RAG_BM25_CANDIDATES`, `RAG_RERANK_TOP_N`); when dedicated knobs are unset they inherit `RAG_MAX_CANDIDATES`, and rerank window never drops below requested `top_k`.
+- New runtime ingestion writes, including direct wiki HTML/git/zip paths, persist a canonical chunk contract in both metadata JSON and additive `knowledge_chunks` columns (`chunk_hash`, `chunk_no`, `block_type`, `section_path_norm`, `token_count_est`, `parser_profile`), while optional page/offset/parser/adjacency fields remain nullable and backward-compatible.
+- PDF/DOCX ingestion preserves document structure in loader metadata: PDFs keep page-aware section/path hints plus per-chunk char spans, and DOCX keeps heading-path + paragraph-span hints for downstream retrieval/context assembly.
+- Web/wiki/code ingestion preserves stable structure semantics for downstream retrieval: web chunks keep document + heading hierarchy, code chunks keep chunk-level symbol/title/span hints, and wiki git/zip imports normalize file/page paths to forward-slash identities across platforms.
+- Final RAG context for `/rag/query` and `/rag/summary` is assembled as a deterministic evidence pack instead of simple top-chunk joins: anchor evidence is selected first, same-doc structural neighbors and section-scope support may be added within a bounded budget, and long chunks use query-focused excerpts to reduce prompt noise without widening retrieval scope.
+- Security hardening for RAG answer generation is deterministic in the primary path: explicit prompt-leak / secret-leak / unrelated-private-data queries are refused without calling the LLM, poisoned retrieved context is treated as untrusted data, and refusal wording must avoid echoing sensitive terms back to the user.
+- If the answer-model provider times out or returns a transport/status error after retrieval succeeds, `/rag/query` and `/rag/summary` must return a retrieval-only extractive fallback built from the selected evidence pack instead of surfacing the raw provider error string to the user; source attribution remains attached to the same grounded rows.
 
 ## Specification maintenance policy
 - `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.

@@ -100,6 +100,20 @@ class KnowledgeChunk(Base):
     content = Column(Text)
     chunk_metadata = Column(Text)  # JSON строка с метаданными
     metadata_json = Column(Text)  # JSON строка с метаданными (новый формат)
+    chunk_hash = Column(String(128), nullable=True)
+    chunk_no = Column(Integer, nullable=True)
+    block_type = Column(String(50), nullable=True)
+    parent_chunk_id = Column(String(128), nullable=True)
+    prev_chunk_id = Column(String(128), nullable=True)
+    next_chunk_id = Column(String(128), nullable=True)
+    section_path_norm = Column(Text, nullable=True)
+    page_no = Column(Integer, nullable=True)
+    char_start = Column(Integer, nullable=True)
+    char_end = Column(Integer, nullable=True)
+    token_count_est = Column(Integer, nullable=True)
+    parser_profile = Column(String(120), nullable=True)
+    parser_confidence = Column(Float, nullable=True)
+    parser_warning = Column(Text, nullable=True)
     embedding = Column(Text)  # JSON строка с вектором
     source_type = Column(String(50))  # markdown, pdf, word, excel, web, image
     source_path = Column(String(500))
@@ -862,6 +876,39 @@ def migrate_database():
                     """))
                     session.commit()
                     logger.info("✅ Migration: added 'is_deleted' to knowledge_chunks")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Add canonical chunk contract columns for knowledge_chunks
+        try:
+            if 'knowledge_chunks' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('knowledge_chunks')]
+                canonical_columns = [
+                    ('chunk_hash', "ALTER TABLE knowledge_chunks ADD COLUMN chunk_hash VARCHAR(128)"),
+                    ('chunk_no', "ALTER TABLE knowledge_chunks ADD COLUMN chunk_no INTEGER"),
+                    ('block_type', "ALTER TABLE knowledge_chunks ADD COLUMN block_type VARCHAR(50)"),
+                    ('parent_chunk_id', "ALTER TABLE knowledge_chunks ADD COLUMN parent_chunk_id VARCHAR(128)"),
+                    ('prev_chunk_id', "ALTER TABLE knowledge_chunks ADD COLUMN prev_chunk_id VARCHAR(128)"),
+                    ('next_chunk_id', "ALTER TABLE knowledge_chunks ADD COLUMN next_chunk_id VARCHAR(128)"),
+                    ('section_path_norm', "ALTER TABLE knowledge_chunks ADD COLUMN section_path_norm TEXT"),
+                    ('page_no', "ALTER TABLE knowledge_chunks ADD COLUMN page_no INTEGER"),
+                    ('char_start', "ALTER TABLE knowledge_chunks ADD COLUMN char_start INTEGER"),
+                    ('char_end', "ALTER TABLE knowledge_chunks ADD COLUMN char_end INTEGER"),
+                    ('token_count_est', "ALTER TABLE knowledge_chunks ADD COLUMN token_count_est INTEGER"),
+                    ('parser_profile', "ALTER TABLE knowledge_chunks ADD COLUMN parser_profile VARCHAR(120)"),
+                    ('parser_confidence', "ALTER TABLE knowledge_chunks ADD COLUMN parser_confidence FLOAT"),
+                    ('parser_warning', "ALTER TABLE knowledge_chunks ADD COLUMN parser_warning TEXT"),
+                ]
+                for column_name, ddl in canonical_columns:
+                    if column_name in columns:
+                        continue
+                    session.execute(text(ddl))
+                    session.commit()
+                    columns.append(column_name)
+                    logger.info("✅ Migration: added '%s' to knowledge_chunks", column_name)
         except Exception:
             try:
                 session.rollback()

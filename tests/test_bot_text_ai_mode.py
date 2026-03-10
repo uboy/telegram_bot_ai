@@ -5,6 +5,7 @@ import pytest
 
 pytest.importorskip("telegram")
 
+from frontend.templates.buttons import kb_actions_menu
 from shared.types import UserContext
 
 
@@ -269,7 +270,11 @@ async def test_handle_text_waiting_kb_name_creates_knowledge_base(monkeypatch):
     assert calls == ["MVP"]
     assert context.user_data["state"] is None
     assert update.message.sent[-1] == "✅ База знаний 'MVP' создана!"
-    assert "reply_markup" in update.message.kwargs[-1]
+    reply_markup = update.message.kwargs[-1]["reply_markup"]
+    expected = kb_actions_menu(777)
+    assert [button.callback_data for row in reply_markup.inline_keyboard for button in row] == [
+        button.callback_data for row in expected.inline_keyboard for button in row
+    ]
 
 
 @pytest.mark.anyio
@@ -302,6 +307,8 @@ async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
             "pages_processed": 9,
             "chunks_added": 33,
             "wiki_root": url,
+            "crawl_mode": "git",
+            "git_fallback_attempted": True,
         }
 
     monkeypatch.setattr(bot_handlers.backend_client, "ingest_wiki_crawl", _ingest_wiki_crawl)
@@ -330,6 +337,9 @@ async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
             self.user_data = {
                 "state": "waiting_wiki_root",
                 "kb_id_for_wiki": 42,
+                "wiki_urls": {"deadbeef": "https://legacy.example/wiki"},
+                "wiki_zip_kb_id": 42,
+                "wiki_zip_url": "https://legacy.example/wiki.zip",
             }
 
     update = DummyUpdate()
@@ -347,8 +357,23 @@ async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
     ]
     assert context.user_data["state"] is None
     assert context.user_data.get("kb_id_for_wiki") is None
+    assert context.user_data.get("wiki_urls") is None
+    assert context.user_data.get("wiki_zip_kb_id") is None
+    assert context.user_data.get("wiki_zip_url") is None
     assert "Сканирование вики завершено" in update.message.sent[-1]
+    assert "Режим синхронизации: git fallback" in update.message.sent[-1]
     assert "reply_markup" in update.message.kwargs[-1]
+
+
+def test_format_wiki_sync_mode_marks_html_after_git_fallback():
+    from frontend import bot_handlers
+
+    assert (
+        bot_handlers._format_wiki_sync_mode(
+            {"crawl_mode": "html", "git_fallback_attempted": True}
+        )
+        == "HTML crawl (после неудачной попытки git fallback)"
+    )
 
 
 @pytest.mark.anyio

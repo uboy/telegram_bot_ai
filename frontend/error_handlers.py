@@ -20,6 +20,43 @@ from shared.logging_config import logger
 # Простейший анти-спам по уведомлениям: не чаще одного раза в N минут
 _last_admin_notify: Dict[str, datetime] = {}
 _NOTIFY_INTERVAL = timedelta(minutes=5)
+_TRANSIENT_ERROR_TYPE_NAMES = {
+    "RemoteProtocolError",
+    "ReadTimeout",
+    "ConnectTimeout",
+    "PoolTimeout",
+    "ConnectError",
+    "ReadError",
+    "WriteError",
+}
+_TRANSIENT_ERROR_SUBSTRINGS = (
+    "server disconnected without sending a response",
+    "read timed out",
+    "connection reset by peer",
+    "remote end closed connection without response",
+    "connection aborted",
+    "broken pipe",
+    "temporarily unavailable",
+)
+
+
+def _iter_exception_chain(error: BaseException | None):
+    seen: set[int] = set()
+    current = error
+    while current and id(current) not in seen:
+        yield current
+        seen.add(id(current))
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+
+
+def _is_transient_transport_error(error: BaseException | None) -> bool:
+    for exc in _iter_exception_chain(error):
+        if type(exc).__name__ in _TRANSIENT_ERROR_TYPE_NAMES:
+            return True
+        message = str(exc).strip().lower()
+        if any(marker in message for marker in _TRANSIENT_ERROR_SUBSTRINGS):
+            return True
+    return False
 
 
 async def notify_admins(message: str, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -45,15 +82,20 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
 
     Логирует исключение и отправляет краткое уведомление администраторам.
     """
-    logger.error("Исключение в обработчике Telegram: %s", context.error)
-
+    error = context.error
     tb_str = "".join(
         traceback.format_exception(
-            type(context.error),
-            context.error,
-            context.error.__traceback__,
+            type(error),
+            error,
+            error.__traceback__,
         )
     )
+    if _is_transient_transport_error(error):
+        logger.warning("Подавлено transient-уведомление Telegram transport error: %s", error)
+        logger.warning("Transient traceback:\n%s", tb_str)
+        return
+
+    logger.error("Исключение в обработчике Telegram: %s", error)
     logger.error("Traceback:\n%s", tb_str)
 
     # Сформировать краткое сообщение для админов
@@ -71,7 +113,7 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
     text = (
         "⚠️ В боте произошла критическая ошибка.\n\n"
         f"{update_info}"
-        f"Ошибка: {type(context.error).__name__}: {context.error}"
+        f"Ошибка: {type(error).__name__}: {error}"
     )
 
     await notify_admins(text, context)

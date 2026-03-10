@@ -101,14 +101,22 @@
 {"id":"RAGEXEC-005","title":"Add prompt/format regression suite and remove forced heading dependence","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-006","title":"Refactor command sanitizer to token-level grounding rules","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
 {"id":"RAGEXEC-007","title":"Preserve context-backed URLs and add safety regression coverage","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-08"}
-{"id":"RAGEXEC-008","title":"Expand fixed eval corpus for wiki/code/long-doc/multilingual uploaded knowledge","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-009","title":"Implement slice-aware baseline reporting and quality gate outputs","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-010","title":"Wire fail-fast CI quality workflow and update testing/ops docs","status":"todo","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-011","title":"Consolidate canonical wiki ingestion UX and remove orphan callback paths","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-012","title":"Add wiki fallback visibility and regression coverage for git-vs-html crawl behavior","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-013","title":"Implement runtime canonical chunk contract and additive schema/design hooks","status":"todo","assignee":"codex","phase":"architect","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-014","title":"Improve PDF/DOCX parser fidelity and structural chunk metadata","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-015","title":"Normalize web/wiki/code structure and stable source semantics","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-016","title":"Implement evidence-pack context composer over top-chunk assembly","status":"todo","assignee":"codex","phase":"developer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-017","title":"Add context-inclusion diagnostics and regression coverage","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
-{"id":"RAGEXEC-018","title":"Add multi-corpus quality slices and source-family thresholds for near-ideal evaluation","status":"todo","assignee":"codex","phase":"reviewer","updated_at":"2026-03-07"}
+{"id":"RAGEXEC-008","title":"Implement dev-only eval dataset and local source-manifest contract for source-family and security verification","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-08"}
+{"id":"RAGEXEC-009","title":"Implement slice-aware baseline reporting and quality gate outputs","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-010","title":"Wire fail-fast CI quality workflow and update testing/ops docs","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-011","title":"Consolidate canonical wiki ingestion UX and remove orphan callback paths","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-012","title":"Add wiki fallback visibility and regression coverage for git-vs-html crawl behavior","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-013","title":"Implement runtime canonical chunk contract and additive schema/design hooks","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-014","title":"Improve PDF/DOCX parser fidelity and structural chunk metadata","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-015","title":"Normalize web/wiki/code structure and stable source semantics","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-09"}
+{"id":"RAGEXEC-016","title":"Implement evidence-pack context composer over top-chunk assembly","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-10"}
+{"id":"RAGEXEC-017","title":"Add context-inclusion diagnostics and regression coverage","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGEXEC-018","title":"Add multi-corpus quality slices and source-family thresholds for near-ideal evaluation","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGEXEC-019","title":"Add controlled query rewriting and multi-query retrieval for ambiguous KB questions","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGEXEC-020","title":"Add local-only answer-level judge metrics and commit-to-commit quality deltas","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGFOLLOW-001","title":"Harden refusal and security behavior for malicious or overbroad KB queries","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGFOLLOW-002","title":"Fix retrieval diagnostics FK persistence for retrieval_query_logs / retrieval_candidate_logs","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGFOLLOW-003","title":"Derive local eval slices from actual suite coverage to remove zero-sample noise","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGFOLLOW-004","title":"Add local-only answer failure-analysis artifacts for per-case regression triage","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"RAGFOLLOW-005","title":"Add retrieval-only extractive fallback when LLM provider times out or returns transport errors","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"BOTFOLLOW-001","title":"Suppress transient bot error notifications and land admins in KB actions after KB creation","status":"in_progress","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}

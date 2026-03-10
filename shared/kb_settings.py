@@ -24,7 +24,8 @@ def _default_chunk_overlap() -> int:
 def default_kb_settings() -> Dict[str, Any]:
     chunk_size = _default_chunk_size()
     overlap = _default_chunk_overlap()
-    full_max = 200000
+    # Keep "full" page/document modes below MySQL TEXT practical limits.
+    full_max = 60000
     return {
         "chunking": {
             "web": {"mode": "full", "max_chars": full_max, "overlap": 0},
@@ -76,4 +77,3 @@ def dump_kb_settings(settings: Dict[str, Any]) -> str:
 def get_chunking_settings(settings: Dict[str, Any], source_kind: str) -> Dict[str, Any]:
     chunking = (settings or {}).get("chunking") or {}
     return chunking.get(source_kind) or {}
-

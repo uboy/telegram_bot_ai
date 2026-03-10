@@ -43,6 +43,10 @@
 
 Most ingestion endpoints return `job_id` for async processing.
 
+Wiki ingestion notes:
+- `POST /ingestion/wiki-crawl` returns crawl stats for the selected wiki root.
+- Wiki-crawl response includes `crawl_mode` (`git` or `html`) and `git_fallback_attempted` so callers can distinguish a successful git-based full sync from HTML crawl fallback.
+
 ## Jobs
 
 - `GET /jobs/{job_id}`
@@ -66,6 +70,8 @@ Most ingestion endpoints return `job_id` for async processing.
 - request metadata (`intent`, `orchestrator_mode`, `retrieval_core_mode`, `hints`, `filters`, `latency_ms`, `backend_name`)
 - degraded markers (`degraded_mode`, `degraded_reason`)
 - top candidate diagnostics (`origin`, `channel`, `channel_rank`, `fusion_rank`, `fusion_score`, `rerank_delta`)
+- final-context diagnostics (`included_in_context`, optional `context_rank`, `context_reason`, `context_anchor_rank`) so callers can tell which chunks actually entered the final prompt evidence pack
+- support-only evidence rows may appear with `origin=channel=context_support` when the final prompt needed adjacent/section support that was not present in the raw retrieval top-N
 - candidate trace contract keeps `origin`, `channel`, `channel_rank`, `fusion_rank`, and `fusion_score` non-null even for older persisted rows; `rerank_delta` may be `null` when no rerank signal exists
 
 `POST /rag/eval/run` request body:
