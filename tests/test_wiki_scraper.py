@@ -330,6 +330,54 @@ def test_load_wiki_from_zip_uses_stable_doc_title_with_real_markdown_loader(monk
     assert result["chunks_added"] >= 1
     assert added_chunks
     assert added_chunks[0]["metadata"]["doc_title"] == "Page"
+    assert added_chunks[0]["metadata"]["section_title"] == "Page"
     assert added_chunks[0]["metadata"]["file_path"] == "Guide/Page.md"
     assert added_chunks[0]["metadata"]["wiki_page_path"] == "Guide/Page"
     assert added_chunks[0]["metadata"]["section_path"].startswith("Guide/Page")
+    assert added_chunks[0]["chunk_title"] == "Page"
+
+
+def test_load_wiki_from_zip_replaces_temp_titles_in_chunk_metadata(monkeypatch, tmp_path):
+    import zipfile
+
+    from shared import wiki_git_loader
+
+    zip_path = tmp_path / "wiki-temp.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Guide/Page.md", "# Page\nbody\n")
+
+    added_chunks = []
+
+    monkeypatch.setattr(
+        wiki_git_loader.rag_system,
+        "delete_chunks_by_source_prefix",
+        lambda **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        wiki_git_loader.document_loader_manager,
+        "load_document",
+        lambda *_args, **_kwargs: [
+            {
+                "content": "body text with enough length",
+                "title": "tmpabcd1234",
+                "metadata": {"doc_title": "tmpabcd1234", "section_title": "tmpabcd1234"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        wiki_git_loader.rag_system,
+        "add_chunk",
+        lambda **kwargs: added_chunks.append(kwargs),
+    )
+
+    result = wiki_git_loader.load_wiki_from_zip(
+        zip_path=str(zip_path),
+        wiki_url="https://gitee.com/mazurdenis/open-harmony/wikis",
+        knowledge_base_id=14,
+    )
+
+    assert result["files_processed"] == 1
+    assert result["chunks_added"] == 1
+    assert added_chunks[0]["metadata"]["doc_title"] == "Page"
+    assert added_chunks[0]["metadata"]["section_title"] == "Page"
+    assert added_chunks[0]["chunk_title"] == "Page"

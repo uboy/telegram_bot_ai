@@ -3,6 +3,7 @@
 """
 
 import os
+import re
 import tempfile
 import subprocess
 import zipfile
@@ -21,6 +22,9 @@ def _normalize_wiki_rel_path(path: str) -> str:
     return (path or "").replace("\\", "/").strip("/")
 
 
+_TEMP_TITLE_RE = re.compile(r"^tmp[a-z0-9_-]{4,}$", flags=re.IGNORECASE)
+
+
 def _wiki_page_path_from_file_path(file_path: str) -> str:
     normalized = _normalize_wiki_rel_path(file_path)
     if normalized.lower().endswith(".md"):
@@ -36,8 +40,14 @@ def _decorate_wiki_chunk_metadata(metadata: Dict[str, object], file_path: str) -
     enriched = dict(metadata or {})
     enriched["file_path"] = normalized_path
     enriched["wiki_page_path"] = wiki_page_path
-    enriched["doc_title"] = page_doc_title
-    enriched["section_title"] = str(enriched.get("section_title") or page_doc_title)
+    current_doc_title = str(enriched.get("doc_title") or "").strip()
+    current_section_title = str(enriched.get("section_title") or "").strip()
+    enriched["doc_title"] = page_doc_title if not current_doc_title or _TEMP_TITLE_RE.match(current_doc_title) else current_doc_title
+    enriched["section_title"] = (
+        page_doc_title
+        if not current_section_title or _TEMP_TITLE_RE.match(current_section_title)
+        else current_section_title
+    )
 
     section_path = str(enriched.get("section_path") or "").strip()
     if section_path:
@@ -48,6 +58,13 @@ def _decorate_wiki_chunk_metadata(metadata: Dict[str, object], file_path: str) -
     else:
         enriched["section_path"] = wiki_page_path or page_doc_title or "ROOT"
     return enriched
+
+
+def _stable_chunk_title(raw_title: object, *, fallback: str) -> str:
+    title = str(raw_title or "").strip()
+    if not title or _TEMP_TITLE_RE.match(title):
+        return str(fallback or "").strip() or "wiki"
+    return title
 
 
 def _extract_repo_info_from_wiki_url(wiki_url: str) -> Optional[Dict[str, str]]:
@@ -292,13 +309,14 @@ def load_wiki_from_git(
                     metadata["wiki_root"] = wiki_root
                     metadata["original_url"] = wiki_page_url
                     metadata["wiki_page_url"] = wiki_page_url
+                    chunk_title = _stable_chunk_title(chunk.get("title"), fallback=metadata.get("doc_title") or rel_path)
                     canonical_payload = rag_system._build_canonical_chunk_payload(
                         content=chunk.get("content", ""),
                         source_type="web",
                         source_path=wiki_page_url,
                         metadata=metadata,
                         chunk_no=chunk_no,
-                        chunk_title=str(chunk.get("title") or rel_path),
+                        chunk_title=chunk_title,
                         chunk_columns={"parser_profile": "loader:web:wiki_git:v1"},
                     )
                     rag_system.add_chunk(
@@ -310,7 +328,7 @@ def load_wiki_from_git(
                         metadata_json=canonical_payload["metadata_json"],
                         chunk_columns=canonical_payload["chunk_columns"],
                         chunk_no=chunk_no,
-                        chunk_title=str(chunk.get("title") or rel_path),
+                        chunk_title=chunk_title,
                     )
                     chunks_added += 1
                     file_chunks += 1
@@ -417,13 +435,14 @@ def load_wiki_from_zip(
                         metadata["wiki_root"] = wiki_root
                         metadata["original_url"] = wiki_page_url
                         metadata["wiki_page_url"] = wiki_page_url
+                        chunk_title = _stable_chunk_title(chunk.get("title"), fallback=metadata.get("doc_title") or normalized_file_name)
                         canonical_payload = rag_system._build_canonical_chunk_payload(
                             content=chunk.get("content", ""),
                             source_type="web",
                             source_path=wiki_page_url,
                             metadata=metadata,
                             chunk_no=chunk_no,
-                            chunk_title=str(chunk.get("title") or file_name),
+                            chunk_title=chunk_title,
                             chunk_columns={"parser_profile": "loader:web:wiki_zip:v1"},
                         )
                         rag_system.add_chunk(
@@ -435,7 +454,7 @@ def load_wiki_from_zip(
                             metadata_json=canonical_payload["metadata_json"],
                             chunk_columns=canonical_payload["chunk_columns"],
                             chunk_no=chunk_no,
-                            chunk_title=str(chunk.get("title") or file_name),
+                            chunk_title=chunk_title,
                         )
                         chunks_added += 1
                         file_chunks += 1

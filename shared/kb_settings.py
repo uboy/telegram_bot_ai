@@ -29,8 +29,8 @@ def default_kb_settings() -> Dict[str, Any]:
     return {
         "chunking": {
             "web": {"mode": "full", "max_chars": full_max, "overlap": 0},
-            "wiki": {"mode": "full", "max_chars": full_max, "overlap": 0},
-            "markdown": {"mode": "full", "max_chars": full_max, "overlap": 0},
+            "wiki": {"mode": "section", "max_chars": chunk_size, "overlap": overlap},
+            "markdown": {"mode": "section", "max_chars": chunk_size, "overlap": overlap},
             "text": {"mode": "fixed", "max_chars": chunk_size, "overlap": overlap},
             "code": {"mode": "file", "max_chars": full_max, "overlap": 0},
         },

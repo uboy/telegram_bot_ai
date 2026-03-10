@@ -28,6 +28,7 @@ from frontend.templates.buttons import (
     rag_settings_menu,
     kb_settings_menu,
     search_options_menu,
+    knowledge_base_search_menu,
     search_filters_menu,
     summary_mode_menu,
     asr_models_menu,
@@ -66,6 +67,15 @@ def _format_wiki_sync_mode(stats: dict) -> str:
     if attempted:
         return "HTML crawl (после неудачной попытки git fallback)"
     return "HTML crawl"
+
+
+async def _reset_search_selection_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    from frontend.bot_handlers import _reset_kb_query_state
+
+    await _reset_kb_query_state(context)
+    if context.user_data.get("state") in {"waiting_query", "waiting_kb_for_query", "waiting_summary_query"}:
+        context.user_data["state"] = None
+    context.user_data.pop("pending_summary_query", None)
 
 
 def update_env_file(var_name: str, var_value: str) -> bool:
@@ -288,6 +298,93 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
     
+    # Поиск в базе знаний доступен всем одобренным пользователям.
+    if data == 'search_kb':
+        from frontend.bot_handlers import enter_kb_search_mode
+
+        text, reply_markup = await enter_kb_search_mode(context)
+        await safe_edit_message_text(query, text, reply_markup=reply_markup)
+        return
+
+    if data.startswith('kb_select:') and context.user_data.get('state') == 'waiting_kb_for_query':
+        kb_id = int(data.split(':')[1])
+        kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+        kb = next((item for item in kbs if int(item.get("id")) == kb_id), None) if kbs else None
+        if not kb:
+            await safe_edit_message_text(
+                query,
+                "❌ Не удалось найти выбранную базу знаний.",
+                reply_markup=knowledge_base_search_menu(kbs or []),
+            )
+            return
+
+        name = kb.get("name") or "Без названия"
+        context.user_data['active_search_kb_id'] = kb_id
+
+        pending_queries = context.user_data.get("pending_queries") or []
+        if pending_queries or 'pending_query' in context.user_data:
+            context.user_data['state'] = 'waiting_query'
+
+            from frontend.bot_handlers import enqueue_pending_queries_for_kb
+
+            user_for_rag = UserContext(
+                telegram_id=user_id,
+                username=username,
+                full_name=full_name,
+                role=role,
+                approved=approved,
+                preferred_provider=backend_user.get("preferred_provider"),
+                preferred_model=backend_user.get("preferred_model"),
+                preferred_image_model=backend_user.get("preferred_image_model"),
+            )
+            queued = await enqueue_pending_queries_for_kb(
+                context=context,
+                kb_id=kb_id,
+                fallback_message=query.message,
+                fallback_user=user_for_rag,
+            )
+            await safe_edit_message_text(
+                query,
+                f"✅ Для поиска выбрана база знаний '{name}'. Запросов в очереди: {queued}.",
+            )
+            return
+
+        if 'pending_summary_query' in context.user_data:
+            pending_query = context.user_data.pop('pending_summary_query')
+            context.user_data['state'] = None
+            mode = context.user_data.get("summary_mode", "summary")
+
+            await safe_edit_message_text(query, f"📝 Формирую сводку по базе '{name}'...")
+
+            from shared.utils import strip_html_tags
+            from frontend.templates.buttons import main_menu
+            from frontend.bot_handlers import perform_rag_summary_and_render
+
+            summary_filters = context.user_data.get("summary_filters") or {}
+            answer_html, has_answer = await perform_rag_summary_and_render(
+                pending_query,
+                kb_id,
+                mode,
+                date_from=summary_filters.get("date_from"),
+                date_to=summary_filters.get("date_to"),
+            )
+
+            menu = main_menu(is_admin=(role == 'admin'))
+            try:
+                await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
+            except Exception as e:
+                logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
+                answer_plain = strip_html_tags(answer_html)
+                await safe_edit_message_text(query, answer_plain, reply_markup=menu, parse_mode=None)
+            return
+
+        context.user_data['state'] = 'waiting_query'
+        await safe_edit_message_text(
+            query,
+            f"✅ Для поиска выбрана база знаний '{name}'.\n🔍 Введите запрос для поиска:",
+        )
+        return
+
     # Обработка одобрения/отклонения пользователей (только для админов)
     if data.startswith("approve:") or data.startswith("decline:"):
         if user_id not in ADMIN_ID_STRINGS:
@@ -331,6 +428,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Главное меню
     if data == 'main_menu':
+        await _reset_search_selection_state(context)
         menu = main_menu(is_admin=(role == 'admin'))
         # main_menu возвращает ReplyKeyboardMarkup, поэтому отправляем новое сообщение
         try:
@@ -873,12 +971,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
-    # Поиск в базе знаний
-    if data == 'search_kb':
-        context.user_data['state'] = 'waiting_query'
-        await safe_edit_message_text(query, "🔍 Введите запрос для поиска в базе знаний:")
-        return
-
     if data == 'search_options':
         await safe_edit_message_text(query, "🔎 Выберите вариант поиска:", reply_markup=search_options_menu())
         return
@@ -1164,6 +1256,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     
     # Админ-меню
     if data == 'admin_menu':
+        await _reset_search_selection_state(context)
         await safe_edit_message_text(query, "👨‍💼 Админ-панель:", reply_markup=admin_menu())
         return
 
@@ -1395,6 +1488,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     
     # Управление базами знаний
     if data == 'admin_kb':
+        await _reset_search_selection_state(context)
         # Теперь список баз знаний получаем из backend-сервиса
         kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
         await safe_edit_message_text(query, "📚 Базы знаний:", reply_markup=knowledge_base_menu(kbs))
@@ -1452,72 +1546,6 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
                     kb_id=kb_id,
                     pending_payloads=pending_documents,
                 )
-                return
-            
-            # Проверить, есть ли ожидающие запросы для поиска
-            pending_queries = context.user_data.get("pending_queries") or []
-            if context.user_data.get('state') == 'waiting_kb_for_query' and (
-                pending_queries or 'pending_query' in context.user_data
-            ):
-                context.user_data['kb_id'] = kb_id
-                context.user_data['state'] = 'waiting_query'
-
-                from frontend.bot_handlers import enqueue_pending_queries_for_kb
-
-                tg_id = str(query.from_user.id) if query.from_user else ""
-                username = query.from_user.username if query.from_user else None
-                full_name = getattr(query.from_user, "full_name", None) if query.from_user else None
-                user_for_rag = UserContext(
-                    telegram_id=tg_id,
-                    username=username,
-                    full_name=full_name,
-                    role=(user.get("role") or "user"),
-                    approved=True,
-                    preferred_provider=user.get("preferred_provider"),
-                    preferred_model=user.get("preferred_model"),
-                    preferred_image_model=user.get("preferred_image_model"),
-                )
-                queued = await enqueue_pending_queries_for_kb(
-                    context=context,
-                    kb_id=kb_id,
-                    fallback_message=query.message,
-                    fallback_user=user_for_rag,
-                )
-                await safe_edit_message_text(
-                    query,
-                    f"✅ База знаний '{name}' выбрана. Запросов в очереди: {queued}.",
-                    reply_markup=kb_actions_menu(kb_id),
-                )
-                return
-
-            if context.user_data.get('state') == 'waiting_kb_for_query' and 'pending_summary_query' in context.user_data:
-                context.user_data['kb_id'] = kb_id
-                pending_query = context.user_data.pop('pending_summary_query')
-                context.user_data['state'] = None
-                mode = context.user_data.get("summary_mode", "summary")
-
-                await safe_edit_message_text(query, f"📝 Формирую сводку по базе '{name}'...")
-
-                from shared.utils import strip_html_tags
-                from frontend.templates.buttons import main_menu
-                from frontend.bot_handlers import perform_rag_summary_and_render
-
-                summary_filters = context.user_data.get("summary_filters") or {}
-                answer_html, has_answer = await perform_rag_summary_and_render(
-                    pending_query,
-                    kb_id,
-                    mode,
-                    date_from=summary_filters.get("date_from"),
-                    date_to=summary_filters.get("date_to"),
-                )
-
-                menu = main_menu(is_admin=(user.get("role") == 'admin'))
-                try:
-                    await safe_edit_message_text(query, answer_html, reply_markup=menu, parse_mode='HTML')
-                except Exception as e:
-                    logger.warning("Ошибка форматирования HTML, отправляю plain текст: %s", e)
-                    answer_plain = strip_html_tags(answer_html)
-                    await safe_edit_message_text(query, answer_plain, reply_markup=menu, parse_mode=None)
                 return
             
             await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
@@ -1707,6 +1735,10 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         context.user_data.pop('wiki_urls', None)
         context.user_data.pop('wiki_zip_kb_id', None)
         context.user_data.pop('wiki_zip_url', None)
+        context.user_data.pop('pending_documents', None)
+        context.user_data.pop('pending_document', None)
+        context.user_data.pop('upload_mode', None)
+        context.user_data.pop('kb_id', None)
         context.user_data['kb_id_for_wiki'] = kb_id
         context.user_data['state'] = 'waiting_wiki_root'
         await safe_edit_message_text(

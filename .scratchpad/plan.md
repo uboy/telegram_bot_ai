@@ -613,3 +613,79 @@ Supersedes:
 ### Cross-platform verification note
 - Runtime logic is platform-neutral Python.
 - Focused automated checks run on Windows here; syntax-level verification is still valid cross-platform because no shell-specific runtime behavior is introduced.
+
+## 2026-03-10 Plan: session-scoped KB selection for KB search
+
+### Goal
+- Ensure KB search chooses/searches the correct KB:
+  - multiple KBs -> explicit choice,
+  - one KB -> auto-select,
+  - re-entry into KB search -> selection resets.
+
+### Implementation checklist
+- [x] Add a dedicated search-session key such as `active_search_kb_id`.
+- [x] Update KB-search entry points (`"🔍 Поиск в базе знаний"` and callback `search_kb`) to:
+  - reset previous search session,
+  - auto-select when exactly one KB exists,
+  - prompt for KB choice when multiple KBs exist,
+  - fail clearly when no KBs exist.
+- [x] Update `_ensure_kb_or_ask_select(...)`, pending-query flow, and `kb_select:<id>` handling for `waiting_kb_for_query` to use `active_search_kb_id`.
+- [x] Keep admin KB-management logic on the existing `kb_id` path so uploads/wiki/settings/clear/delete do not change.
+- [x] Add focused regressions in `tests/test_bot_text_ai_mode.py` for:
+  - multi-KB explicit prompt,
+  - single-KB auto-select,
+  - queueing with `active_search_kb_id`,
+  - re-entry reset of the search-session KB.
+
+### Verification checklist
+- [x] `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py tests/test_bot_text_ai_mode.py`
+- [x] `.venv\\Scripts\\python.exe -m pytest -q tests/test_bot_text_ai_mode.py`
+- [x] `python scripts/scan_secrets.py`
+- [x] `python scripts/ci_policy_gate.py --working-tree`
+
+### Documentation checklist
+- [x] Update `docs/design/bot-kb-search-session-scope-v1.md`.
+- [x] Update `SPEC.md`.
+- [x] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [x] Update `docs/USAGE.md`.
+- [ ] Update `docs/OPERATIONS.md` only if an operational note is actually needed.
+
+### Risks and controls
+- Risk: `kb_select:<id>` changes could break admin KB management.
+  - Control: only use `active_search_kb_id` when the bot is in `waiting_kb_for_query`; leave normal KB management on `kb_id`.
+- Risk: stale selected KB could still leak across sessions.
+  - Control: clear `active_search_kb_id` inside `_reset_kb_query_state(...)` and cover this with regression tests.
+
+### 2026-03-10 reviewer blocker follow-up
+- [x] Replace the remaining `knowledge_base_menu(...)` prompts in KB-search flows with `knowledge_base_search_menu(...)`.
+- [x] Clear search-session state when leaving into `main_menu`, `admin_menu`, or `admin_kb`.
+- [x] Add regressions for search-only KB choice after typed query and for `admin_kb -> kb_select` not being hijacked by stale `waiting_kb_for_query`.
+- [x] Re-run independent review on the fixed flow.
+
+## 2026-03-10 Plan: wiki URL state isolation and open-harmony relevance
+
+### Goal
+- Fix the remaining live wiki-ingest ambiguity and validate open-harmony search quality on local-only corpus data.
+
+### Implementation checklist
+- [ ] Isolate `kb_wiki_crawl` from stale upload/document state in `frontend/bot_callbacks.py` and `frontend/bot_handlers.py`.
+- [ ] Add focused bot regressions for wiki-flow state cleanup.
+- [ ] Improve default wiki/markdown chunking if local open-harmony comparison shows a clear gain.
+- [ ] Add focused config/chunking regressions for the chosen default.
+
+### Verification checklist
+- [ ] `python -m py_compile frontend/bot_callbacks.py frontend/bot_handlers.py shared/kb_settings.py tests/test_bot_wiki_callbacks.py tests/test_bot_text_ai_mode.py`
+- [ ] `.venv\\Scripts\\python.exe -m pytest -q tests/test_bot_wiki_callbacks.py tests/test_bot_text_ai_mode.py`
+- [ ] Local open-harmony ingest + query comparison across chunking modes
+- [ ] `python scripts/scan_secrets.py`
+- [ ] `python scripts/ci_policy_gate.py --working-tree`
+
+### Local-only evaluation checklist
+- [ ] Ingest the local open-harmony corpus into a temporary KB with `full` chunking and record query outputs.
+- [ ] Ingest the same corpus into a temporary KB with candidate chunking and record query outputs.
+- [ ] Compare retrieval/answer behavior for a small open-harmony query set derived from `tests/rag_eval.yaml`.
+
+### 2026-03-10 local comparison result
+- [x] Compare `full` vs `section` chunking on local `open-harmony.wiki.zip`.
+- [x] Choose `section` as the new default for `wiki` / `markdown`.
+- [x] Re-run independent review and close `BOTFOLLOW-003`.

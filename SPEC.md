@@ -44,9 +44,10 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Admin bot UI uses one canonical wiki-ingestion path: `kb_wiki_crawl -> waiting_wiki_root -> /ingestion/wiki-crawl`; stale legacy git/zip callback buttons must not start orphan flows and must redirect user back to the canonical URL-based path.
 - Wiki-crawl result stats must expose the actual synchronization mode (`git` vs `html`) plus whether git fallback was attempted, and admin bot messages must show that mode explicitly so Gitee fallback behavior is visible.
   - Admin KB upload flow accepts one or multiple Telegram documents without manual type preselection; file type is auto-detected, Telegram size limits are validated, and per-file processing report is returned.
-  - In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
-  - In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
-  - On explicit re-entry to KB search mode ("🔍 Поиск в базе знаний"), stale pending/queued KB queries from previous session are dropped to prevent orphan/out-of-context answers.
+- In KB search mode, if a user sends multiple questions подряд, bot processes them in FIFO order and replies under each original question (`reply_to`).
+- In KB search mode, long-running retrieval shows temporary progress indicator and removes it after final answer to keep chat clean.
+- On explicit re-entry to KB search mode ("🔍 Поиск в базе знаний"), stale pending/queued KB queries from previous session are dropped to prevent orphan/out-of-context answers.
+- KB search uses a session-scoped active KB: if multiple KBs exist the user must choose one for the current search session, if exactly one KB exists it is auto-selected, and explicit re-entry into KB search resets the previous search KB choice.
   - ASR visibility control: users can toggle technical metadata display in their settings.
   - **ASR performance: support for `faster-whisper` engine and FP16/INT8 optimizations for high-speed transcription.**
   - **GPU Acceleration: automatic detection and utilization of NVIDIA GPUs (RTX 3090 support) inside Docker containers.**
@@ -205,6 +206,8 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Final RAG context for `/rag/query` and `/rag/summary` is assembled as a deterministic evidence pack instead of simple top-chunk joins: anchor evidence is selected first, same-doc structural neighbors and section-scope support may be added within a bounded budget, and long chunks use query-focused excerpts to reduce prompt noise without widening retrieval scope.
 - Security hardening for RAG answer generation is deterministic in the primary path: explicit prompt-leak / secret-leak / unrelated-private-data queries are refused without calling the LLM, poisoned retrieved context is treated as untrusted data, and refusal wording must avoid echoing sensitive terms back to the user.
 - If the answer-model provider times out or returns a transport/status error after retrieval succeeds, `/rag/query` and `/rag/summary` must return a retrieval-only extractive fallback built from the selected evidence pack instead of surfacing the raw provider error string to the user; source attribution remains attached to the same grounded rows.
+- Entering wiki-by-URL mode from the admin KB actions must clear stale document-upload session keys so the subsequent URL text input is handled only by the canonical `waiting_wiki_root -> ingest_wiki_crawl` flow.
+- Default KB chunking for `wiki` and `markdown` sources is section-aware rather than full-page by default, and ZIP wiki imports must normalize temp-derived page titles to stable wiki page names in source metadata/display.
 
 ## Specification maintenance policy
 - `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.

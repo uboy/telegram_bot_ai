@@ -1,6 +1,18 @@
 {
   "entries": [
     {
+      "id": "2026-03-10-botfollow-003-wiki-openharmony-followup",
+      "approved_on": "2026-03-10",
+      "approved_by": "user",
+      "reason": "User explicitly requested fixing the remaining live wiki/open-harmony issues and validating search quality on the local open-harmony corpus, which requires syncing a focused design note for this bugfix scope.",
+      "files": [
+        "docs/design/wiki-openharmony-quality-followup-v1.md",
+        "SPEC.md",
+        "docs/REQUIREMENTS_TRACEABILITY.md",
+        "coordination/approval-overrides.json"
+      ]
+    },
+    {
       "id": "2026-03-09-rag-backlog-extension-query-rewrite-answer-metrics",
       "approved_on": "2026-03-09",
       "approved_by": "user",

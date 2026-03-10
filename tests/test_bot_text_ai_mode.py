@@ -340,6 +340,10 @@ async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
                 "wiki_urls": {"deadbeef": "https://legacy.example/wiki"},
                 "wiki_zip_kb_id": 42,
                 "wiki_zip_url": "https://legacy.example/wiki.zip",
+                "pending_documents": [{"file_name": "stale.pdf"}],
+                "pending_document": {"file_name": "legacy.pdf"},
+                "upload_mode": "document_auto",
+                "kb_id": 99,
             }
 
     update = DummyUpdate()
@@ -360,6 +364,10 @@ async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
     assert context.user_data.get("wiki_urls") is None
     assert context.user_data.get("wiki_zip_kb_id") is None
     assert context.user_data.get("wiki_zip_url") is None
+    assert context.user_data.get("pending_documents") is None
+    assert context.user_data.get("pending_document") is None
+    assert context.user_data.get("upload_mode") is None
+    assert context.user_data.get("kb_id") is None
     assert "Сканирование вики завершено" in update.message.sent[-1]
     assert "Режим синхронизации: git fallback" in update.message.sent[-1]
     assert "reply_markup" in update.message.kwargs[-1]
@@ -533,7 +541,7 @@ async def test_handle_text_waiting_query_queues_when_kb_selected(monkeypatch):
         def __init__(self):
             self.user_data = {
                 "state": "waiting_query",
-                "kb_id": 5,
+                "active_search_kb_id": 5,
                 "rag_filters": {"source_types": ["pdf"]},
             }
 
@@ -559,6 +567,11 @@ async def test_handle_text_search_mode_resets_stale_kb_queue(monkeypatch):
         )
 
     monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+    monkeypatch.setattr(
+        bot_handlers.backend_client,
+        "list_knowledge_bases",
+        lambda: [{"id": 7, "name": "KB A"}, {"id": 8, "name": "KB B"}],
+    )
 
     class DummyMessage:
         def __init__(self):
@@ -581,6 +594,7 @@ async def test_handle_text_search_mode_resets_stale_kb_queue(monkeypatch):
         def __init__(self):
             self.user_data = {
                 "state": "waiting_query",
+                "active_search_kb_id": 9,
                 "pending_queries": [{"query": "stale"}],
                 "pending_query": "legacy",
                 "kb_query_queue": [{"query": "old queued"}],
@@ -593,13 +607,187 @@ async def test_handle_text_search_mode_resets_stale_kb_queue(monkeypatch):
 
     await bot_handlers.handle_text(update, context)
 
-    assert context.user_data["state"] == "waiting_query"
+    assert context.user_data["state"] == "waiting_kb_for_query"
+    assert context.user_data.get("active_search_kb_id") is None
     assert context.user_data.get("pending_queries") is None
     assert context.user_data.get("pending_query") is None
     assert context.user_data.get("kb_query_queue") == []
     assert context.user_data.get("kb_query_worker") is None
     assert context.user_data.get("kb_query_session_id") == 1
     assert stale_worker.cancelled() or stale_worker.done()
+    assert update.message.sent[-1][0] == "📚 Выберите базу знаний для поиска:"
+    assert "reply_markup" in update.message.sent[-1][1]
+    callbacks = [
+        button.callback_data
+        for row in update.message.sent[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "kb_create" not in callbacks
+    assert "admin_kb" not in callbacks
+    assert "main_menu" in callbacks
+
+
+@pytest.mark.anyio
+async def test_handle_text_search_mode_autoselects_single_kb(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="user",
+            full_name=None,
+            role="user",
+            approved=True,
+        )
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+    monkeypatch.setattr(
+        bot_handlers.backend_client,
+        "list_knowledge_bases",
+        lambda: [{"id": 11, "name": "Solo KB"}],
+    )
+
+    class DummyMessage:
+        def __init__(self):
+            self.text = "🔍 Поиск в базе знаний"
+            self.date = datetime.now(timezone.utc)
+            self.sent = []
+
+        async def reply_text(self, text, **kwargs):
+            self.sent.append((text, kwargs))
+
+    class DummyUser:
+        id = 1
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+
+    class DummyContext:
+        def __init__(self):
+            self.user_data = {}
+
+    update = DummyUpdate()
+    context = DummyContext()
+
+    await bot_handlers.handle_text(update, context)
+
+    assert context.user_data["state"] == "waiting_query"
+    assert context.user_data["active_search_kb_id"] == 11
+    assert update.message.sent[-1][0] == "📚 Для поиска выбрана база знаний 'Solo KB'.\n🔍 Введите запрос:"
+
+
+@pytest.mark.anyio
+async def test_handle_text_waiting_kb_for_query_uses_search_only_menu(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="user",
+            full_name=None,
+            role="user",
+            approved=True,
+        )
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+    monkeypatch.setattr(
+        bot_handlers.backend_client,
+        "list_knowledge_bases",
+        lambda: [{"id": 7, "name": "KB A"}, {"id": 8, "name": "KB B"}],
+    )
+
+    class DummyMessage:
+        def __init__(self):
+            self.text = "how to build"
+            self.date = datetime.now(timezone.utc)
+            self.sent = []
+
+        async def reply_text(self, text, **kwargs):
+            self.sent.append((text, kwargs))
+
+    class DummyUser:
+        id = 1
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+
+    class DummyContext:
+        def __init__(self):
+            self.user_data = {"state": "waiting_kb_for_query"}
+
+    update = DummyUpdate()
+    context = DummyContext()
+
+    await bot_handlers.handle_text(update, context)
+
+    callbacks = [
+        button.callback_data
+        for row in update.message.sent[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "kb_select:7" in callbacks
+    assert "kb_select:8" in callbacks
+    assert "kb_create" not in callbacks
+    assert "admin_kb" not in callbacks
+    assert "main_menu" in callbacks
+
+
+@pytest.mark.anyio
+async def test_handle_text_without_search_state_ignores_admin_kb_id_for_free_text(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="user",
+            full_name=None,
+            role="user",
+            approved=True,
+        )
+
+    called = {"start": 0, "enqueue": 0}
+
+    async def _fake_start(update, context):
+        called["start"] += 1
+
+    async def _fake_enqueue(**kwargs):
+        called["enqueue"] += 1
+        return 1
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+    monkeypatch.setattr(bot_handlers, "handle_start", _fake_start)
+    monkeypatch.setattr(bot_handlers, "_enqueue_kb_query", _fake_enqueue)
+
+    class DummyMessage:
+        def __init__(self):
+            self.text = "Непоисковое сообщение"
+            self.date = datetime.now(timezone.utc)
+
+        async def reply_text(self, text, **kwargs):
+            raise AssertionError("unexpected reply_text")
+
+    class DummyUser:
+        id = 1
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+
+    class DummyContext:
+        def __init__(self):
+            self.user_data = {"kb_id": 5}
+
+    update = DummyUpdate()
+    context = DummyContext()
+
+    await bot_handlers.handle_text(update, context)
+
+    assert called == {"start": 1, "enqueue": 0}
 
 
 @pytest.mark.anyio

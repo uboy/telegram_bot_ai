@@ -119,4 +119,6 @@
 {"id":"RAGFOLLOW-003","title":"Derive local eval slices from actual suite coverage to remove zero-sample noise","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
 {"id":"RAGFOLLOW-004","title":"Add local-only answer failure-analysis artifacts for per-case regression triage","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
 {"id":"RAGFOLLOW-005","title":"Add retrieval-only extractive fallback when LLM provider times out or returns transport errors","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
-{"id":"BOTFOLLOW-001","title":"Suppress transient bot error notifications and land admins in KB actions after KB creation","status":"in_progress","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"BOTFOLLOW-001","title":"Suppress transient bot error notifications and land admins in KB actions after KB creation","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"BOTFOLLOW-002","title":"Make KB search use a session-scoped selected KB with multi-KB choice and single-KB auto-select","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}
+{"id":"BOTFOLLOW-003","title":"Isolate wiki URL ingest state and validate open-harmony search quality on local-only corpus data","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-10"}

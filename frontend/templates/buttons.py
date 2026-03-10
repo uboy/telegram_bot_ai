@@ -224,6 +224,20 @@ def knowledge_base_menu(knowledge_bases: list):
     return InlineKeyboardMarkup(buttons)
 
 
+def knowledge_base_search_menu(knowledge_bases: list):
+    """Меню выбора базы знаний для поиска без admin-only действий."""
+    buttons = []
+    for kb in knowledge_bases:
+        kb_id = getattr(kb, "id", None) or kb.get("id")
+        kb_name = getattr(kb, "name", None) or kb.get("name")
+        buttons.append([InlineKeyboardButton(
+            f"📚 {kb_name}",
+            callback_data=f"kb_select:{kb_id}"
+        )])
+    buttons.append([InlineKeyboardButton("🔙 Главное меню", callback_data='main_menu')])
+    return InlineKeyboardMarkup(buttons)
+
+
 def kb_actions_menu(kb_id: int, show_sources: bool = False):
     """Меню действий с базой знаний"""
     buttons = [
