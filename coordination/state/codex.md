@@ -2357,3 +2357,94 @@
 - roadmap status:
   - `BOTFOLLOW-001` completed.
   - no additional approved bot follow-up slices are currently registered.
+
+## 2026-03-10 KB search session-scoped selection research
+- task:
+  - fix KB search so it chooses the active KB explicitly when multiple KBs exist, auto-selects when only one exists, and resets that choice on search-session re-entry.
+- findings:
+  - current search flow uses generic `context.user_data['kb_id']`, which is also populated by admin KB-management flows,
+  - callback `search_kb` enters `waiting_query` immediately and therefore silently reuses any stale `kb_id`,
+  - `_reset_kb_query_state(...)` resets queue/session ids but cannot clear search scope cleanly because there is no dedicated search-session key.
+- proposed_direction:
+  - add `active_search_kb_id` for search only,
+  - require explicit choice for multi-KB search,
+  - auto-select the only KB when exactly one exists,
+  - clear `active_search_kb_id` on search re-entry.
+- next_step:
+  - wait for user CC on the plan, then implement the runtime/test/doc changes.
+
+## 2026-03-10 BOTFOLLOW-002 progress
+- task:
+  - make KB search use a dedicated session-scoped selected KB instead of leaking generic admin `kb_id` into search.
+- implementation:
+  - `frontend/bot_handlers.py` now keeps search scope in `active_search_kb_id`, clears it in `_reset_kb_query_state(...)`, and routes both KB-search entry points through `enter_kb_search_mode(...)`,
+  - KB-search entry now auto-selects when there is exactly one KB and prompts for KB choice when multiple KBs exist,
+  - `frontend/bot_callbacks.py` callback `search_kb` now uses the same entry helper, and `kb_select:<id>` uses `active_search_kb_id` for `waiting_kb_for_query` instead of overwriting admin-management `kb_id`,
+  - new callback regressions live in `tests/test_bot_search_callbacks.py`, while `tests/test_bot_text_ai_mode.py` now covers single-KB auto-select, multi-KB re-entry reset, and `waiting_query` queueing against `active_search_kb_id`.
+- focused_verification:
+  - `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py tests/test_bot_text_ai_mode.py tests/test_bot_search_callbacks.py` -> `PASS`,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_search_callbacks.py` -> `PASS` (`16 passed`).
+- docs:
+  - `docs/design/bot-kb-search-session-scope-v1.md` records the approved bugfix contract,
+  - `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/USAGE.md` now describe the session-scoped search KB selection behavior.
+- next_step:
+  - run `scan_secrets` + `ci_policy_gate`, then request independent review for `BOTFOLLOW-002`.
+
+## 2026-03-10 BOTFOLLOW-002 gates
+- verification:
+  - `python scripts/scan_secrets.py` -> `PASS`,
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`.
+- note:
+  - `docs/OPERATIONS.md` was intentionally not changed because this slice alters user search-session UX/state only and does not introduce a new operational/runtime triage contract.
+
+## 2026-03-10 BOTFOLLOW-002 blocker fix
+- implementation:
+  - `frontend/bot_handlers.py` now uses `knowledge_base_search_menu(...)` for both remaining `waiting_kb_for_query` prompts.
+  - `frontend/bot_callbacks.py` now resets the KB-search session on `main_menu`, `admin_menu`, and `admin_kb`, so stale `waiting_kb_for_query` no longer consumes admin KB clicks.
+  - Added regressions:
+    - `test_handle_text_waiting_kb_for_query_uses_search_only_menu`
+    - `test_callback_admin_kb_clears_search_selection_before_admin_kb_select`
+- focused_verification:
+  - `python -m py_compile frontend/bot_handlers.py frontend/bot_callbacks.py tests/test_bot_text_ai_mode.py tests/test_bot_search_callbacks.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_search_callbacks.py` -> `PASS` (`19 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - independent re-review returned `PASS`; `BOTFOLLOW-002` can be closed.
+
+## 2026-03-10 BOTFOLLOW-003 kickoff
+- task:
+  - isolate wiki URL ingest from stale document-upload state and validate open-harmony search quality on the local-only corpus.
+- current hypotheses:
+  - `kb_wiki_crawl` should clear `kb_id` / `upload_mode` / pending document keys to prevent live state contamination.
+  - default `wiki` / `markdown` chunking in `shared/kb_settings.py` is too coarse (`full`), likely hurting open-harmony build/how-to retrieval.
+- planned verification:
+  - add focused wiki-state regressions,
+  - run a local open-harmony ingest/query comparison across chunking modes using the existing eval/query harness.
+
+## 2026-03-10 BOTFOLLOW-003 progress
+- implementation:
+  - `frontend/bot_callbacks.py::kb_wiki_crawl` now clears stale upload/document keys (`kb_id`, `upload_mode`, pending document payloads) before entering `waiting_wiki_root`.
+  - `frontend/bot_handlers.py::waiting_wiki_root` completion now clears the same upload/document keys.
+  - `shared/kb_settings.py` now defaults `wiki` and `markdown` to section-aware chunking.
+  - `shared/wiki_git_loader.py` now replaces temp-derived titles with stable wiki page names for ZIP wiki metadata and chunk titles.
+- local-only open-harmony comparison:
+  - corpus used: local `open-harmony.wiki.zip`,
+  - comparison method: two temporary KBs, same queries, same answer model, differing only by chunking mode,
+  - observed result:
+    - `full` chunking -> about `99` chunks, weak source selection for build/sync queries, temp-like titles visible,
+    - `section` chunking -> about `768` chunks, better `Sync&Build` source hits and more relevant build/mirror answers.
+- focused_verification:
+  - `python -m py_compile frontend/bot_callbacks.py frontend/bot_handlers.py shared/kb_settings.py shared/wiki_git_loader.py tests/test_bot_wiki_callbacks.py tests/test_bot_text_ai_mode.py tests/test_wiki_scraper.py tests/test_kb_settings.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_wiki_callbacks.py tests/test_bot_text_ai_mode.py tests/test_wiki_scraper.py tests/test_kb_settings.py` -> `PASS` (`28 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- limitations found during local-only validation:
+  - `backend/services/index_outbox_worker.py` still has a timezone bug (`offset-naive` vs `offset-aware`) in `claim_pending`,
+  - `shared/rag_system.py::delete_knowledge_base` still does not cascade-delete `documents`, so temporary KB cleanup via that helper fails on MySQL FK constraints.
+
+## 2026-03-10 BOTFOLLOW-003 review
+- independent review:
+  - Maxwell returned `PASS` with no findings in the BOTFOLLOW-003 scope.
+- task status:
+  - `BOTFOLLOW-003` completed.

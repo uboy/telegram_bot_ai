@@ -79,6 +79,10 @@ async def test_callback_kb_wiki_crawl_enters_canonical_state_and_clears_legacy_k
         "wiki_urls": {"deadbeef": "https://legacy.example/wiki"},
         "wiki_zip_kb_id": 42,
         "wiki_zip_url": "https://legacy.example/wiki.zip",
+        "pending_documents": [{"file_name": "stale.pdf"}],
+        "pending_document": {"file_name": "legacy.pdf"},
+        "upload_mode": "document_auto",
+        "kb_id": 99,
     }
 
     await bot_callbacks.callback_handler(update, context)
@@ -88,6 +92,10 @@ async def test_callback_kb_wiki_crawl_enters_canonical_state_and_clears_legacy_k
     assert context.user_data.get("wiki_urls") is None
     assert context.user_data.get("wiki_zip_kb_id") is None
     assert context.user_data.get("wiki_zip_url") is None
+    assert context.user_data.get("pending_documents") is None
+    assert context.user_data.get("pending_document") is None
+    assert context.user_data.get("upload_mode") is None
+    assert context.user_data.get("kb_id") is None
     assert "Введите корневой URL вики" in edited["text"]
 
 

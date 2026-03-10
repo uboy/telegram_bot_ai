@@ -38,7 +38,7 @@ from html import escape
 
 from frontend.templates.buttons import (
     main_menu, admin_menu, settings_menu, ai_providers_menu,
-    user_management_menu, knowledge_base_menu, kb_actions_menu,
+    user_management_menu, knowledge_base_menu, knowledge_base_search_menu, kb_actions_menu,
     confirm_menu, search_options_menu,
     asr_models_menu, ai_context_choice_menu
 )
@@ -286,6 +286,7 @@ async def _reset_kb_query_state(context: ContextTypes.DEFAULT_TYPE) -> None:
     # Drop stale pending items from previous KB selection flows.
     context.user_data.pop("pending_queries", None)
     context.user_data.pop("pending_query", None)
+    context.user_data.pop("active_search_kb_id", None)
 
     queue = context.user_data.get("kb_query_queue")
     if isinstance(queue, list):
@@ -302,6 +303,29 @@ async def _reset_kb_query_state(context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
     context.user_data["kb_query_worker"] = None
     _next_kb_query_session_id(context)
+
+
+def _resolve_kb_identity(kb: Any) -> Tuple[int, str]:
+    kb_id = getattr(kb, "id", None) or kb.get("id")
+    kb_name = getattr(kb, "name", None) or kb.get("name") or "Без названия"
+    return int(kb_id), str(kb_name)
+
+
+async def enter_kb_search_mode(context: ContextTypes.DEFAULT_TYPE) -> Tuple[str, Any]:
+    await _reset_kb_query_state(context)
+    kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
+    if not kbs:
+        context.user_data["state"] = None
+        return "❌ Нет баз знаний для поиска.", None
+
+    if len(kbs) == 1:
+        kb_id, kb_name = _resolve_kb_identity(kbs[0])
+        context.user_data["active_search_kb_id"] = kb_id
+        context.user_data["state"] = "waiting_query"
+        return f"📚 Для поиска выбрана база знаний '{kb_name}'.\n🔍 Введите запрос:", None
+
+    context.user_data["state"] = "waiting_kb_for_query"
+    return "📚 Выберите базу знаний для поиска:", knowledge_base_search_menu(kbs)
 
 
 async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1017,12 +1041,17 @@ async def process_pending_documents_for_kb(
 
 
 async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT_TYPE, user: UserContext, query: str) -> Tuple[Optional[int], bool]:
-    kb_id = context.user_data.get('kb_id')
-    if kb_id: return kb_id, False
+    kb_id = context.user_data.get('active_search_kb_id')
+    if kb_id:
+        return int(kb_id), False
     kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)
     if not kbs:
         await update.message.reply_text("❌ Нет баз знаний.")
         return None, True
+    if len(kbs) == 1:
+        kb_id, _kb_name = _resolve_kb_identity(kbs[0])
+        context.user_data["active_search_kb_id"] = kb_id
+        return kb_id, False
     pending_queries = context.user_data.setdefault("pending_queries", [])
     pending_queries.append(
         {
@@ -1034,12 +1063,15 @@ async def _ensure_kb_or_ask_select(update: Update, context: ContextTypes.DEFAULT
     )
     context.user_data['state'] = 'waiting_kb_for_query'
     if len(pending_queries) == 1:
-        await update.message.reply_text("📚 Выберите базу знаний:", reply_markup=knowledge_base_menu(kbs))
+        await update.message.reply_text(
+            "📚 Выберите базу знаний:",
+            reply_markup=knowledge_base_search_menu(kbs),
+        )
     else:
         await update.message.reply_text(
             f"🕒 Запрос добавлен в очередь ({len(pending_queries)}).\n"
             "Выберите базу знаний для запуска поиска:",
-            reply_markup=knowledge_base_menu(kbs),
+            reply_markup=knowledge_base_search_menu(kbs),
         )
     return None, True
 
@@ -1058,9 +1090,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get('state')
 
     if text_input == "🔍 Поиск в базе знаний":
-        await _reset_kb_query_state(context)
-        context.user_data['state'] = 'waiting_query'
-        await update.message.reply_text("🔍 Введите запрос для поиска:")
+        text, reply_markup = await enter_kb_search_mode(context)
+        await update.message.reply_text(text, reply_markup=reply_markup)
         return
     if text_input == "🤖 Задать вопрос ИИ":
         recent = await asyncio.to_thread(get_recent_active_conversation, str(user.telegram_id))
@@ -1119,7 +1150,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🕒 Запрос добавлен в очередь ({len(pending_queries)}).\n"
             "Выберите базу знаний для запуска поиска:",
-            reply_markup=knowledge_base_menu(kbs),
+            reply_markup=knowledge_base_search_menu(kbs),
         )
     elif state == 'waiting_ai_query':
         if not text_input:
@@ -1246,21 +1277,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop('wiki_urls', None)
             context.user_data.pop('wiki_zip_kb_id', None)
             context.user_data.pop('wiki_zip_url', None)
+            context.user_data.pop('pending_documents', None)
+            context.user_data.pop('pending_document', None)
+            context.user_data.pop('upload_mode', None)
+            context.user_data.pop('kb_id', None)
     else:
-        kb_id = context.user_data.get('kb_id')
-        if kb_id:
-            queue_pos = await _enqueue_kb_query(
-                context=context,
-                message=update.message,
-                query=text_input,
-                kb_id=int(kb_id),
-                user=user,
-                filters=context.user_data.get("rag_filters") or {},
-            )
-            if queue_pos > 1:
-                await update.message.reply_text(f"🕒 Запрос добавлен в очередь: {queue_pos}.")
-        else:
-            await handle_start(update, context)
+        await handle_start(update, context)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):

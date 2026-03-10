@@ -743,3 +743,97 @@ The lecture metrics are necessary but not sufficient. The design needs five metr
 3. `docs/OPERATIONS.md` should note the transient-error suppression behavior for bot runtime triage.
 4. No `docs/design/*` update is planned by default.
    - Reason: this is a small bugfix within existing bot UX/runtime behavior and does not change architecture or system design contracts.
+
+## 2026-03-10 KB search session-scoped KB selection
+
+### Request summary
+1. If multiple KBs exist, KB search must explicitly ask which KB to search.
+2. The chosen KB must stay active only for the current KB-search session.
+3. If the user exits and later re-enters KB search, the search KB must be chosen again.
+4. If there is exactly one KB, search should use it automatically.
+
+### Minimal relevant runtime paths
+1. `frontend/bot_callbacks.py`
+   - callback `search_kb` currently sets `state = "waiting_query"` immediately and never asks for KB choice.
+   - callback `kb_select:<id>` already has a branch for `state == "waiting_kb_for_query"` and flushes pending queries into the selected KB.
+2. `frontend/bot_handlers.py`
+   - `_ensure_kb_or_ask_select(...)` looks only at generic `context.user_data["kb_id"]`.
+   - `handle_text(...)` enters KB search from the main keyboard by resetting queue state and then setting `state = "waiting_query"` without selecting/search-scoping a KB.
+   - `_reset_kb_query_state(...)` clears queue/session ids but does not clear any search KB key because none exists yet.
+3. `tests/test_bot_text_ai_mode.py`
+   - already covers queueing with an existing selected KB and stale queue reset on explicit re-entry.
+   - does not yet cover:
+     - mandatory KB choice when multiple KBs exist,
+     - auto-selection when exactly one KB exists,
+     - separation between admin-selected `kb_id` and search-session KB selection.
+
+### Root cause
+1. The bot has no dedicated search-session KB key.
+   - Search reuses the generic `kb_id`, which is also used by admin KB-management flows (upload/wiki/settings/delete).
+2. Because of that reuse:
+   - a KB selected earlier in admin management silently becomes the search scope,
+   - search scope can leak across sessions,
+   - re-entering KB search does not force a fresh choice when multiple KBs exist.
+
+### Implementation direction
+1. Introduce a dedicated search-session key, e.g. `active_search_kb_id`.
+   - Use it only for KB search.
+   - Keep generic `kb_id` for admin KB-management actions.
+2. Change KB-search entry flow:
+   - reset previous search session state,
+   - fetch KB list,
+   - if none -> show error,
+   - if exactly one -> set `active_search_kb_id` and `state = "waiting_query"`,
+   - if multiple -> set `state = "waiting_kb_for_query"` and show KB choice menu.
+3. Change `_ensure_kb_or_ask_select(...)` and pending-query flush logic to use `active_search_kb_id`.
+4. When `kb_select:<id>` is used during `waiting_kb_for_query`, set `active_search_kb_id` instead of relying only on `kb_id`.
+5. Make `_reset_kb_query_state(...)` also clear `active_search_kb_id`.
+
+### Test impact
+1. Add regressions for:
+   - explicit KB choice prompt when multiple KBs exist,
+   - automatic selection when only one KB exists,
+   - `waiting_query` enqueues against `active_search_kb_id`,
+   - re-entering KB search clears the previous search-session KB.
+2. Keep admin KB-management behavior untouched in existing tests.
+
+### Docs/spec sync expectation
+1. `SPEC.md` should state that KB search uses a session-scoped active KB:
+   - multi-KB -> explicit choice,
+   - single-KB -> auto-select,
+   - re-entry resets the active KB choice.
+2. `docs/REQUIREMENTS_TRACEABILITY.md` should map the new flow to bot regressions.
+3. `docs/USAGE.md` should document the user-facing KB search flow.
+
+## 2026-03-10 Wiki URL follow-up and open-harmony relevance check
+
+### Live issues reported from Telegram
+1. After `kb_wiki_crawl -> waiting_wiki_root`, sending `https://gitee.com/mazurdenis/open-harmony/wikis` did not produce the expected wiki-crawl completion message in the live chat.
+2. The next visible bot response was a document-upload report for `open-harmony.zip`, which is a red flag for state contamination or a stale live instance taking a legacy path.
+3. The resulting answer for `how to build` was poor:
+   - only one source was cited,
+   - the cited source label contained a temp-like `tmp...` path,
+   - the content was not the best `Sync&Build` guidance expected from the open-harmony wiki corpus.
+
+### What is already true in the repo
+1. `frontend/bot_callbacks.py` has a canonical `kb_wiki_crawl` callback that sets `state='waiting_wiki_root'`.
+2. `frontend/bot_handlers.py` has a `waiting_wiki_root` text branch and a focused regression for it.
+3. Import-log `archive` rows can still be normal for ZIP wiki fallback, so that signal alone is ambiguous.
+4. Default KB chunking still uses `mode="full"` for `wiki` and `markdown` in `shared/kb_settings.py`, which is a likely relevance problem for wiki-style docs with many sections.
+
+### Most likely root causes
+1. Live bot state contamination around wiki entry:
+   - `kb_wiki_crawl` does not currently clear upload-oriented keys such as `kb_id`, `upload_mode`, or pending document payloads.
+   - Even if that is not the whole cause, the callback should isolate the wiki flow from document-upload state.
+2. Retrieval quality on open-harmony is likely hurt by coarse chunking:
+   - wiki/markdown defaults currently keep many pages as one full chunk,
+   - the live import log showed many pages with only one fragment each,
+   - this makes exact build/how-to retrieval weaker than it should be.
+
+### Verification direction
+1. Add bot regressions proving `kb_wiki_crawl` clears stale upload state.
+2. Locally ingest the open-harmony wiki corpus into controlled test KBs.
+3. Compare a small query set against at least two chunking configurations:
+   - current-style `full`,
+   - candidate `section`.
+4. Use the committed open-harmony-oriented query set in `tests/rag_eval.yaml` plus a few direct `rag_query` answer inspections.
