@@ -222,7 +222,16 @@ def test_rag_diagnostics_returns_candidates():
             fusion_rank=1,
             fusion_score="0.981200",
             rerank_delta="0.034100",
-            metadata_json=json.dumps({"section_path": "25"}, ensure_ascii=False),
+            metadata_json=json.dumps(
+                {
+                    "section_path": "25",
+                    "_diag_context_selected": True,
+                    "_diag_context_rank": 1,
+                    "_diag_context_reason": "primary",
+                    "_diag_context_anchor_rank": 1,
+                },
+                ensure_ascii=False,
+            ),
             content_preview="25. Целями развития искусственного интеллекта...",
         )
     )
@@ -239,6 +248,191 @@ def test_rag_diagnostics_returns_candidates():
     assert result.candidates[0].metadata == {"section_path": "25"}
     assert result.candidates[0].channel == "qdrant"
     assert result.candidates[0].fusion_rank == 1
+    assert result.candidates[0].included_in_context is True
+    assert result.candidates[0].context_rank == 1
+    assert result.candidates[0].context_reason == "primary"
+    assert result.candidates[0].context_anchor_rank == 1
+
+
+def test_rag_query_diagnostics_include_context_support_rows(monkeypatch):
+    from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
+    monkeypatch.setattr(shared_config, "RAG_LEGACY_QUERY_HEURISTICS", False, raising=False)
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
+        return [
+            {
+                "content": "Step 2 run `repo sync -c -j 8` from the repository root.",
+                "metadata": {
+                    "doc_title": "Sync Guide",
+                    "section_title": "Sync and Build",
+                    "section_path": "Sync Guide > Sync and Build",
+                    "section_path_norm": "sync guide > sync and build",
+                    "chunk_no": 2,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://guide",
+                "source_type": "markdown",
+                "rerank_score": 0.95,
+                "distance": 0.05,
+                "origin": "qdrant",
+            }
+        ]
+
+    doc_chunks = {
+        "doc://guide": [
+            {
+                "id": 11,
+                "content": "Step 1 install prerequisites and initialize the repo tool.",
+                "metadata": {
+                    "doc_title": "Sync Guide",
+                    "section_title": "Sync and Build",
+                    "section_path": "Sync Guide > Sync and Build",
+                    "section_path_norm": "sync guide > sync and build",
+                    "chunk_no": 1,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://guide",
+                "source_type": "markdown",
+            },
+            {
+                "id": 12,
+                "content": "Step 2 run `repo sync -c -j 8` from the repository root.",
+                "metadata": {
+                    "doc_title": "Sync Guide",
+                    "section_title": "Sync and Build",
+                    "section_path": "Sync Guide > Sync and Build",
+                    "section_path_norm": "sync guide > sync and build",
+                    "chunk_no": 2,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://guide",
+                "source_type": "markdown",
+            },
+        ]
+    }
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(fake_search), "retrieval_backend": "qdrant"})(),
+    )
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: "Ответ")})())
+    monkeypatch.setattr(
+        rag_module,
+        "_load_doc_chunks_for_context",
+        lambda db, doc_id, kb_id=None: list(doc_chunks.get(doc_id, [])),  # noqa: ARG005
+    )
+
+    db = DummyDB()
+    result = rag_query(RAGQuery(query="How do I sync the repo?", knowledge_base_id=1), db=db)
+    diagnostics = rag_diagnostics(result.request_id, db=db)
+
+    assert [candidate.source_path for candidate in diagnostics.candidates] == ["doc://guide", "doc://guide"]
+    assert diagnostics.candidates[0].origin == "qdrant"
+    assert diagnostics.candidates[0].included_in_context is True
+    assert diagnostics.candidates[0].context_rank == 1
+    assert diagnostics.candidates[0].context_reason == "primary"
+    assert diagnostics.candidates[0].context_anchor_rank == 1
+    assert diagnostics.candidates[1].origin == "context_support"
+    assert diagnostics.candidates[1].channel == "context_support"
+    assert diagnostics.candidates[1].included_in_context is True
+    assert diagnostics.candidates[1].context_rank == 2
+    assert diagnostics.candidates[1].context_reason == "adjacent_prev"
+    assert diagnostics.candidates[1].context_anchor_rank == 1
+    assert diagnostics.candidates[1].metadata.get("section_path") == "Sync Guide > Sync and Build"
+    assert "_diag_context_selected" not in (diagnostics.candidates[1].metadata or {})
+
+
+def test_rag_query_diagnostics_keep_context_support_with_many_retrieval_candidates(monkeypatch):
+    from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
+    monkeypatch.setattr(shared_config, "RAG_LEGACY_QUERY_HEURISTICS", False, raising=False)
+
+    retrieval_rows = []
+    for idx in range(1, 26):
+        retrieval_rows.append(
+            {
+                "content": f"Guide step {idx}",
+                "metadata": {
+                    "doc_title": "Long Guide",
+                    "section_title": "Section",
+                    "section_path": "Long Guide > Section",
+                    "section_path_norm": "long guide > section",
+                    "chunk_no": idx * 10,
+                    "chunk_kind": "text",
+                },
+                "source_path": f"doc://guide-{idx}",
+                "source_type": "markdown",
+                "rerank_score": 1.0 - (idx * 0.01),
+                "distance": 0.01 * idx,
+                "origin": "qdrant",
+            }
+        )
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
+        return retrieval_rows
+
+    doc_chunks = {
+        "doc://guide-1": [
+            {
+                "id": 101,
+                "content": "Guide step 1",
+                "metadata": {
+                    "doc_title": "Long Guide",
+                    "section_title": "Section",
+                    "section_path": "Long Guide > Section",
+                    "section_path_norm": "long guide > section",
+                    "chunk_no": 10,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://guide-1",
+                "source_type": "markdown",
+            },
+            {
+                "id": 102,
+                "content": "Guide step 1 supporting detail",
+                "metadata": {
+                    "doc_title": "Long Guide",
+                    "section_title": "Section",
+                    "section_path": "Long Guide > Section",
+                    "section_path_norm": "long guide > section",
+                    "chunk_no": 11,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://guide-1",
+                "source_type": "markdown",
+            },
+        ],
+    }
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(fake_search), "retrieval_backend": "qdrant"})(),
+    )
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: "Ответ")})())
+    monkeypatch.setattr(
+        rag_module,
+        "_load_doc_chunks_for_context",
+        lambda db, doc_id, kb_id=None: list(doc_chunks.get(doc_id, [])),  # noqa: ARG005
+    )
+
+    db = DummyDB()
+    result = rag_query(RAGQuery(query="Explain step 1", knowledge_base_id=1), db=db)
+    diagnostics = rag_diagnostics(result.request_id, db=db)
+
+    assert len(diagnostics.candidates) == 20
+    assert any(candidate.origin == "context_support" for candidate in diagnostics.candidates)
+    support_candidate = next(candidate for candidate in diagnostics.candidates if candidate.origin == "context_support")
+    assert support_candidate.included_in_context is True
+    assert support_candidate.context_reason == "adjacent_next"
+    assert support_candidate.context_anchor_rank == 1
+    assert support_candidate.context_rank is not None
 
 
 def test_rag_diagnostics_not_found():

@@ -58,6 +58,21 @@ class DummyDB:
         return None
 
 
+class FlushSensitiveDB(DummyDB):
+    def __init__(self):
+        super().__init__()
+        self.flushed_query_logs = 0
+
+    def add(self, obj):
+        model_name = obj.__class__.__name__
+        if model_name == "RetrievalCandidateLog" and self.flushed_query_logs <= 0:
+            raise AssertionError("candidate row added before parent query log flush")
+        super().add(obj)
+
+    def flush(self):
+        self.flushed_query_logs = len(self.retrieval_query_logs)
+
+
 def test_persist_retrieval_logs_derives_trace_metrics():
     db = DummyDB()
 
@@ -132,6 +147,37 @@ def test_persist_retrieval_logs_derives_trace_metrics():
     assert '"retrieval_core_mode": "generalized"' in (db.retrieval_query_logs[0].hints_json or "")
 
 
+def test_persist_retrieval_logs_flushes_parent_before_candidate_rows():
+    db = FlushSensitiveDB()
+
+    _persist_retrieval_logs(
+        db=db,
+        request_id="req-flush",
+        query="How do I sync the repo?",
+        knowledge_base_id=1,
+        intent="HOWTO",
+        hints={"retrieval_core_mode": "generalized"},
+        filters={},
+        total_candidates=1,
+        total_selected=1,
+        latency_ms=25,
+        backend_name="qdrant",
+        candidates=[
+            {
+                "source_path": "doc://guide",
+                "source_type": "md",
+                "origin": "qdrant",
+                "distance": -0.25,
+                "content": "Use repo sync -c -j 8.",
+            }
+        ],
+    )
+
+    assert len(db.retrieval_query_logs) == 1
+    assert len(db.retrieval_candidate_logs) == 1
+    assert db.flushed_query_logs == 1
+
+
 def test_rag_diagnostics_returns_strict_trace_fields_for_legacy_rows():
     db = DummyDB()
     db.retrieval_query_logs.append(
@@ -184,6 +230,10 @@ def test_rag_diagnostics_returns_strict_trace_fields_for_legacy_rows():
     assert result.candidates[0].channel_rank == 1
     assert result.candidates[0].fusion_rank == 1
     assert result.candidates[0].fusion_score == "0.721500"
+    assert result.candidates[0].included_in_context is False
+    assert result.candidates[0].context_rank is None
+    assert result.candidates[0].context_reason is None
+    assert result.candidates[0].context_anchor_rank is None
 
 
 def test_rag_diagnostics_openapi_schema_exposes_required_trace_fields():
@@ -194,6 +244,7 @@ def test_rag_diagnostics_openapi_schema_exposes_required_trace_fields():
     candidate_schema = schema["components"]["schemas"]["RAGDiagnosticsCandidate"]
 
     assert "retrieval_core_mode" in response_schema["properties"]
-    assert {"origin", "channel", "channel_rank", "fusion_rank", "fusion_score"} <= set(
+    assert {"origin", "channel", "channel_rank", "fusion_rank", "fusion_score", "included_in_context"} <= set(
         candidate_schema.get("required") or []
     )
+    assert {"context_rank", "context_reason", "context_anchor_rank"} <= set(candidate_schema["properties"])

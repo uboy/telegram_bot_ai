@@ -10,6 +10,7 @@ from typing import Dict, Any, List
 import json
 import hashlib
 import os
+import re
 import tempfile
 import zipfile
 
@@ -27,6 +28,16 @@ from shared.wiki_git_loader import load_wiki_from_git, load_wiki_from_zip  # typ
 from shared.image_processor import image_processor  # type: ignore
 from shared.index_outbox_service import index_outbox_service  # type: ignore
 from shared.logging_config import logger  # type: ignore
+
+_SPACE_RE = re.compile(r"\s+")
+_WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9_]+", flags=re.UNICODE)
+_SECTION_SEPARATOR_RE = re.compile(r"\s*>\s*")
+_CREDENTIAL_URL_RE = re.compile(r"([a-z][a-z0-9+\-.]*://)([^/@:\s]+):([^/@\s]+)@", flags=re.IGNORECASE)
+_AUTH_HEADER_RE = re.compile(r"(?i)\b(authorization\b\s*:\s*(?:bearer|basic|token)\s+)([^\s,;]+)")
+_BEARER_TOKEN_RE = re.compile(r"(?i)\b(bearer\s+)([^\s,;]+)")
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret)\b(\s*[:=]\s*)([^\s,;]+)"
+)
 
 
 class IngestionService:
@@ -138,6 +149,7 @@ class IngestionService:
         self,
         *,
         base_meta: Dict[str, Any],
+        content: str,
         source_type: str,
         source_path: str,
         chunk_title: str,
@@ -146,6 +158,7 @@ class IngestionService:
         doc_hash: str | None,
         doc_version: int,
         source_updated_at: str,
+        chunk_no: int,
     ) -> Dict[str, Any]:
         meta: Dict[str, Any] = dict(base_meta or {})
 
@@ -153,13 +166,41 @@ class IngestionService:
         doc_title = str(meta.get("doc_title") or title or source_path or "").strip()
         section_title = str(meta.get("section_title") or title or doc_title or "").strip()
         section_path = str(meta.get("section_path") or doc_title or source_path or "ROOT").strip()
+        section_path_norm = self._normalize_section_path_norm(
+            str(meta.get("section_path_norm") or section_path or "ROOT")
+        )
+        chunk_kind = str(meta.get("chunk_kind") or "text").strip() or "text"
+        block_type = str(meta.get("block_type") or meta.get("chunk_type") or chunk_kind or "text").strip() or "text"
+        page_no = self._coerce_optional_int(meta.get("page_no", meta.get("page")))
+        char_start = self._coerce_optional_int(meta.get("char_start"))
+        char_end = self._coerce_optional_int(meta.get("char_end"))
+        parser_confidence = self._coerce_optional_float(meta.get("parser_confidence"))
+        parser_warning = self._sanitize_parser_warning(meta.get("parser_warning"))
+        parent_chunk_id = self._coerce_optional_ref(meta.get("parent_chunk_id"))
+        prev_chunk_id = self._coerce_optional_ref(meta.get("prev_chunk_id"))
+        next_chunk_id = self._coerce_optional_ref(meta.get("next_chunk_id"))
+        token_count_est = self._estimate_token_count(content)
+        parser_profile = str(meta.get("parser_profile") or f"loader:{source_type}:v1").strip() or f"loader:{source_type}:v1"
+        stable_chunk_no = self._coerce_optional_int(meta.get("chunk_no")) or chunk_no
+        chunk_hash = str(meta.get("chunk_hash") or self._build_chunk_hash(
+            source_type=source_type,
+            source_path=source_path,
+            chunk_no=stable_chunk_no,
+            content=content,
+        )).strip()
 
         meta["type"] = str(meta.get("type") or source_type or "unknown")
         meta["title"] = title
         meta["doc_title"] = doc_title
         meta["section_title"] = section_title
         meta["section_path"] = section_path
-        meta.setdefault("chunk_kind", "text")
+        meta["section_path_norm"] = section_path_norm
+        meta["chunk_kind"] = chunk_kind
+        meta["block_type"] = block_type
+        meta["chunk_no"] = stable_chunk_no
+        meta["chunk_hash"] = chunk_hash
+        meta["token_count_est"] = token_count_est
+        meta["parser_profile"] = parser_profile
 
         meta["document_class"] = doc_class
         meta["language"] = language or "ru"
@@ -167,7 +208,139 @@ class IngestionService:
             meta["doc_hash"] = doc_hash
         meta["doc_version"] = doc_version
         meta["source_updated_at"] = source_updated_at
+        if page_no is not None:
+            meta["page_no"] = page_no
+        if char_start is not None:
+            meta["char_start"] = char_start
+        if char_end is not None:
+            meta["char_end"] = char_end
+        if parser_confidence is not None:
+            meta["parser_confidence"] = parser_confidence
+        if parser_warning:
+            meta["parser_warning"] = parser_warning
+        if parent_chunk_id:
+            meta["parent_chunk_id"] = parent_chunk_id
+        if prev_chunk_id:
+            meta["prev_chunk_id"] = prev_chunk_id
+        if next_chunk_id:
+            meta["next_chunk_id"] = next_chunk_id
         return meta
+
+    def _normalize_section_path_norm(self, section_path: str) -> str:
+        normalized = str(section_path or "").replace("\\", "/").strip()
+        normalized = _SECTION_SEPARATOR_RE.sub(" > ", normalized)
+        normalized = _SPACE_RE.sub(" ", normalized).strip().lower()
+        return normalized or "root"
+
+    def _estimate_token_count(self, content: str) -> int:
+        return len(_WORD_RE.findall(content or ""))
+
+    def _build_chunk_hash(
+        self,
+        *,
+        source_type: str,
+        source_path: str,
+        chunk_no: int,
+        content: str,
+    ) -> str:
+        normalized_content = _SPACE_RE.sub(" ", content or "").strip()
+        hash_basis = "\n".join(
+            [
+                str(source_type or "").strip(),
+                str(source_path or "").strip(),
+                str(chunk_no),
+                normalized_content,
+            ]
+        )
+        return hashlib.sha256(hash_basis.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _coerce_optional_int(self, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced >= 0 else None
+
+    def _coerce_optional_float(self, value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            coerced = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, coerced))
+
+    def _coerce_optional_ref(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        return cleaned or None
+
+    def _sanitize_parser_warning(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        cleaned = _SPACE_RE.sub(" ", str(value)).strip()
+        if not cleaned:
+            return None
+        cleaned = _CREDENTIAL_URL_RE.sub(r"\1***:***@", cleaned)
+        cleaned = _AUTH_HEADER_RE.sub(r"\1***", cleaned)
+        cleaned = _BEARER_TOKEN_RE.sub(r"\1***", cleaned)
+        cleaned = _SECRET_VALUE_RE.sub(r"\1\2***", cleaned)
+        return cleaned[:500]
+
+    def _chunk_columns_from_metadata(self, meta: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "chunk_hash": meta.get("chunk_hash"),
+            "chunk_no": meta.get("chunk_no"),
+            "block_type": meta.get("block_type"),
+            "parent_chunk_id": meta.get("parent_chunk_id"),
+            "prev_chunk_id": meta.get("prev_chunk_id"),
+            "next_chunk_id": meta.get("next_chunk_id"),
+            "section_path_norm": meta.get("section_path_norm"),
+            "page_no": meta.get("page_no"),
+            "char_start": meta.get("char_start"),
+            "char_end": meta.get("char_end"),
+            "token_count_est": meta.get("token_count_est"),
+            "parser_profile": meta.get("parser_profile"),
+            "parser_confidence": meta.get("parser_confidence"),
+            "parser_warning": meta.get("parser_warning"),
+        }
+
+    def _build_canonical_chunk_payload(
+        self,
+        *,
+        base_meta: Dict[str, Any],
+        content: str,
+        source_type: str,
+        source_path: str,
+        chunk_title: str,
+        doc_class: str,
+        language: str,
+        doc_hash: str | None,
+        doc_version: int,
+        source_updated_at: str,
+        chunk_no: int,
+    ) -> Dict[str, Any]:
+        canonical_meta = self._normalize_chunk_metadata(
+            base_meta=base_meta,
+            content=content,
+            source_type=source_type,
+            source_path=source_path,
+            chunk_title=chunk_title,
+            doc_class=doc_class,
+            language=language,
+            doc_hash=doc_hash,
+            doc_version=doc_version,
+            source_updated_at=source_updated_at,
+            chunk_no=chunk_no,
+        )
+        return {
+            "metadata": canonical_meta,
+            "metadata_json": dict(canonical_meta),
+            "chunk_columns": self._chunk_columns_from_metadata(canonical_meta),
+        }
 
     def _upsert_document(
         self,
@@ -287,10 +460,11 @@ class IngestionService:
 
         # Использовать batch insert для лучшей производительности
         chunks_data = []
-        for chunk in chunks:
+        for chunk_no, chunk in enumerate(chunks, start=1):
             content = chunk.get("content", "")
-            base_meta = self._normalize_chunk_metadata(
+            chunk_payload = self._build_canonical_chunk_payload(
                 base_meta=dict(chunk.get("metadata") or {}),
+                content=content,
                 source_type="web",
                 source_path=url,
                 chunk_title=str(chunk.get("title") or url),
@@ -299,8 +473,8 @@ class IngestionService:
                 doc_hash=None,
                 doc_version=doc_version,
                 source_updated_at=source_updated_at,
+                chunk_no=chunk_no,
             )
-
             chunks_data.append({
                 'knowledge_base_id': kb_id,
                 'content': content,
@@ -308,7 +482,9 @@ class IngestionService:
                 'version': doc_version,
                 'source_type': "web",
                 'source_path': url,
-                'metadata': base_meta,
+                'metadata': chunk_payload["metadata"],
+                'metadata_json': chunk_payload["metadata_json"],
+                'chunk_columns': chunk_payload["chunk_columns"],
             })
         
         # Добавить все чанки пакетно
@@ -390,6 +566,8 @@ class IngestionService:
         pages = stats.get("pages_processed", 0)
         added = stats.get("chunks_added", 0)
         wiki_root = stats.get("wiki_root", wiki_url)
+        crawl_mode = str(stats.get("crawl_mode", "html") or "html")
+        git_fallback_attempted = bool(stats.get("git_fallback_attempted", False))
 
         log = KnowledgeImportLog(
             knowledge_base_id=kb_id,
@@ -415,6 +593,8 @@ class IngestionService:
             "pages_processed": pages,
             "chunks_added": added,
             "wiki_root": wiki_root,
+            "crawl_mode": crawl_mode,
+            "git_fallback_attempted": git_fallback_attempted,
         }
 
     def ingest_wiki_git(
@@ -595,10 +775,11 @@ class IngestionService:
 
                     # Использовать batch insert для лучшей производительности
                     chunks_data = []
-                    for chunk in chunks:
+                    for chunk_no, chunk in enumerate(chunks, start=1):
                         content = chunk.get("content", "")
-                        base_meta = self._normalize_chunk_metadata(
+                        chunk_payload = self._build_canonical_chunk_payload(
                             base_meta=dict(chunk.get("metadata") or {}),
+                            content=content,
                             source_type=inner_ext_clean or "unknown",
                             source_path=source_path,
                             chunk_title=str(chunk.get("title") or name),
@@ -607,16 +788,20 @@ class IngestionService:
                             doc_hash=doc_hash,
                             doc_version=doc_version,
                             source_updated_at=source_updated_at,
+                            chunk_no=chunk_no,
                         )
+                        base_meta = chunk_payload["metadata"]
                         if inner_ext_clean in ("md", "markdown"):
                             original_title = base_meta.get("doc_title") or base_meta.get("title") or ""
                             base_meta["doc_title"] = source_path
                             if not base_meta.get("section_path") or base_meta.get("section_path") == original_title:
                                 base_meta["section_path"] = source_path
+                            base_meta["section_path_norm"] = self._normalize_section_path_norm(source_path)
                             if base_meta.get("title") == original_title or not base_meta.get("title"):
                                 base_meta["title"] = source_path
                         if self._is_code_ext(inner_ext):
                             base_meta["chunk_kind"] = "code_file"
+                            base_meta["block_type"] = "code_file"
                             base_meta["code_lang"] = self._code_lang_from_ext(inner_ext)
 
                         chunks_data.append({
@@ -627,6 +812,8 @@ class IngestionService:
                             'source_type': inner_ext_clean or "unknown",
                             'source_path': source_path,
                             'metadata': base_meta,
+                            'metadata_json': dict(base_meta),
+                            'chunk_columns': self._chunk_columns_from_metadata(base_meta),
                         })
                     
                     # Добавить все чанки пакетно
@@ -725,10 +912,11 @@ class IngestionService:
             )
             source_updated_at = datetime.now(timezone.utc).isoformat()
             chunks_data = []
-            for chunk in chunks:
+            for chunk_no, chunk in enumerate(chunks, start=1):
                 content = chunk.get("content", "")
-                base_meta = self._normalize_chunk_metadata(
+                chunk_payload = self._build_canonical_chunk_payload(
                     base_meta=dict(chunk.get("metadata") or {}),
+                    content=content,
                     source_type="chat",
                     source_path=source_path,
                     chunk_title=str(chunk.get("title") or source_path),
@@ -737,6 +925,7 @@ class IngestionService:
                     doc_hash=doc_hash,
                     doc_version=doc_version,
                     source_updated_at=source_updated_at,
+                    chunk_no=chunk_no,
                 )
                 chunks_data.append({
                     "knowledge_base_id": kb_id,
@@ -745,7 +934,9 @@ class IngestionService:
                     "version": doc_version,
                     "source_type": "chat",
                     "source_path": source_path,
-                    "metadata": base_meta,
+                    "metadata": chunk_payload["metadata"],
+                    "metadata_json": chunk_payload["metadata_json"],
+                    "chunk_columns": chunk_payload["chunk_columns"],
                 })
             if chunks_data:
                 rag_system.add_chunks_batch(chunks_data)
@@ -813,10 +1004,11 @@ class IngestionService:
 
         # Использовать batch insert для лучшей производительности
         chunks_data = []
-        for chunk in chunks:
+        for chunk_no, chunk in enumerate(chunks, start=1):
             content = chunk.get("content", "")
-            base_meta = self._normalize_chunk_metadata(
+            chunk_payload = self._build_canonical_chunk_payload(
                 base_meta=dict(chunk.get("metadata") or {}),
+                content=content,
                 source_type=file_type or "unknown",
                 source_path=source_path,
                 chunk_title=str(chunk.get("title") or source_path),
@@ -825,16 +1017,20 @@ class IngestionService:
                 doc_hash=doc_hash,
                 doc_version=doc_version,
                 source_updated_at=source_updated_at,
+                chunk_no=chunk_no,
             )
+            base_meta = chunk_payload["metadata"]
             if file_type in ("md", "markdown"):
                 original_title = base_meta.get("doc_title") or base_meta.get("title") or ""
                 base_meta["doc_title"] = source_path
                 if not base_meta.get("section_path") or base_meta.get("section_path") == original_title:
                     base_meta["section_path"] = source_path
+                base_meta["section_path_norm"] = self._normalize_section_path_norm(source_path)
                 if base_meta.get("title") == original_title or not base_meta.get("title"):
                     base_meta["title"] = source_path
             if self._is_code_ext(ext):
                 base_meta["chunk_kind"] = "code_file"
+                base_meta["block_type"] = "code_file"
                 base_meta["code_lang"] = self._code_lang_from_ext(ext)
 
             chunks_data.append({
@@ -845,6 +1041,8 @@ class IngestionService:
                 'source_type': file_type or "unknown",
                 'source_path': source_path,
                 'metadata': base_meta,
+                'metadata_json': dict(base_meta),
+                'chunk_columns': self._chunk_columns_from_metadata(base_meta),
             })
         
         # Добавить все чанки пакетно
@@ -1000,10 +1198,11 @@ class IngestionService:
                 )
 
                 chunks_data = []
-                for chunk in chunks:
+                for chunk_no, chunk in enumerate(chunks, start=1):
                     content = chunk.get("content", "")
-                    base_meta = self._normalize_chunk_metadata(
+                    chunk_payload = self._build_canonical_chunk_payload(
                         base_meta=dict(chunk.get("metadata") or {}),
+                        content=content,
                         source_type="code",
                         source_path=source_path,
                         chunk_title=rel_path,
@@ -1012,8 +1211,11 @@ class IngestionService:
                         doc_hash=doc_hash,
                         doc_version=doc_version,
                         source_updated_at=source_updated_at,
+                        chunk_no=chunk_no,
                     )
+                    base_meta = chunk_payload["metadata"]
                     base_meta["chunk_kind"] = "code_file"
+                    base_meta["block_type"] = "code_file"
                     base_meta["code_lang"] = self._code_lang_from_ext(ext)
                     base_meta["file_path"] = rel_path
                     base_meta["repo_root"] = repo_prefix
@@ -1026,6 +1228,8 @@ class IngestionService:
                         "source_type": "code",
                         "source_path": source_path,
                         "metadata": base_meta,
+                        "metadata_json": dict(base_meta),
+                        "chunk_columns": self._chunk_columns_from_metadata(base_meta),
                     })
 
                 if chunks_data:
@@ -1145,24 +1349,28 @@ class IngestionService:
             source_path=source_path,
         )
 
+        image_payload = self._build_canonical_chunk_payload(
+            base_meta={"file_id": file_id},
+            content=processed_text,
+            source_type="image",
+            source_path=source_path,
+            chunk_title=source_path,
+            doc_class=doc_class,
+            language=doc_language,
+            doc_hash=doc_hash,
+            doc_version=doc_version,
+            source_updated_at=source_updated_at,
+            chunk_no=1,
+        )
+
         rag_system.add_chunk(
             knowledge_base_id=kb_id,
             content=processed_text,
             source_type="image",
             source_path=source_path,
-            metadata={
-                **self._normalize_chunk_metadata(
-                    base_meta={"file_id": file_id},
-                    source_type="image",
-                    source_path=source_path,
-                    chunk_title=source_path,
-                    doc_class=doc_class,
-                    language=doc_language,
-                    doc_hash=doc_hash,
-                    doc_version=doc_version,
-                    source_updated_at=source_updated_at,
-                ),
-            },
+            metadata=image_payload["metadata"],
+            metadata_json=image_payload["metadata_json"],
+            chunk_columns=image_payload["chunk_columns"],
             document_id=document_id,
             version=doc_version,
         )

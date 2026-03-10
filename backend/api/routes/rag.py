@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
 from datetime import datetime
 from uuid import uuid4
 from time import perf_counter
@@ -26,10 +26,18 @@ from backend.schemas.rag import (
 )
 
 # Используем существующую RAG-систему и AI-менеджер из основного проекта.
-from shared.rag_system import rag_system  # type: ignore
+from shared.rag_system import (  # type: ignore
+    rag_system,
+    build_query_focused_excerpt,
+    describe_context_chunk,
+    merge_multi_query_candidates,
+)
 from shared.ai_providers import ai_manager  # type: ignore
 from shared.utils import create_prompt_with_language, normalize_wiki_url_for_display  # type: ignore
 from shared.rag_safety import (  # type: ignore
+    assess_query_security,
+    build_security_refusal_message,
+    find_poisoned_context_rows,
     strip_unknown_citations,
     strip_untrusted_urls,
     sanitize_commands_in_answer,
@@ -46,6 +54,15 @@ from backend.services.rag_eval_service import rag_eval_service
 
 
 router = APIRouter(prefix="/rag", tags=["rag"])
+
+_CONTEXT_TRACE_SELECTED_KEY = "_diag_context_selected"
+_CONTEXT_TRACE_RANK_KEY = "_diag_context_rank"
+_CONTEXT_TRACE_REASON_KEY = "_diag_context_reason"
+_CONTEXT_TRACE_ANCHOR_RANK_KEY = "_diag_context_anchor_rank"
+_PROVIDER_ERROR_PREFIXES = (
+    "Ошибка подключения к ",
+    "Ошибка при обращении к ",
+)
 
 
 def _safe_json_dumps(value: Any) -> Optional[str]:
@@ -98,6 +115,20 @@ def _coerce_positive_int(value: Any) -> Optional[int]:
     except Exception:
         return None
     return coerced if coerced > 0 else None
+
+
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"1", "true", "yes", "y"}:
+            return True
+        if token in {"0", "false", "no", "n"}:
+            return False
+    return None
 
 
 def _normalize_trace_token(value: Any, *, default: str = "unknown", max_len: int = 32) -> str:
@@ -167,6 +198,405 @@ def _collect_grounded_url_allowlist(results: Optional[List[Dict[str, Any]]]) -> 
     return allowlist
 
 
+def _build_rag_sources(rows: List[dict]) -> List[RAGSource]:
+    sources: list[RAGSource] = []
+    seen_source_keys: set = set()
+    for chunk in rows:
+        try:
+            metadata = chunk.get("metadata") or {}
+            _page = metadata.get("page_no", metadata.get("page"))
+            _page = _page if isinstance(_page, int) else None
+            _section = (
+                metadata.get("section_title")
+                or metadata.get("section_path")
+                or chunk.get("title")
+                or None
+            )
+            _path = chunk.get("source_path") or metadata.get("source_path") or ""
+            _type = chunk.get("source_type") or metadata.get("source_type") or ""
+            _key = (_path.lower(), _page)
+            if _key in seen_source_keys:
+                continue
+            seen_source_keys.add(_key)
+            sources.append(
+                RAGSource(
+                    source_path=_path,
+                    source_type=_type,
+                    score=float(chunk.get("rerank_score") or chunk.get("distance", 0.0)),
+                    page_number=_page,
+                    section_title=_section,
+                )
+            )
+        except (ValueError, TypeError) as e:
+            logger.warning("Error processing source chunk: %s", e, exc_info=True)
+            continue
+    return sources
+
+
+def _classify_provider_transport_error(answer: str) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return ""
+    if text == "Провайдер ИИ не найден":
+        return "provider_unavailable"
+    if any(text.startswith(prefix) for prefix in _PROVIDER_ERROR_PREFIXES):
+        lowered = text.lower()
+        if "timed out" in lowered or "timeout" in lowered or "таймаут" in lowered:
+            return "timeout"
+        if re.search(r":\s*503\b", lowered):
+            return "provider_unavailable"
+        return "provider_transport_error"
+    return ""
+
+
+def _format_fallback_chunk_label(row: Dict[str, Any]) -> str:
+    info = describe_context_chunk(row)
+    parts: List[str] = []
+    doc_title = str(info.get("doc_title") or "").strip()
+    source_path = str(info.get("source_path") or "").strip()
+    page_no = info.get("page_no")
+    section_title = str(info.get("section_title") or "").strip()
+    if doc_title:
+        parts.append(doc_title)
+    elif source_path:
+        parts.append(source_path.rsplit("/", 1)[-1] or source_path)
+    if isinstance(page_no, int):
+        parts.append(f"стр. {page_no}")
+    if section_title and section_title not in parts:
+        parts.append(section_title)
+    return " | ".join(parts) if parts else "Релевантный фрагмент"
+
+
+def _build_extractive_fallback_answer(
+    query: str,
+    rows: List[Dict[str, Any]],
+    *,
+    failure_reason: str,
+) -> str:
+    if failure_reason == "timeout":
+        intro = "Модель ответа сейчас недоступна или отвечает слишком долго."
+    else:
+        intro = "Модель ответа сейчас временно недоступна."
+
+    rendered_items: List[str] = []
+    seen_excerpts: set[str] = set()
+    for row in rows or []:
+        info = describe_context_chunk(row)
+        excerpt = build_query_focused_excerpt(
+            query,
+            str(info.get("content") or row.get("content") or ""),
+            max_length=420,
+            chunk_kind=str(info.get("chunk_kind") or "text"),
+        ).strip()
+        if not excerpt:
+            continue
+        normalized_excerpt = excerpt.lower()
+        if normalized_excerpt in seen_excerpts:
+            continue
+        seen_excerpts.add(normalized_excerpt)
+        label = _format_fallback_chunk_label(row)
+        rendered_items.append(f"{len(rendered_items) + 1}. {label}\n{excerpt}")
+        if len(rendered_items) >= 3:
+            break
+
+    if not rendered_items:
+        return f"{intro} Не удалось сформировать ответ модели, но релевантные источники найдены ниже."
+
+    return (
+        f"{intro} Показываю наиболее релевантные фрагменты из базы знаний.\n\n"
+        + "\n\n".join(rendered_items)
+    )
+
+
+def _postprocess_grounded_answer(
+    answer: str,
+    *,
+    context_text: str,
+    grounded_url_allowlist: List[str],
+) -> str:
+    sanitized = strip_unknown_citations(answer, context_text)
+    sanitized = strip_untrusted_urls(
+        sanitized,
+        context_text,
+        allowed_urls=grounded_url_allowlist,
+    )
+    sanitized = sanitize_commands_in_answer(sanitized, context_text)
+    return sanitized
+
+
+def _normalize_query_text(query: str) -> str:
+    return re.sub(r"\s+", " ", str(query or "")).strip()
+
+
+def _extract_query_hints(query: str) -> Dict[str, Any]:
+    q = _normalize_query_text(query).lower()
+    point_numbers = re.findall(r"(?:пункт[а-я]*|section|clause)\s+(\d+)", q)
+    definition_term = ""
+    prefixes = (
+        "как в документе определяется ",
+        "как определяется ",
+        "что такое ",
+        "что называется ",
+        "что включает ",
+        "what is ",
+        "what does ",
+        "define ",
+    )
+    for prefix in prefixes:
+        if q.startswith(prefix):
+            definition_term = q[len(prefix):].strip(" ?!.,:;")
+            break
+    if not definition_term:
+        m = re.search(r"определ[а-я]*\s+([а-яёa-z0-9\-\s]{3,})$", q)
+        if m:
+            definition_term = (m.group(1) or "").strip(" ?!.,:;")
+    if definition_term:
+        definition_term = re.sub(r"^(в документе|в стратегии)\s+", "", definition_term).strip()
+        definition_term = re.sub(r"\s+", " ", definition_term).strip(" ?!.,:;")
+    stop_words = {
+        "about",
+        "define",
+        "please",
+        "такое",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+        "подскажи",
+        "расскажи",
+        "нужно",
+        "можно",
+        "что",
+        "как",
+        "когда",
+        "кто",
+        "какой",
+        "какая",
+        "какие",
+        "каких",
+        "какому",
+        "какими",
+        "где",
+        "для",
+        "чего",
+        "чему",
+        "почему",
+        "зачем",
+        "каков",
+        "какова",
+        "каковы",
+        "пункте",
+        "документе",
+        "стратегии",
+        "искусственного",
+        "интеллекта",
+        "развития",
+    }
+    fact_terms: List[str] = []
+    for token in re.findall(r"[а-яёa-z0-9]{3,}", q):
+        if token in stop_words or token in fact_terms:
+            continue
+        fact_terms.append(token)
+    year_tokens = re.findall(r"\b(20\d{2})\b", q)
+    key_phrase_candidates = (
+        "ежегодный объем",
+        "объем услуг",
+        "совокупной мощности",
+        "мощности суперкомпьютеров",
+        "совокупный прирост ввп",
+        "прирост ввп",
+        "на какой период",
+        "период рассчитана",
+        "федеральные законы",
+        "правовой основе",
+        "механизмы реализации",
+        "основные принципы",
+        "корректировке стратегии",
+        "принимает решение",
+    )
+    key_phrases = [phrase for phrase in key_phrase_candidates if phrase in q]
+    metric_query = any(
+        marker in q
+        for marker in (
+            "целевой",
+            "показател",
+            "объем",
+            "мощност",
+            "ввп",
+            "прирост",
+            "период",
+            "как часто",
+            "федеральные законы",
+            "механизмы реализации",
+            "основные принципы",
+        )
+    )
+    strict_fact_terms = [t for t in fact_terms if len(t) >= 5][:8]
+    prefer_numeric = metric_query and any(
+        marker in q for marker in ("целевой", "показател", "объем", "мощност", "ввп", "прирост", "сколько")
+    )
+    return {
+        "original_query": q,
+        "point_numbers": point_numbers,
+        "definition_term": definition_term,
+        "fact_terms": fact_terms[:10],
+        "year_tokens": year_tokens,
+        "metric_query": metric_query,
+        "prefer_numeric": prefer_numeric,
+        "strict_fact_terms": strict_fact_terms,
+        "key_phrases": key_phrases[:5],
+    }
+
+
+def _build_controlled_query_variants(
+    query: str,
+    hints: Optional[Dict[str, Any]],
+    *,
+    max_variants: int = 3,
+) -> List[Dict[str, str]]:
+    original = _normalize_query_text(query)
+    if not original:
+        return []
+
+    normalized_original = original.lower()
+    variants: List[Dict[str, str]] = [{"query": original, "mode": "original", "reason": "original"}]
+    seen = {normalized_original}
+    hints = hints or {}
+    is_cyrillic = bool(re.search(r"[а-яё]", normalized_original))
+    definition_term = _normalize_query_text(hints.get("definition_term") or "").lower()
+    point_numbers = [str(v).strip() for v in (hints.get("point_numbers") or []) if str(v).strip()]
+    key_phrases = [_normalize_query_text(v).lower() for v in (hints.get("key_phrases") or []) if str(v).strip()]
+    strict_fact_terms = [_normalize_query_text(v).lower() for v in (hints.get("strict_fact_terms") or []) if str(v).strip()]
+    fact_terms = [_normalize_query_text(v).lower() for v in (hints.get("fact_terms") or []) if str(v).strip()]
+    year_tokens = [str(v).strip() for v in (hints.get("year_tokens") or []) if str(v).strip()]
+
+    def add_variant(candidate: str, mode: str, reason: str) -> None:
+        text = _normalize_query_text(candidate)
+        if len(text) < 3:
+            return
+        normalized = text.lower()
+        if normalized in seen:
+            return
+        variants.append({"query": text, "mode": mode, "reason": reason})
+        seen.add(normalized)
+
+    if definition_term:
+        add_variant(
+            f"определение {definition_term}" if is_cyrillic else f"{definition_term} definition",
+            "definition_focus",
+            "definition_term",
+        )
+
+    focus_terms: List[str] = []
+    for token in [*key_phrases, *strict_fact_terms, *fact_terms]:
+        if token and token not in focus_terms:
+            focus_terms.append(token)
+
+    if point_numbers:
+        point_no = point_numbers[0]
+        point_prefix = f"пункт {point_no}" if is_cyrillic else f"section {point_no}"
+        add_variant(" ".join([point_prefix, *focus_terms[:3]]).strip(), "point_focus", "point_number")
+
+    fact_focus_terms = [*key_phrases[:2], *strict_fact_terms[:3], *year_tokens[:1]]
+    if fact_focus_terms:
+        add_variant(" ".join(fact_focus_terms), "fact_focus", "content_terms")
+    elif len(fact_terms) >= 2 and len(normalized_original.split()) >= 4:
+        add_variant(" ".join(fact_terms[:5]), "keyword_focus", "content_terms")
+
+    return variants[: max(1, int(max_variants))]
+
+
+def _should_enable_controlled_rewrites(query: str, hints: Optional[Dict[str, Any]]) -> bool:
+    normalized = _normalize_query_text(query).lower()
+    if not normalized:
+        return False
+    token_count = len(re.findall(r"[а-яёa-z0-9]+", normalized))
+    if token_count < 2:
+        return False
+
+    hints = hints or {}
+    definition_term = _normalize_query_text(hints.get("definition_term") or "")
+    point_numbers = [str(v).strip() for v in (hints.get("point_numbers") or []) if str(v).strip()]
+    metric_query = bool(hints.get("metric_query"))
+    key_phrases = [str(v).strip() for v in (hints.get("key_phrases") or []) if str(v).strip()]
+    conversational_prefixes = (
+        "подскажи",
+        "расскажи",
+        "где найти",
+        "как найти",
+        "how do i",
+        "where can i",
+        "can i",
+    )
+
+    if definition_term:
+        return token_count <= 7
+    if point_numbers:
+        return token_count <= 8
+    if metric_query:
+        return token_count <= 6 and len(key_phrases) <= 1
+    if any(normalized.startswith(prefix) for prefix in conversational_prefixes):
+        return token_count <= 10
+    return token_count <= 7
+
+
+def _run_controlled_multi_query_search(
+    *,
+    query: str,
+    knowledge_base_id: Optional[int],
+    top_k: int,
+    hints: Optional[Dict[str, Any]],
+    enable_rewrites: bool,
+) -> tuple[List[dict], Dict[str, Any]]:
+    variants = (
+        _build_controlled_query_variants(query, hints, max_variants=3)
+        if enable_rewrites
+        else [{"query": _normalize_query_text(query), "mode": "original", "reason": "original"}]
+    )
+    if not variants:
+        variants = [{"query": _normalize_query_text(query), "mode": "original", "reason": "original"}]
+
+    batches: List[List[Dict[str, Any]]] = []
+    rewrite_queries: List[str] = []
+    rewrite_modes: List[str] = []
+    rewrite_reasons: List[str] = []
+
+    for variant in variants:
+        variant_query = variant.get("query") or _normalize_query_text(query)
+        batch = rag_system.search(
+            query=variant_query,
+            knowledge_base_id=knowledge_base_id,
+            top_k=top_k,
+        ) or []
+        annotated_batch: List[Dict[str, Any]] = []
+        for rank, item in enumerate(batch, start=1):
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            row["query_variant_mode"] = variant.get("mode") or "original"
+            row["query_variant_query"] = variant_query
+            row["query_variant_reason"] = variant.get("reason") or "original"
+            row["query_variant_rank"] = rank
+            annotated_batch.append(row)
+        batches.append(annotated_batch)
+        if (variant.get("mode") or "original") != "original":
+            rewrite_queries.append(variant_query)
+            rewrite_modes.append(str(variant.get("mode") or ""))
+            rewrite_reasons.append(str(variant.get("reason") or ""))
+
+    merged_results = merge_multi_query_candidates(batches) if len(batches) > 1 else (batches[0] if batches else [])
+    trace = {
+        "query_rewrite_enabled": bool(enable_rewrites),
+        "multi_query_applied": len(variants) > 1,
+        "query_variant_count": len(variants),
+        "query_rewrite_variants": rewrite_queries,
+        "query_rewrite_modes": rewrite_modes,
+        "query_rewrite_reasons": rewrite_reasons,
+    }
+    return merged_results, trace
+
+
 def _extract_hint_mode(hints: Optional[Dict[str, Any]], key: str) -> Optional[str]:
     if not isinstance(hints, dict):
         return None
@@ -201,6 +631,452 @@ def _derive_degraded_mode(
     if any(origin in {"bm25", "keyword", "legacy"} for origin in origins):
         return True, "qdrant_unavailable_or_empty"
     return True, "dense_channel_unavailable"
+
+
+def _build_context_trace_tokens(row: dict) -> List[str]:
+    info = describe_context_chunk(row)
+    tokens: List[str] = []
+    seen: set[str] = set()
+
+    def add_token(value: str) -> None:
+        token = str(value or "").strip()
+        if not token or token in seen:
+            return
+        seen.add(token)
+        tokens.append(token)
+
+    identity = str(info.get("identity") or "").strip()
+    if identity:
+        add_token(f"identity:{identity}")
+    chunk_hash = str(info.get("chunk_hash") or "").strip()
+    if chunk_hash:
+        add_token(f"chunk_hash:{chunk_hash}")
+
+    source_path = str(info.get("source_path") or "").strip().lower()
+    scope_key = str(info.get("scope_key") or "").strip().lower()
+    chunk_no = _coerce_positive_int(info.get("chunk_no"))
+    page_no = _coerce_positive_int(info.get("page_no"))
+
+    if source_path and chunk_no is not None:
+        add_token(f"path_chunk:{source_path}:{chunk_no}")
+    if source_path and scope_key and chunk_no is not None:
+        add_token(f"path_scope_chunk:{source_path}:{scope_key}:{chunk_no}")
+    if source_path and page_no is not None and chunk_no is not None:
+        add_token(f"path_page_chunk:{source_path}:{page_no}:{chunk_no}")
+
+    normalized_text = " ".join(str(row.get("content") or "").split())[:240]
+    if source_path and normalized_text:
+        add_token(f"path_text:{source_path}:{normalized_text}")
+    elif normalized_text:
+        add_token(f"text:{normalized_text}")
+    return tokens
+
+
+def _load_doc_chunks_for_context(
+    db: Session,
+    doc_id: str,
+    *,
+    kb_id: Optional[int] = None,
+) -> List[dict]:
+    if not doc_id:
+        return []
+    if not hasattr(db, "query"):
+        return []
+    query = (
+        db.query(KnowledgeChunk)
+        .filter(KnowledgeChunk.source_path == doc_id)
+        .filter(KnowledgeChunk.is_deleted == False)
+    )
+    if kb_id is not None:
+        query = query.filter(KnowledgeChunk.knowledge_base_id == kb_id)
+    rows = query.order_by(KnowledgeChunk.id.asc()).all()
+    chunks: List[dict] = []
+    for row in rows:
+        try:
+            meta = row.chunk_metadata
+            meta_obj = json.loads(meta) if meta else {}
+        except Exception:
+            meta_obj = {}
+        chunks.append(
+            {
+                "id": row.id,
+                "content": row.content or "",
+                "metadata": meta_obj,
+                "source_type": row.source_type,
+                "source_path": row.source_path,
+            }
+        )
+
+    def sort_key(item: dict) -> tuple[int, int]:
+        info = describe_context_chunk(item)
+        chunk_no = info.get("chunk_no")
+        return (
+            int(chunk_no) if isinstance(chunk_no, int) else int(item.get("id") or 0),
+            int(item.get("id") or 0),
+        )
+
+    return sorted(chunks, key=sort_key)
+
+
+def _build_context_source_id(row: dict) -> str:
+    info = describe_context_chunk(row)
+    source_path = info.get("source_path") or ""
+    if source_path and ".keep" not in source_path.lower():
+        if "::" in source_path:
+            base_id = source_path.split("::")[-1]
+        elif "/" in source_path:
+            base_id = source_path.split("/")[-1]
+        else:
+            base_id = source_path
+        base_id = base_id.rsplit(".", 1)[0] if "." in base_id else base_id
+        suffix = info.get("id")
+        if suffix is None:
+            suffix = info.get("chunk_no")
+        return f"{base_id}_{suffix}" if suffix is not None else base_id
+    return str(info.get("doc_title") or "source").replace(" ", "_").lower()[:50]
+
+
+def _build_context_block(
+    *,
+    query: str,
+    row: dict,
+    base_context_length: int,
+    full_multiplier: int,
+    enable_citations: bool,
+) -> Optional[str]:
+    try:
+        info = describe_context_chunk(row)
+        chunk_kind = str(info.get("chunk_kind") or "text")
+        code_lang = ((row.get("metadata") if isinstance(row.get("metadata"), dict) else {}) or {}).get("code_lang") or ""
+        content = row.get("content") or ""
+        if chunk_kind in ("code", "code_file"):
+            max_length = base_context_length * 3
+        elif chunk_kind in ("full_page", "full_doc"):
+            max_length = base_context_length * max(1, full_multiplier)
+        elif chunk_kind == "list":
+            max_length = base_context_length * 2
+        else:
+            max_length = base_context_length
+
+        content_preview = build_query_focused_excerpt(
+            query,
+            content,
+            max_length=max_length,
+            chunk_kind=chunk_kind,
+        )
+        if not content_preview:
+            return None
+
+        context_block_parts = []
+        if enable_citations:
+            context_block_parts.append(f"SOURCE_ID: {_build_context_source_id(row)}")
+        if info.get("doc_title"):
+            context_block_parts.append(f"DOC: {info['doc_title']}")
+        if info.get("section_path"):
+            context_block_parts.append(f"SECTION: {info['section_path']}")
+        elif info.get("section_title"):
+            context_block_parts.append(f"SECTION: {info['section_title']}")
+        if chunk_kind:
+            context_block_parts.append(f"TYPE: {chunk_kind}")
+        if code_lang:
+            context_block_parts.append(f"LANG: {code_lang}")
+        context_block_parts.append("CONTENT:")
+        context_block_parts.append(content_preview)
+        context_block_parts.append("---")
+        return "\n".join(context_block_parts)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Error building context block: %s", e, exc_info=True)
+        return None
+
+
+def _resolve_doc_chunk_anchor_index(anchor: dict, doc_chunks: List[dict]) -> Optional[int]:
+    if not doc_chunks:
+        return None
+    anchor_info = describe_context_chunk(anchor)
+    anchor_text = (anchor.get("content") or "").strip()
+    for idx, candidate in enumerate(doc_chunks):
+        candidate_info = describe_context_chunk(candidate)
+        if anchor_info.get("id") is not None and anchor_info.get("id") == candidate_info.get("id"):
+            return idx
+    for idx, candidate in enumerate(doc_chunks):
+        candidate_info = describe_context_chunk(candidate)
+        if (
+            anchor_info.get("chunk_no") is not None
+            and anchor_info.get("chunk_no") == candidate_info.get("chunk_no")
+            and anchor_info.get("scope_key") == candidate_info.get("scope_key")
+        ):
+            return idx
+    for idx, candidate in enumerate(doc_chunks):
+        candidate_info = describe_context_chunk(candidate)
+        if anchor_info.get("chunk_hash") and anchor_info.get("chunk_hash") == candidate_info.get("chunk_hash"):
+            return idx
+    if not anchor_text:
+        return None
+    normalized_anchor = " ".join(anchor_text.split())[:240]
+    for idx, candidate in enumerate(doc_chunks):
+        candidate_text = " ".join(str(candidate.get("content") or "").split())[:240]
+        if candidate_text and candidate_text == normalized_anchor:
+            return idx
+    return None
+
+
+def _expand_anchor_evidence_rows(anchor: dict, doc_chunks: List[dict]) -> List[dict]:
+    if not doc_chunks:
+        return [anchor]
+    anchor_info = describe_context_chunk(anchor)
+    if anchor_info.get("chunk_kind") in {"code_file", "full_doc"}:
+        return [anchor]
+    anchor_index = _resolve_doc_chunk_anchor_index(anchor, doc_chunks)
+    if anchor_index is None:
+        return [anchor]
+
+    selected: List[tuple[int, dict, str]] = [(anchor_index, doc_chunks[anchor_index], "primary")]
+    seen_indexes = {anchor_index}
+
+    def maybe_add(index: int, reason: str) -> None:
+        if index < 0 or index >= len(doc_chunks) or index in seen_indexes:
+            return
+        candidate = doc_chunks[index]
+        candidate_info = describe_context_chunk(candidate)
+        same_scope = candidate_info.get("scope_key") == anchor_info.get("scope_key")
+        same_page = (
+            anchor_info.get("page_no") is not None
+            and anchor_info.get("page_no") == candidate_info.get("page_no")
+        )
+        same_doc = candidate_info.get("doc_key") == anchor_info.get("doc_key")
+        neighbor_distance = None
+        if anchor_info.get("chunk_no") is not None and candidate_info.get("chunk_no") is not None:
+            neighbor_distance = abs(int(anchor_info["chunk_no"]) - int(candidate_info["chunk_no"]))
+        if same_scope or same_page or (same_doc and neighbor_distance == 1):
+            selected.append((index, candidate, reason))
+            seen_indexes.add(index)
+
+    maybe_add(anchor_index - 1, "adjacent_prev")
+    maybe_add(anchor_index + 1, "adjacent_next")
+
+    same_scope_candidates: List[tuple[int, int, dict]] = []
+    for index, candidate in enumerate(doc_chunks):
+        if index in seen_indexes:
+            continue
+        candidate_info = describe_context_chunk(candidate)
+        if candidate_info.get("scope_key") != anchor_info.get("scope_key"):
+            continue
+        if anchor_info.get("chunk_no") is not None and candidate_info.get("chunk_no") is not None:
+            distance = abs(int(anchor_info["chunk_no"]) - int(candidate_info["chunk_no"]))
+            order = int(candidate_info["chunk_no"])
+        else:
+            distance = abs(anchor_index - index)
+            order = index
+        same_scope_candidates.append((distance, order, candidate))
+    same_scope_candidates.sort(key=lambda item: (item[0], item[1]))
+    for _distance, _order, candidate in same_scope_candidates[:2]:
+        candidate_index = doc_chunks.index(candidate)
+        if candidate_index in seen_indexes:
+            continue
+        selected.append((candidate_index, candidate, "section_scope"))
+        seen_indexes.add(candidate_index)
+
+    selected.sort(key=lambda item: (0 if item[2] == "primary" else 1, abs(item[0] - anchor_index), item[0]))
+    expanded_rows: List[dict] = []
+    for _index, candidate, reason in selected:
+        row = dict(candidate)
+        row["_context_reason"] = reason
+        expanded_rows.append(row)
+    return expanded_rows
+
+
+def _select_evidence_pack_rows(
+    *,
+    ranked_results: List[dict],
+    load_doc_chunks: Callable[[str], List[dict]],
+    anchor_limit: int,
+    context_limit: int,
+) -> List[dict]:
+    if not ranked_results:
+        return []
+    pack_rows: List[dict] = []
+    seen_identities: set[str] = set()
+    seen_match_tokens: set[str] = set()
+    seen_anchor_scopes: set[tuple[str, str]] = set()
+    seen_anchor_docs: set[str] = set()
+    anchor_entries: List[tuple[int, dict, List[dict]]] = []
+    anchor_rank_by_scope: Dict[tuple[str, str], int] = {}
+    anchor_rank_by_doc: Dict[str, int] = {}
+
+    def add_candidate(candidate: dict, *, reason: str, anchor_rank: Optional[int] = None) -> bool:
+        info = describe_context_chunk(candidate)
+        identity = str(info.get("identity") or "")
+        if not identity:
+            return False
+        match_tokens = _build_context_trace_tokens(candidate)
+        if identity in seen_identities:
+            return False
+        if match_tokens and any(token in seen_match_tokens for token in match_tokens):
+            return False
+        row = dict(candidate)
+        row["_context_reason"] = row.get("_context_reason") or reason
+        if anchor_rank is not None:
+            row["_context_anchor_rank"] = anchor_rank
+        seen_identities.add(identity)
+        seen_match_tokens.update(match_tokens)
+        pack_rows.append(row)
+        return True
+
+    for anchor in ranked_results:
+        anchor_info = describe_context_chunk(anchor)
+        anchor_scope = (str(anchor_info.get("doc_key") or ""), str(anchor_info.get("scope_key") or ""))
+        if anchor_scope in seen_anchor_scopes:
+            continue
+        if len(seen_anchor_scopes) >= max(1, anchor_limit):
+            break
+        seen_anchor_scopes.add(anchor_scope)
+        seen_anchor_docs.add(str(anchor_info.get("doc_key") or ""))
+        doc_id = str(anchor.get("doc_id") or anchor_info.get("source_path") or "").strip()
+        doc_chunks = load_doc_chunks(doc_id) if doc_id else []
+        expanded_rows = _expand_anchor_evidence_rows(anchor, doc_chunks)
+        if not expanded_rows:
+            expanded_rows = [anchor]
+        anchor_rank = len(anchor_entries) + 1
+        anchor_entries.append((anchor_rank, anchor, expanded_rows))
+        anchor_rank_by_scope[anchor_scope] = anchor_rank
+        doc_key = str(anchor_info.get("doc_key") or "")
+        if doc_key and doc_key not in anchor_rank_by_doc:
+            anchor_rank_by_doc[doc_key] = anchor_rank
+
+    for anchor_rank, _anchor, expanded_rows in anchor_entries:
+        if add_candidate(expanded_rows[0], reason="primary", anchor_rank=anchor_rank):
+            if len(pack_rows) >= context_limit:
+                return pack_rows
+
+    for anchor_rank, _anchor, expanded_rows in anchor_entries:
+        for candidate in expanded_rows[1:]:
+            if add_candidate(
+                candidate,
+                reason=str(candidate.get("_context_reason") or "supporting"),
+                anchor_rank=anchor_rank,
+            ):
+                if len(pack_rows) >= context_limit:
+                    return pack_rows
+
+    for candidate in ranked_results:
+        candidate_info = describe_context_chunk(candidate)
+        candidate_scope = (str(candidate_info.get("doc_key") or ""), str(candidate_info.get("scope_key") or ""))
+        if (
+            candidate_scope not in seen_anchor_scopes
+            and str(candidate_info.get("doc_key") or "") not in seen_anchor_docs
+        ):
+            continue
+        anchor_rank = (
+            anchor_rank_by_scope.get(candidate_scope)
+            or anchor_rank_by_doc.get(str(candidate_info.get("doc_key") or ""))
+        )
+        if add_candidate(candidate, reason="fallback_rank", anchor_rank=anchor_rank):
+            if len(pack_rows) >= context_limit:
+                break
+    return pack_rows
+
+
+def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict[str, Any]]) -> dict:
+    row = dict(candidate) if isinstance(candidate, dict) else {}
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    metadata_obj = dict(metadata)
+    for key in (
+        _CONTEXT_TRACE_SELECTED_KEY,
+        _CONTEXT_TRACE_RANK_KEY,
+        _CONTEXT_TRACE_REASON_KEY,
+        _CONTEXT_TRACE_ANCHOR_RANK_KEY,
+    ):
+        metadata_obj.pop(key, None)
+
+    if trace:
+        metadata_obj[_CONTEXT_TRACE_SELECTED_KEY] = True
+        metadata_obj[_CONTEXT_TRACE_RANK_KEY] = trace.get("context_rank")
+        metadata_obj[_CONTEXT_TRACE_REASON_KEY] = trace.get("context_reason")
+        if trace.get("context_anchor_rank") is not None:
+            metadata_obj[_CONTEXT_TRACE_ANCHOR_RANK_KEY] = trace.get("context_anchor_rank")
+
+    row["metadata"] = metadata_obj
+    return row
+
+
+def _extract_context_trace_from_metadata(metadata_obj: Optional[Dict[str, Any]]) -> tuple[bool, Optional[int], Optional[str], Optional[int], Optional[Dict[str, Any]]]:
+    if not isinstance(metadata_obj, dict):
+        return False, None, None, None, metadata_obj
+    clean_metadata = dict(metadata_obj)
+    included_in_context = _coerce_bool(clean_metadata.pop(_CONTEXT_TRACE_SELECTED_KEY, None))
+    context_rank = _coerce_positive_int(clean_metadata.pop(_CONTEXT_TRACE_RANK_KEY, None))
+    context_reason_raw = clean_metadata.pop(_CONTEXT_TRACE_REASON_KEY, None)
+    context_reason = str(context_reason_raw).strip()[:64] if context_reason_raw is not None else None
+    context_anchor_rank = _coerce_positive_int(clean_metadata.pop(_CONTEXT_TRACE_ANCHOR_RANK_KEY, None))
+    return bool(included_in_context), context_rank, context_reason, context_anchor_rank, clean_metadata
+
+
+def _merge_context_diagnostics_candidates(
+    *,
+    ranked_results: List[dict],
+    included_context_rows: List[dict],
+) -> List[dict]:
+    if not ranked_results and not included_context_rows:
+        return []
+
+    trace_by_token: Dict[str, Dict[str, Any]] = {}
+    included_entries: List[tuple[set[str], dict]] = []
+    for context_rank, row in enumerate(included_context_rows, start=1):
+        trace = {
+            "context_rank": context_rank,
+            "context_reason": str(row.get("_context_reason") or "primary"),
+            "context_anchor_rank": _coerce_positive_int(row.get("_context_anchor_rank")),
+        }
+        tokens = set(_build_context_trace_tokens(row))
+        decorated = _decorate_candidate_with_context_trace(row, trace)
+        included_entries.append((tokens, decorated))
+        for token in tokens:
+            trace_by_token.setdefault(token, trace)
+
+    merged_candidates: List[dict] = []
+    ranked_entries = [
+        (index, set(_build_context_trace_tokens(candidate)), candidate)
+        for index, candidate in enumerate(ranked_results or [])
+    ]
+    consumed_ranked_indexes: set[int] = set()
+    emitted_token_sets: List[set[str]] = []
+
+    for tokens, decorated in included_entries:
+        matched_entry: Optional[tuple[int, set[str], dict]] = None
+        for entry in ranked_entries:
+            index, candidate_tokens, _candidate = entry
+            if index in consumed_ranked_indexes:
+                continue
+            if tokens and candidate_tokens and tokens & candidate_tokens:
+                matched_entry = entry
+                break
+        if matched_entry is not None:
+            index, candidate_tokens, candidate = matched_entry
+            consumed_ranked_indexes.add(index)
+            trace = None
+            for token in tokens:
+                if token in trace_by_token:
+                    trace = trace_by_token[token]
+                    break
+            merged_candidates.append(_decorate_candidate_with_context_trace(candidate, trace))
+            emitted_token_sets.append(candidate_tokens or tokens)
+            continue
+
+        support_candidate = dict(decorated)
+        support_candidate["origin"] = support_candidate.get("origin") or "context_support"
+        support_candidate["channel"] = support_candidate.get("channel") or "context_support"
+        merged_candidates.append(support_candidate)
+        emitted_token_sets.append(tokens)
+
+    for index, tokens, candidate in ranked_entries:
+        if index in consumed_ranked_indexes:
+            continue
+        if tokens and any(tokens & existing for existing in emitted_token_sets):
+            continue
+        merged_candidates.append(_decorate_candidate_with_context_trace(candidate, None))
+        emitted_token_sets.append(tokens)
+
+    return merged_candidates
 
 
 def _persist_retrieval_logs(
@@ -246,6 +1122,8 @@ def _persist_retrieval_logs(
                 degraded_reason=(degraded_reason or "")[:120] or None,
             )
         )
+        if hasattr(db, "flush"):
+            db.flush()
         for rank, candidate in enumerate((candidates or [])[:20], start=1):
             candidate_trace = dict(candidate) if isinstance(candidate, dict) else {}
             metadata_obj = candidate_trace.get("metadata") if isinstance(candidate_trace, dict) else {}
@@ -355,13 +1233,28 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         if single_page_mode:
             top_k_for_context = min(top_k_for_context, max(1, single_page_top_k))
 
+        use_legacy_query_heuristics = (not orchestrator_v4_enabled) and legacy_query_heuristics_enabled
+        retrieval_core_mode = "legacy_heuristic" if use_legacy_query_heuristics else "generalized"
+        precomputed_query_hints = _extract_query_hints(payload.query)
+        precomputed_query_hints["retrieval_core_mode"] = retrieval_core_mode
+
         # Поиск кандидатов в RAG (dense + keyword + optional rerank)
         logger.debug("RAG query: query=%r, kb_id=%s, top_k=%s", payload.query, kb_id, top_k_search)
-        results = rag_system.search(
-            query=payload.query,
-            knowledge_base_id=kb_id,
-            top_k=top_k_search,
-        ) or []
+        if use_legacy_query_heuristics:
+            results = rag_system.search(
+                query=payload.query,
+                knowledge_base_id=kb_id,
+                top_k=top_k_search,
+            ) or []
+        else:
+            results, rewrite_trace = _run_controlled_multi_query_search(
+                query=payload.query,
+                knowledge_base_id=kb_id,
+                top_k=top_k_search,
+                hints=precomputed_query_hints,
+                enable_rewrites=_should_enable_controlled_rewrites(payload.query, precomputed_query_hints),
+            )
+            precomputed_query_hints.update(rewrite_trace)
         logger.debug("RAG search returned %d results", len(results))
         def _parse_dt(value: Optional[str]) -> Optional[datetime]:
             if not value:
@@ -485,112 +1378,6 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             if any(term in q for term in factoid_terms):
                 return "FACTOID"
             return "GENERAL"
-
-        def extract_query_hints(query: str) -> Dict[str, Any]:
-            q = re.sub(r"\s+", " ", (query or "").lower()).strip()
-            point_numbers = re.findall(r"пункт[а-я]*\s+(\d+)", q)
-            definition_term = ""
-            prefixes = (
-                "как в документе определяется ",
-                "как определяется ",
-                "что такое ",
-                "что называется ",
-                "что включает ",
-            )
-            for prefix in prefixes:
-                if q.startswith(prefix):
-                    definition_term = q[len(prefix):].strip(" ?!.,:;")
-                    break
-            if not definition_term:
-                m = re.search(r"определ[а-я]*\s+([а-яёa-z0-9\-\s]{3,})$", q)
-                if m:
-                    definition_term = (m.group(1) or "").strip(" ?!.,:;")
-            if definition_term:
-                definition_term = re.sub(r"^(в документе|в стратегии)\s+", "", definition_term).strip()
-                definition_term = re.sub(r"\s+", " ", definition_term).strip(" ?!.,:;")
-            stop_words = {
-                "что",
-                "как",
-                "когда",
-                "кто",
-                "какой",
-                "какая",
-                "какие",
-                "каких",
-                "какому",
-                "какими",
-                "где",
-                "для",
-                "чего",
-                "чему",
-                "почему",
-                "зачем",
-                "каков",
-                "какова",
-                "каковы",
-                "пункте",
-                "документе",
-                "стратегии",
-                "искусственного",
-                "интеллекта",
-                "развития",
-            }
-            fact_terms = []
-            for token in re.findall(r"[а-яёa-z0-9]{3,}", q):
-                if token in stop_words:
-                    continue
-                if token in fact_terms:
-                    continue
-                fact_terms.append(token)
-            year_tokens = re.findall(r"\b(20\d{2})\b", q)
-            key_phrase_candidates = (
-                "ежегодный объем",
-                "объем услуг",
-                "совокупной мощности",
-                "мощности суперкомпьютеров",
-                "совокупный прирост ввп",
-                "прирост ввп",
-                "на какой период",
-                "период рассчитана",
-                "федеральные законы",
-                "правовой основе",
-                "механизмы реализации",
-                "основные принципы",
-                "корректировке стратегии",
-                "принимает решение",
-            )
-            key_phrases = [phrase for phrase in key_phrase_candidates if phrase in q]
-            metric_query = any(
-                marker in q
-                for marker in (
-                    "целевой",
-                    "показател",
-                    "объем",
-                    "мощност",
-                    "ввп",
-                    "прирост",
-                    "период",
-                    "как часто",
-                    "федеральные законы",
-                    "механизмы реализации",
-                    "основные принципы",
-                )
-            )
-            strict_fact_terms = [t for t in fact_terms if len(t) >= 5][:8]
-            prefer_numeric = metric_query and any(
-                marker in q for marker in ("целевой", "показател", "объем", "мощност", "ввп", "прирост", "сколько")
-            )
-            return {
-                "original_query": q,
-                "point_numbers": point_numbers,
-                "definition_term": definition_term,
-                "fact_terms": fact_terms[:10],
-                "year_tokens": year_tokens,
-                "metric_query": metric_query,
-                "prefer_numeric": prefer_numeric,
-                "strict_fact_terms": strict_fact_terms,
-                "key_phrases": key_phrases[:5],
-            }
 
         def get_doc_id(result: dict) -> str:
             source_path = result.get("source_path") or ""
@@ -925,164 +1712,14 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             return fallback_results[:20]
 
         def load_doc_chunks(doc_id: str) -> List[dict]:
-            rows = (
-                db.query(KnowledgeChunk)
-                .filter(KnowledgeChunk.knowledge_base_id == kb_id)
-                .filter(KnowledgeChunk.source_path == doc_id)
-                .filter(KnowledgeChunk.is_deleted == False)
-                .order_by(KnowledgeChunk.id.asc())
-                .all()
-            )
-            chunks: List[dict] = []
-            for row in rows:
-                try:
-                    meta = row.chunk_metadata
-                    meta_obj = json.loads(meta) if meta else {}
-                except Exception:
-                    meta_obj = {}
-                chunks.append(
-                    {
-                        "id": row.id,
-                        "content": row.content or "",
-                        "metadata": meta_obj,
-                        "source_type": row.source_type,
-                        "source_path": row.source_path,
-                    }
-                )
-            def sort_key(item: dict) -> int:
-                meta = item.get("metadata") or {}
-                try:
-                    return int(meta.get("chunk_no"))
-                except (TypeError, ValueError):
-                    return int(item.get("id") or 0)
-            return sorted(chunks, key=sort_key)
-
-        def build_context_block(
-            r: dict,
-            base_context_length: int,
-            full_multiplier: int,
-        ) -> Optional[str]:
-            try:
-                source_path = r.get("source_path") or ""
-                meta = r.get("metadata") or {}
-                title = meta.get("title") or source_path or "Без названия"
-
-                doc_title = meta.get("doc_title") or meta.get("title") or ""
-                section_path = meta.get("section_path") or ""
-                section_title = meta.get("section_title") or ""
-                chunk_kind = meta.get("chunk_kind") or "text"
-                code_lang = meta.get("code_lang") or ""
-
-                if source_path and ".keep" not in source_path.lower():
-                    if "::" in source_path:
-                        base_id = source_path.split("::")[-1]
-                    elif "/" in source_path:
-                        base_id = source_path.split("/")[-1]
-                    else:
-                        base_id = source_path
-                    base_id = base_id.rsplit(".", 1)[0] if "." in base_id else base_id
-                    source_id = f"{base_id}_{r.get('id')}" if r.get("id") else base_id
-                else:
-                    source_id = title.replace(" ", "_").lower()[:50]
-
-                content = r.get("content") or ""
-
-                if chunk_kind in ("code", "code_file"):
-                    max_length = base_context_length * 3
-                    if len(content) > max_length:
-                        cut_point = content.rfind("\n", 0, max_length)
-                        content_preview = content[:cut_point] if cut_point > max_length * 0.8 else content[:max_length]
-                    else:
-                        content_preview = content
-                elif chunk_kind in ("full_page", "full_doc"):
-                    max_length = base_context_length * max(1, full_multiplier)
-                    if len(content) > max_length:
-                        cut_point = content.rfind("\n", 0, max_length)
-                        content_preview = content[:cut_point] + "..." if cut_point > max_length * 0.8 else content[:max_length] + "..."
-                    else:
-                        content_preview = content
-                elif chunk_kind == "list":
-                    max_length = base_context_length * 2
-                    if len(content) > max_length:
-                        cut_point = content.rfind("\n", 0, max_length)
-                        content_preview = content[:cut_point] + "..." if cut_point > max_length * 0.8 else content[:max_length] + "..."
-                    else:
-                        content_preview = content
-                else:
-                    content_preview = content[:base_context_length]
-                    if len(content) > base_context_length:
-                        content_preview += "..."
-
-                context_block_parts = []
-                if enable_citations:
-                    context_block_parts.append(f"SOURCE_ID: {source_id}")
-                if doc_title:
-                    context_block_parts.append(f"DOC: {doc_title}")
-                if section_path:
-                    context_block_parts.append(f"SECTION: {section_path}")
-                if section_title and not section_path:
-                    context_block_parts.append(f"SECTION: {section_title}")
-                if chunk_kind:
-                    context_block_parts.append(f"TYPE: {chunk_kind}")
-                if code_lang:
-                    context_block_parts.append(f"LANG: {code_lang}")
-                context_block_parts.append("CONTENT:")
-                context_block_parts.append(content_preview)
-                context_block_parts.append("---")
-                return "\n".join(context_block_parts)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Error building context block: %s", e, exc_info=True)
-                return None
-
-        def build_context_blocks(
-            top_chunk: dict,
-            doc_chunks: List[dict],
-            token_limit_chars: int,
-        ) -> List[str]:
-            if not doc_chunks:
-                return []
-            idx = 0
-            for i, c in enumerate(doc_chunks):
-                if c.get("id") == top_chunk.get("id"):
-                    idx = i
-                    break
-
-            selected = [doc_chunks[idx]]
-            if idx - 1 >= 0:
-                selected.insert(0, doc_chunks[idx - 1])
-            if idx + 1 < len(doc_chunks):
-                selected.append(doc_chunks[idx + 1])
-
-            for c in doc_chunks:
-                title = (c.get("metadata") or {}).get("section_title") or ""
-                title_lower = title.lower()
-                if any(t in title_lower for t in ("prereq", "prerequisite", "setup")):
-                    if c not in selected:
-                        selected.insert(0, c)
-                    break
-
-            context_parts: List[str] = []
-            total = 0
-            for c in selected:
-                block = build_context_block(c, context_length, full_page_multiplier)
-                if not block:
-                    continue
-                if total + len(block) > token_limit_chars:
-                    break
-                context_parts.append(block)
-                total += len(block)
-            return context_parts
-
-        use_legacy_query_heuristics = (not orchestrator_v4_enabled) and legacy_query_heuristics_enabled
-        retrieval_core_mode = "legacy_heuristic" if use_legacy_query_heuristics else "generalized"
+            return _load_doc_chunks_for_context(db, doc_id, kb_id=kb_id)
 
         if not use_legacy_query_heuristics:
             intent = "GENERAL"
-            query_hints = {"retrieval_core_mode": retrieval_core_mode}
+            query_hints = dict(precomputed_query_hints)
         else:
             intent = detect_intent(payload.query)
-            query_hints = extract_query_hints(payload.query)
-            query_hints["retrieval_core_mode"] = retrieval_core_mode
+            query_hints = dict(precomputed_query_hints)
 
         if use_legacy_query_heuristics and kb_id and (
             intent in {"DEFINITION", "FACTOID"}
@@ -1168,7 +1805,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             doc_id = get_doc_id(r)
             r["doc_id"] = doc_id
             if not use_legacy_query_heuristics:
-                r["rank_score"] = base_score(r)
+                r["rank_score"] = _metric_to_float(r.get("multi_query_score"))
+                if r["rank_score"] is None:
+                    r["rank_score"] = base_score(r)
             else:
                 r["rank_score"] = apply_boosts(payload.query, r, intent, query_hints)
             ranked_results.append(r)
@@ -1187,33 +1826,33 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         # Формируем контекст для LLM
         context_parts: list[str] = []
-        if use_legacy_query_heuristics and intent == "HOWTO" and selected_docs:
-            token_limit_chars = max(3000, context_length * 5)
-            for doc_id in selected_docs:
-                doc_chunks = load_doc_chunks(doc_id)
-                if not doc_chunks:
-                    continue
-                top_chunk = next((r for r in filtered_results if r.get("doc_id") == doc_id), None)
-                if not top_chunk:
-                    continue
-                if not top_chunk.get("id"):
-                    for c in doc_chunks:
-                        if c.get("content") == top_chunk.get("content"):
-                            top_chunk["id"] = c.get("id")
-                            break
-                context_parts.extend(build_context_blocks(top_chunk, doc_chunks, token_limit_chars))
-        elif use_legacy_query_heuristics and intent == "FACTOID":
-            # For factual/numeric questions prefer top direct evidence chunks.
-            top_n = min(max(top_k_for_context, 4), 6)
-            for r in filtered_results[:top_n]:
-                block = build_context_block(r, context_length, full_page_multiplier)
-                if block:
-                    context_parts.append(block)
-        else:
-            for r in filtered_results[:top_k_for_context]:
-                block = build_context_block(r, context_length, full_page_multiplier)
-                if block:
-                    context_parts.append(block)
+        token_limit_chars = max(3000, context_length * max(3, full_page_multiplier))
+        selected_context_rows = _select_evidence_pack_rows(
+            ranked_results=filtered_results,
+            load_doc_chunks=load_doc_chunks,
+            anchor_limit=max(1, top_k_for_context),
+            context_limit=max(3, top_k_for_context),
+        )
+        if not selected_context_rows:
+            selected_context_rows = filtered_results[: max(3, top_k_for_context)]
+
+        used_chars = 0
+        included_context_rows: List[dict] = []
+        for row in selected_context_rows:
+            block = _build_context_block(
+                query=payload.query,
+                row=row,
+                base_context_length=context_length,
+                full_multiplier=full_page_multiplier,
+                enable_citations=enable_citations,
+            )
+            if not block:
+                continue
+            if context_parts and (used_chars + len(block)) > token_limit_chars:
+                break
+            context_parts.append(block)
+            used_chars += len(block)
+            included_context_rows.append(row)
 
         if not context_parts:
             logger.warning("No valid context parts extracted from results")
@@ -1243,16 +1882,19 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         context_text = "\n\n".join(context_parts)
         if logger.isEnabledFor(logging.DEBUG):
             source_ids = []
-            for block in context_parts:
+            selection_reasons = []
+            for row, block in zip(included_context_rows, context_parts):
+                selection_reasons.append(str(row.get("_context_reason") or "primary"))
                 for line in block.splitlines():
                     if line.startswith("SOURCE_ID:"):
                         source_ids.append(line.split(":", 1)[1].strip())
                         break
             logger.debug(
-                "RAG context parts=%d, chars=%d, source_ids=%s",
+                "RAG context parts=%d, chars=%d, source_ids=%s, reasons=%s",
                 len(context_parts),
                 len(context_text),
                 source_ids,
+                selection_reasons,
             )
             if os.getenv("RAG_DEBUG_LOG_CONTEXT", "false").lower() == "true":
                 preview_blocks = []
@@ -1261,6 +1903,49 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 logger.debug("RAG context preview: %s", preview_blocks)
 
         grounded_url_allowlist = _collect_grounded_url_allowlist(filtered_results)
+        security_decision = assess_query_security(payload.query)
+        poisoned_rows = find_poisoned_context_rows(included_context_rows)
+        security_flags = list(security_decision.get("flags") or [])
+        if poisoned_rows:
+            security_flags.extend(["suspicious_document", "screened_document"])
+        if security_flags:
+            query_hints["security_flags"] = sorted(set(security_flags))
+        refusal_reason = ""
+        if bool(security_decision.get("should_refuse")):
+            refusal_reason = str(security_decision.get("reason") or "")
+        elif poisoned_rows:
+            refusal_reason = "poisoned_context"
+
+        sources = _build_rag_sources(included_context_rows)
+
+        if refusal_reason:
+            ai_answer = build_security_refusal_message(payload.query, refusal_reason)
+            degraded_mode, degraded_reason = _derive_degraded_mode(
+                backend_name=backend_name,
+                candidates=filtered_results,
+            )
+            diagnostics_candidates = _merge_context_diagnostics_candidates(
+                ranked_results=ranked_results or filtered_results,
+                included_context_rows=included_context_rows,
+            )
+            _persist_retrieval_logs(
+                db=db,
+                request_id=request_id,
+                query=payload.query,
+                knowledge_base_id=kb_id,
+                intent=intent,
+                hints=query_hints,
+                filters=filters_payload,
+                total_candidates=len(results),
+                total_selected=len(filtered_results),
+                latency_ms=int((perf_counter() - t0) * 1000),
+                backend_name=backend_name,
+                degraded_mode=degraded_mode,
+                degraded_reason=degraded_reason,
+                orchestrator_mode=orchestrator_mode,
+                candidates=diagnostics_candidates,
+            )
+            return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id)
 
         # Вызываем LLM через общий ai_manager
         logger.debug("Creating prompt for LLM query")
@@ -1275,47 +1960,23 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         logger.debug("Calling AI manager with prompt length %d", len(prompt))
         ai_answer = ai_manager.query(prompt)
-        ai_answer = strip_unknown_citations(ai_answer, context_text)
-        ai_answer = strip_untrusted_urls(ai_answer, context_text, allowed_urls=grounded_url_allowlist)
-        ai_answer = sanitize_commands_in_answer(ai_answer, context_text)
+        provider_error = _classify_provider_transport_error(ai_answer)
+        if provider_error:
+            ai_answer = _build_extractive_fallback_answer(
+                payload.query,
+                included_context_rows,
+                failure_reason=provider_error,
+            )
+        ai_answer = _postprocess_grounded_answer(
+            ai_answer,
+            context_text=context_text,
+            grounded_url_allowlist=grounded_url_allowlist,
+        )
         logger.debug("AI manager returned answer length %d", len(ai_answer) if ai_answer else 0)
         
         # Возвращаем сырой markdown от LLM
         # Форматирование (clean_citations, format_commands_in_text, format_markdown_to_html)
         # будет выполнено в bot handler через format_for_telegram_answer()
-
-        # Собираем список источников для ответа
-        sources: list[RAGSource] = []
-        seen_source_keys: set = set()
-        for chunk in filtered_results:
-            try:
-                metadata = chunk.get("metadata") or {}
-                _page = metadata.get("page")
-                _page = _page if isinstance(_page, int) else None
-                _section = (
-                    metadata.get("section_title")
-                    or metadata.get("section_path")
-                    or chunk.get("title")
-                    or None
-                )
-                _path = chunk.get("source_path") or metadata.get("source_path") or ""
-                _type = chunk.get("source_type") or metadata.get("source_type") or ""
-                _key = (_path.lower(), _page)
-                if _key in seen_source_keys:
-                    continue
-                seen_source_keys.add(_key)
-                sources.append(
-                    RAGSource(
-                        source_path=_path,
-                        source_type=_type,
-                        score=float(chunk.get("rerank_score") or chunk.get("distance", 0.0)),
-                        page_number=_page,
-                        section_title=_section,
-                    )
-                )
-            except (ValueError, TypeError) as e:
-                logger.warning("Error processing source chunk: %s", e, exc_info=True)
-                continue
 
         # Debug mode: возвращаем первые N чанков с метаданными
         debug_chunks = None
@@ -1342,6 +2003,10 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             backend_name=backend_name,
             candidates=filtered_results,
         )
+        diagnostics_candidates = _merge_context_diagnostics_candidates(
+            ranked_results=ranked_results or filtered_results,
+            included_context_rows=included_context_rows,
+        )
         _persist_retrieval_logs(
             db=db,
             request_id=request_id,
@@ -1357,7 +2022,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
             orchestrator_mode=orchestrator_mode,
-            candidates=ranked_results or filtered_results,
+            candidates=diagnostics_candidates,
         )
         return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id, debug_chunks=debug_chunks)
 
@@ -1414,6 +2079,7 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
     candidates: List[RAGDiagnosticsCandidate] = []
     for fallback_rank, row in enumerate(candidate_rows, start=1):
         meta_obj = _safe_json_loads(getattr(row, "metadata_json", None))
+        included_in_context, context_rank, context_reason, context_anchor_rank, meta_obj = _extract_context_trace_from_metadata(meta_obj)
         trace = {
             "fusion_score": getattr(row, "fusion_score", None),
             "rerank_score": getattr(row, "rerank_score", None),
@@ -1438,6 +2104,10 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
                 fusion_rank=fusion_rank,
                 fusion_score=_metric_to_str(_derive_fusion_score_value(trace)) or "0.000000",
                 rerank_delta=_metric_to_str(_derive_rerank_delta_value(trace)),
+                included_in_context=included_in_context,
+                context_rank=context_rank,
+                context_reason=context_reason,
+                context_anchor_rank=context_anchor_rank,
                 metadata=meta_obj,
                 content_preview=getattr(row, "content_preview", None),
             )
@@ -1576,18 +2246,36 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
     if not results:
         return RAGSummaryAnswer(answer="", sources=[])
 
+    def load_doc_chunks(doc_id: str) -> List[dict]:
+        return _load_doc_chunks_for_context(db, doc_id, kb_id=kb_id)
+
+    selected_context_rows = _select_evidence_pack_rows(
+        ranked_results=results,
+        load_doc_chunks=load_doc_chunks,
+        anchor_limit=max(1, top_k),
+        context_limit=max(2, top_k),
+    )
+    if not selected_context_rows:
+        selected_context_rows = results[: max(2, top_k)]
+
     context_parts = []
     sources: List[RAGSource] = []
     seen = set()
-    for r in results[:top_k]:
-        content = r.get("content") or ""
-        if not content:
+    for r in selected_context_rows:
+        info = describe_context_chunk(r)
+        content_preview = build_query_focused_excerpt(
+            payload.query,
+            r.get("content") or "",
+            max_length=1500,
+            chunk_kind=str(info.get("chunk_kind") or "text"),
+        )
+        if not content_preview:
             continue
-        context_parts.append(content[:1500])
+        context_parts.append(content_preview)
         sp = r.get("source_path") or ""
         st = r.get("source_type") or "unknown"
         _rmeta = r.get("metadata") or {}
-        _rpage = _rmeta.get("page")
+        _rpage = _rmeta.get("page_no", _rmeta.get("page"))
         _rpage = _rpage if isinstance(_rpage, int) else None
         _rsection = (
             _rmeta.get("section_title")
@@ -1606,7 +2294,19 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
             ))
 
     context_text = "\n\n".join(context_parts)
-    grounded_url_allowlist = _collect_grounded_url_allowlist(results[:top_k])
+    grounded_url_allowlist = _collect_grounded_url_allowlist(selected_context_rows)
+    security_decision = assess_query_security(payload.query)
+    poisoned_rows = find_poisoned_context_rows(selected_context_rows)
+    if bool(security_decision.get("should_refuse")) or poisoned_rows:
+        refusal_reason = (
+            str(security_decision.get("reason") or "")
+            if bool(security_decision.get("should_refuse"))
+            else "poisoned_context"
+        )
+        return RAGSummaryAnswer(
+            answer=build_security_refusal_message(payload.query, refusal_reason),
+            sources=_build_rag_sources(selected_context_rows),
+        )
 
     if mode == "faq":
         system_task = "Составь FAQ: 5-10 вопросов и краткие ответы. Опирайся только на контекст."
@@ -1622,9 +2322,18 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
     )
 
     answer = ai_manager.query(prompt)
-    answer = strip_unknown_citations(answer, context_text)
-    answer = strip_untrusted_urls(answer, context_text, allowed_urls=grounded_url_allowlist)
-    answer = sanitize_commands_in_answer(answer, context_text)
+    provider_error = _classify_provider_transport_error(answer)
+    if provider_error:
+        answer = _build_extractive_fallback_answer(
+            payload.query,
+            selected_context_rows,
+            failure_reason=provider_error,
+        )
+    answer = _postprocess_grounded_answer(
+        answer,
+        context_text=context_text,
+        grounded_url_allowlist=grounded_url_allowlist,
+    )
 
     return RAGSummaryAnswer(answer=answer, sources=sources)
 

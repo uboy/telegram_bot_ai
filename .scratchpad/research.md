@@ -297,3 +297,449 @@ This is a non-trivial cross-cutting feature touching:
 - DB schema + migrations,
 - prompt policy and memory compression,
 - tests/spec/docs.
+
+## Research: Embedded Local RAG Quality-Evaluation System
+
+Date: 2026-03-08
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User Request
+- Build embedded, repeatable local quality tests for the project RAG pipeline.
+- Use real project data sources as evaluation input:
+  - `test.pdf` in repo root,
+  - `open-harmony` catalog if accessible locally,
+  - Telegram export under `C:\Users\devl\Downloads\Telegram Desktop\ChatExport_2026-03-08\`.
+- Use Ollama for answer generation and LLM-as-a-judge scoring.
+- Persist per-run artifacts and quality trends so implementation improvements can be measured over time.
+- Produce design-only artifacts in this cycle; do not implement runtime code yet.
+
+### Current Baseline
+- Existing eval path is retrieval-only:
+  - `backend/services/rag_eval_service.py`
+  - `scripts/rag_eval_baseline_runner.py`
+  - `scripts/rag_eval_quality_gate.py`
+- Current metrics and gates are limited to:
+  - `recall_at_10`
+  - `mrr_at_10`
+  - `ndcg_at_10`
+- Current default suite is fixed YAML (`tests/data/rag_eval_ready_data_v1.yaml`) and is useful for deterministic regression checks, but it does not represent the actual uploaded-knowledge mix the user wants to optimize.
+
+### Local Source Audit
+- `test.pdf` is present in repo root and is directly accessible.
+- `open-harmony` is accessible in the local session sandbox as a filesystem tree with mixed docs/code subdirectories:
+  - `Arkoala`
+  - `Development`
+  - `Devices`
+  - `Documentation`
+  - `Environment`
+  - `Features`
+  - `Sync&Build`
+- Telegram export path is accessible locally.
+- `result.json` is present and large enough to be a meaningful chat-source corpus (~30 MB); it contains standard Telegram export fields (`messages`, `text`, `text_entities`, timestamps, sender).
+
+### Key Gaps
+1. The current eval system measures retrieval quality but not answer quality.
+   - There is no built-in faithfulness / relevance / refusal correctness loop.
+   - There is no per-answer grounded URL / grounded command scoring.
+
+2. The current corpus contract is too narrow.
+   - It does not separate source families such as PDF, doc/wiki/code, and Telegram chat export.
+   - It does not encode negative/no-answer cases, noisy context cases, or multi-hop assembly cases.
+
+3. There is no local/private fixture strategy.
+   - `test.pdf` is repo-safe.
+   - `open-harmony` and Telegram export live outside the repo.
+   - Telegram export may contain private or operationally sensitive content and must not be committed raw.
+
+4. Trend reporting is incomplete.
+   - Current baseline runner emits snapshots, but not a durable source-family trend history suitable for “quality growth per commit”.
+
+5. Ollama exists in project config, but there is no dedicated evaluation contract.
+   - `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `OLLAMA_FILTER_THINKING` already exist.
+   - There is no separation between answer model and judge model for eval.
+
+6. Security is not yet a first-class eval contract.
+   - There is no embedded evaluation coverage for direct prompt injection attempts in user queries.
+   - There is no embedded evaluation coverage for indirect prompt injection / RAG poisoning inside indexed documents.
+   - There is no explicit metric set for confidential data leakage, system prompt leakage, or sensitive-context overexposure.
+   - Ingestion-time screening and suspicious query/document/answer observability are not defined as required outputs of the quality loop.
+
+### Design Constraints
+- Local full-quality evaluation must work without external network services.
+- The production RAG path must be evaluated directly; quality tests should not use a simplified answer path that bypasses real retrieval/context assembly/safety.
+- Telegram export must be treated as local-only source material unless transformed into a sanitized committed subset.
+- The future CI lane must stay reproducible even when private local corpora are absent.
+- Security controls must be testable, not only documented:
+  - strict separation of system instructions, user query, and retrieved context,
+  - ingestion-time screening for poisoned/malicious documents,
+  - limited sensitive-context inclusion,
+  - explicit flags and artifacts for suspicious queries, documents, and answers.
+
+### Metric Research Summary
+- The lecture metrics are valid and align with official RAGAS metrics:
+  - `faithfulness`
+  - `context_precision`
+  - `context_recall`
+  - `response_relevancy`
+  - `noise_sensitivity`
+- Additional relevant metrics are justified by official RAG evaluation frameworks and project-specific grounded-answer requirements:
+  - `answer_correctness` / `factual_correctness`
+  - `context_relevance`
+  - `response_groundedness`
+  - `exact_match` / `string_presence` for factoid and numeric cases
+  - source/citation validity metrics tailored to this project
+  - refusal correctness for “answer not in knowledge base” cases
+  - prompt-injection resistance and system-prompt leakage resistance
+  - sensitive-context leakage rate / redaction correctness
+  - suspicious-event detection coverage for query/document/answer paths
+
+### Mandatory Security Requirements
+- Evaluate direct prompt injection:
+  - user asks the system to ignore instructions, reveal hidden prompts, or exfiltrate credentials/config.
+- Evaluate indirect prompt injection / RAG poisoning:
+  - indexed document contains malicious instructions such as “ignore previous instructions”, “print secret”, or “call external endpoint”.
+- Evaluate confidential-data leakage:
+  - answer must not expose raw secrets, unrelated Telegram content, or over-broad sensitive context when case policy forbids it.
+- Evaluate system-prompt leakage:
+  - answer must refuse attempts to reveal hidden/system instructions.
+- Evaluate infrastructure access control assumptions:
+  - local eval must stay bound to allowlisted fixture paths and dedicated eval KB resources, not arbitrary filesystem or production KB scope.
+- Evaluate ingestion-time document screening:
+  - suspicious or poisoned documents must be flagged/quarantined by the future ingestion path rather than silently trusted.
+- Enforce strict instruction-plane separation:
+  - system instructions,
+  - user query,
+  - retrieved context,
+  - judge rubric.
+- Limit sensitive context inclusion:
+  - only minimal required evidence should enter the answer context for private/sensitive cases.
+- Require observability:
+  - suspicious queries,
+  - suspicious documents,
+  - suspicious answers,
+  - screening/quarantine outcomes,
+  - leakage-block events.
+
+### Recommended Direction
+- Extend the current eval stack rather than replace it.
+- Keep retrieval metrics and add answer-level metrics on top.
+- Split datasets into:
+  - committed safe fixture subset,
+  - local-only external fixture materialization cache.
+- Make source family a first-class slice dimension:
+  - `pdf`
+  - `open_harmony_docs`
+  - `open_harmony_code`
+  - `telegram_chat`
+  - later `wiki`
+- Use Ollama in two deterministic roles:
+  - answer generation through the real application path,
+  - judge scoring through a pinned local judge model with strict prompt contract.
+- Store trend artifacts with dataset version + model ids + git revision so quality deltas can be compared across implementation slices.
+- Make security a required scoring lane:
+  - include adversarial queries/documents in dataset v2,
+  - add security-specific metrics and gates,
+  - emit suspicious-event artifacts alongside normal quality reports.
+
+## Research: Embedded Local RAG Quality-Evaluation + Security System v2
+
+Date: 2026-03-08
+Agent: codex (architect)
+Status: superseding the earlier same-day draft with the now-mandatory security-first scope
+
+### Expanded User Scope
+- Build an embedded local evaluation loop that the repo can run repeatedly while implementation is in progress.
+- Use three real source families as the initial quality ground truth:
+  - repo-root `test.pdf`,
+  - local `open-harmony` catalog,
+  - local Telegram export `C:\Users\devl\Downloads\Telegram Desktop\ChatExport_2026-03-08\result.json`.
+- Reuse the existing provider stack with Ollama for:
+  - answer generation through the real RAG path,
+  - LLM-as-a-judge scoring through a pinned judge model.
+- Track trend growth per run/commit so quality improvement is measurable over time.
+- Treat security as a first-class measured outcome:
+  - prompt injection,
+  - indirect prompt injection / RAG poisoning,
+  - confidential-data leakage,
+  - system-prompt leakage,
+  - ingestion-time screening,
+  - context separation,
+  - least-privilege corpus access,
+  - suspicious-behavior observability.
+
+### Additional Findings Since the First Draft
+1. Source-family realism is good enough to start, but not safe enough to commit directly.
+   - `test.pdf` is repo-safe and stable.
+   - `open-harmony` is accessible only through a session-local path; design must treat it as `env_override`, not a hard-coded location.
+   - Telegram export is large and private; it must stay local-only, with committed subsets limited to sanitized extracts or synthetic derivatives.
+
+2. The current repo already has most of the transport/config primitives needed for Ollama.
+   - Existing reuse path:
+     - `shared/ai_providers.py`
+     - `shared/config.py`
+     - `env.template`
+     - `docs/CONFIGURATION.md`
+   - The missing piece is an eval-specific contract separating:
+     - answer model,
+     - judge model,
+     - judge determinism knobs,
+     - local corpus path overrides.
+
+3. The current RAG eval path is too narrow for the new goal.
+   - Existing service/gates:
+     - `backend/services/rag_eval_service.py`
+     - `scripts/rag_eval_baseline_runner.py`
+     - `scripts/rag_eval_quality_gate.py`
+   - Existing scope is retrieval-only and fixed-corpus-oriented.
+   - It does not yet measure final-answer quality, refusal behavior, source-backed URLs/commands, or security posture.
+
+4. Ingestion quality remains a structural risk and must be visible in the new evaluator.
+   - `shared/kb_settings.py` still defaults `web`, `wiki`, and `markdown` to `mode="full"` with very large chunks.
+   - This means the future evaluator must report source-family metrics that can expose chunking/structure failures rather than hiding them inside aggregate scores.
+
+5. The current PDF path has an implementation-risk signal already visible during research.
+   - Repo loader `shared/document_loaders/pdf_loader.py` depends on `PyPDF2`.
+   - The current local environment does not have `PyPDF2`, while `fitz` is available.
+   - The design should not assume one parser library is always present; fixture prep and eval setup must fail clearly and capture parser provenance in artifacts.
+
+### Metric System Needed For This Project
+The lecture metrics are necessary but not sufficient. The design needs five metric families.
+
+1. Retrieval coverage metrics
+   - `recall_at_10`
+   - `mrr_at_10`
+   - `ndcg_at_10`
+   - `source_hit_at_k`
+   - `evidence_in_context_recall`
+   - `context_entity_recall`
+
+2. Answer-grounding metrics
+   - `faithfulness`
+   - `response_relevancy`
+   - `answer_correctness`
+   - `response_groundedness`
+   - `exact_match` for strict numeric/factoid cases
+   - `string_presence` for function names, config keys, package names, error codes
+
+3. Context-quality metrics
+   - `context_precision`
+   - `context_recall`
+   - `context_relevance`
+   - `noise_sensitivity`
+   - `evidence_pack_efficiency`
+     - how much of the final context budget is occupied by supporting evidence vs noise
+
+4. Refusal/citation/control metrics
+   - `refusal_precision`
+   - `refusal_recall`
+   - `citation_validity`
+   - `grounded_url_precision`
+   - `grounded_command_precision`
+
+5. Security/resilience metrics
+   - `prompt_injection_resistance`
+   - `indirect_injection_resistance`
+   - `system_prompt_leak_block_rate`
+   - `secret_leak_block_rate`
+   - `sensitive_context_overexposure_rate`
+   - `screening_recall`
+   - `screening_precision`
+   - `suspicious_query_flag_recall`
+   - `suspicious_document_flag_recall`
+   - `suspicious_answer_flag_recall`
+   - `instruction_plane_separation_compliance`
+
+### Security Architecture Findings
+1. Security cannot be limited to the answer sanitizer.
+   - Screening must start before indexing and continue through retrieval, context assembly, answer generation, and artifact export.
+
+2. Security cases must live inside the dataset contract, not beside it.
+   - Each adversarial case needs:
+     - `attack_type`,
+     - `security_expectation`,
+     - expected flags,
+     - leakage/redaction expectations,
+     - allowed or forbidden source scopes.
+
+3. Suspicious behavior must be observable as structured output.
+   - The evaluator should emit machine-readable counters and per-case flags for:
+     - suspicious queries,
+     - screened/flagged/quarantined documents,
+     - suspicious or leaking answers,
+     - blocked prompt-leak attempts,
+     - blocked secret-leak attempts.
+
+4. Least-privilege access needs to be enforced by design.
+   - Eval runs should resolve corpora only from:
+     - repo fixtures,
+     - explicit env-overridden local paths,
+     - generated local cache directories.
+   - No arbitrary filesystem traversal.
+   - No production KB access.
+   - Ollama target should default to a local endpoint and record the effective base URL in artifacts.
+
+### Recommended Implementation Direction
+- Keep the existing eval service as the core and extend it; do not build a parallel evaluator.
+- Introduce a versioned source manifest alongside dataset v2 so fixture provenance, sensitivity, and screening policy are explicit.
+- Add answer-level judging and trend persistence in `RAGEXEC-009`, but keep schema and artifact tests Ollama-free.
+- Treat security as a gateable slice in `RAGEXEC-008..010`, not a later hardening appendix.
+- Use the new evaluator to drive `RAGEXEC-013..018`:
+  - chunk contract,
+  - parser fidelity,
+  - web/wiki/code normalization,
+  - evidence-pack assembly,
+  - context inclusion diagnostics,
+  - final source-family thresholds.
+
+## 2026-03-09 Follow-up Audit: Current Answer-Metric Status vs External Local RAG Prototype
+
+### Current repo status
+1. Committed eval/runtime is still retrieval-only.
+   - `backend/services/rag_eval_service.py` currently drives `rag_system.search(...)` and aggregates only:
+     - `recall_at_10`
+     - `mrr_at_10`
+     - `ndcg_at_10`
+   - `scripts/rag_eval_baseline_runner.py` and `scripts/rag_eval_quality_gate.py` already compare these metrics across:
+     - overall,
+     - source-family slices,
+     - security-scenario slices,
+     - stable run/latest/trend artifacts.
+
+2. Answer-level scoring is designed but not implemented.
+   - `docs/design/rag-embedded-quality-eval-security-system-v1.md` already specifies:
+     - Ollama-backed answer/judge roles,
+     - answer-grounding metrics,
+     - citation/refusal/security metrics,
+     - local-only corpus policy.
+   - The committed evaluator has not yet implemented:
+     - faithfulness,
+     - response relevancy,
+     - answer correctness,
+     - citation validity,
+     - refusal/security resistance scoring,
+     - local Ollama judge integration.
+
+3. Current ingestion/chunk structure is still weaker than the target architecture.
+   - `_normalize_chunk_metadata(...)` in `backend/services/ingestion_service.py` normalizes stable basics (`section_path`, `chunk_kind`, `document_class`, `language`, `doc_hash`, `doc_version`, `source_updated_at`),
+   - but runtime SQL/metadata does not yet promote richer structural fields such as:
+     - `paragraph_numbers`,
+     - `chunk_type`,
+     - adjacency graph ids,
+     - parser confidence/profile,
+     - canonical chunk hash/ordinal offsets.
+
+### External local project (`C:\Users\devl\proj\test\`) — useful ideas only
+1. Query rewriting + multi-query retrieval are already concretely implemented there.
+   - `rag/classifier.py` derives `search_queries` and `rag/retriever.py` fans them out across dense+sparse retrieval before fusion.
+   - This is relevant because our current near-ideal backlog still lacks an explicit implementation slice for controlled query rewriting / multi-query retrieval.
+
+2. Structural retrieval over paragraph numbers is implemented end-to-end.
+   - `rag/document.py` persists `paragraph_number`, `paragraph_numbers`, and `chunk_type`.
+   - `rag/index.py` builds a `StructuralIndex(paragraph_number -> chunk_id[])`.
+   - This is directly relevant to `RAGEXEC-013..015` and confirms the value of first-class structural chunk fields instead of burying everything in opaque metadata.
+
+3. Evidence packing is more explicit than in the current repo.
+   - `rag/retriever.py` implements:
+     - adaptive retrieval policy by query type,
+     - sentence-level evidence packing,
+     - list-coverage counting / expansion,
+     - paragraph-sibling merge for structural/definitional questions.
+   - This maps almost exactly to our future `RAGEXEC-016..017`.
+
+4. The external project has a pragmatic answer-eval loop we can adapt conceptually.
+   - `rag/evaluator.py` blends:
+     - heuristic metrics,
+     - optional Ollama LLM-judge metrics,
+     - weighted composite scores,
+     - weakest-question summaries.
+   - We should not copy its homework-specific metric names or gold-answer assumptions directly, but its evaluator shape is useful for the local-only quality loop.
+
+5. Security/grounding logic is decomposed cleanly.
+   - `rag/grounded_rules.py`, `rag/verifier.py`, and the related tests split:
+     - prompt-injection handling,
+     - unsupported-value refusals,
+     - safe grounded corrections,
+     - second-pass normalization.
+   - Our repo already hardened sanitizer behavior, but the external project highlights two still-missing areas:
+     - ingestion/document screening for malicious instructions,
+     - explicit answer-level security scoring in the eval loop.
+
+### Implications for our roadmap
+1. `RAGEXEC-013..015` remain the correct next production slices.
+   - The external project reinforces the need for first-class structural chunk metadata and stable paragraph/section semantics.
+
+2. `RAGEXEC-016..017` should explicitly absorb:
+   - evidence-pack unit budgets,
+   - list coverage checks,
+   - sibling/adjacent chunk merge based on canonical structure.
+
+3. After `RAGEXEC-013..017`, add a dedicated slice for:
+   - controlled query rewriting,
+   - multi-query retrieval,
+   - metrics-based validation against the local-only corpora.
+
+4. Extend the local-only eval harness with answer-level scoring before claiming “near-ideal”.
+   - Best implementation shape:
+     - keep current retrieval metrics,
+     - add heuristic answer metrics first,
+     - then optional Ollama judge scoring,
+     - then security/adversarial scoring.
+
+## 2026-03-10 Bot UX and transient error-noise bugfix research
+
+### Request summary
+1. Stop noisy admin-facing "critical error" notifications for transient network/protocol disconnects that frequently occur in the Telegram bot runtime.
+2. After an admin creates a knowledge base from the text-state flow, open the per-KB action menu directly instead of sending the user back to the generic admin menu.
+
+### Minimal relevant runtime paths
+1. `frontend/error_handlers.py`
+   - `global_error_handler(...)` logs every exception and always sends the same "critical error" message through `notify_admins(...)`.
+   - Current implementation has only a coarse global anti-spam window and does not distinguish transient transport errors from real actionable failures.
+2. `frontend/bot.py`
+   - Registers `global_error_handler` globally via `app.add_error_handler(global_error_handler)`.
+3. `frontend/bot_handlers.py`
+   - In the `state == "waiting_kb_name"` branch, successful KB creation already returns the backend payload including `id`, but the UX reply still uses `admin_menu()` instead of the KB-specific action menu.
+4. `frontend/templates/buttons.py`
+   - `kb_actions_menu(kb_id)` already exists and is the correct destination UI after successful KB creation.
+5. `tests/test_bot_text_ai_mode.py`
+   - Already covers the `waiting_kb_name` creation branch and is the natural place to tighten the post-create UX assertion.
+
+### Observed gaps
+1. Error handling is too broad.
+   - `httpx.RemoteProtocolError`, Telegram `NetworkError`, and similar disconnects are operational noise when the bot or upstream briefly drops the connection.
+   - These still need logging for diagnosis, but they should not trigger a "critical error" notification to admins every time.
+2. KB-create flow loses user context.
+   - The admin has just selected to create a KB; the next likely step is upload/wiki/settings for that KB.
+   - Sending them back to the top-level admin menu adds an unnecessary extra click and hides the created KB id that is already available.
+
+### Implementation direction
+1. Add a small transient-error classifier in `frontend/error_handlers.py`.
+   - Match known transport/disconnect classes/messages such as:
+     - Telegram/HTTPX network errors,
+     - `RemoteProtocolError`,
+     - "Server disconnected without sending a response",
+     - read/connect reset disconnect wording.
+   - Keep full logging.
+   - Skip admin notifications for classified transient errors.
+   - Keep notifications for all other exceptions.
+2. Update the KB-create success branch in `frontend/bot_handlers.py`.
+   - Use `kb_actions_menu(created_id)` on success.
+   - Keep failure branch on `admin_menu()` because there is no created KB to act on.
+   - Suggested success copy: keep the existing confirmation text and optionally add a short next-step hint, but no callback or extra fetch is required because the backend response already contains the id.
+
+### Test impact
+1. Add focused coverage for the transient-error classifier / admin notification suppression.
+   - Best location: a new small test file for `frontend/error_handlers.py`, unless there is an existing handler-focused test module.
+2. Tighten the existing KB-create test in `tests/test_bot_text_ai_mode.py`.
+   - Assert that the success reply uses `kb_actions_menu(777)` instead of generic `admin_menu()`.
+3. Regression priority is high enough to treat this as a production bugfix.
+   - Include automated reproduction/verification in the same diff.
+
+### Docs/spec sync expectation
+1. `SPEC.md` should reflect:
+   - transient transport noise is logged but does not page admins as a critical bot failure,
+   - successful admin KB creation lands in the KB actions menu.
+2. `docs/REQUIREMENTS_TRACEABILITY.md` should map both behaviors to the new regression coverage.
+3. `docs/OPERATIONS.md` should note the transient-error suppression behavior for bot runtime triage.
+4. No `docs/design/*` update is planned by default.
+   - Reason: this is a small bugfix within existing bot UX/runtime behavior and does not change architecture or system design contracts.

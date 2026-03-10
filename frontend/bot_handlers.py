@@ -54,6 +54,18 @@ KB_QUERY_PROGRESS_TICK_SEC = 0.9
 KB_QUERY_PROGRESS_WIDTH = 10
 
 
+def _format_wiki_sync_mode(stats: dict | None) -> str:
+    mode = str((stats or {}).get("crawl_mode") or "html").lower()
+    attempted = bool((stats or {}).get("git_fallback_attempted", False))
+    if mode == "git":
+        return "git fallback (полная синхронизация wiki-репозитория)"
+    if mode == "zip":
+        return "ZIP archive import"
+    if attempted:
+        return "HTML crawl (после неудачной попытки git fallback)"
+    return "HTML crawl"
+
+
 def _format_bytes_short(size_bytes: int) -> str:
     if size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
@@ -1163,9 +1175,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         created = await asyncio.to_thread(backend_client.create_knowledge_base, kb_name)
         if created and created.get("id"):
+            created_id = int(created["id"])
             await update.message.reply_text(
                 f"✅ База знаний '{kb_name}' создана!",
-                reply_markup=admin_menu(),
+                reply_markup=kb_actions_menu(created_id),
             )
         else:
             await update.message.reply_text(
@@ -1185,6 +1198,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             context.user_data['state'] = None
             context.user_data.pop('kb_id_for_wiki', None)
+            context.user_data.pop('wiki_urls', None)
+            context.user_data.pop('wiki_zip_kb_id', None)
+            context.user_data.pop('wiki_zip_url', None)
             return
 
         if not wiki_url.startswith(("http://", "https://")):
@@ -1205,11 +1221,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pages = stats.get("pages_processed", 0) if isinstance(stats, dict) else 0
             added = stats.get("chunks_added", 0) if isinstance(stats, dict) else 0
             wiki_root = (stats.get("wiki_root", wiki_url) if isinstance(stats, dict) else wiki_url)
+            sync_mode = _format_wiki_sync_mode(stats if isinstance(stats, dict) else None)
 
             await update.message.reply_text(
                 "✅ Сканирование вики завершено.\n\n"
                 f"Исходный URL: {wiki_url}\n"
                 f"Корневой wiki-URL: {wiki_root}\n"
+                f"Режим синхронизации: {sync_mode}\n"
                 f"Удалено старых фрагментов: {deleted}\n"
                 f"Обработано страниц: {pages}\n"
                 f"Добавлено фрагментов: {added}",
@@ -1225,6 +1243,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             context.user_data['state'] = None
             context.user_data.pop('kb_id_for_wiki', None)
+            context.user_data.pop('wiki_urls', None)
+            context.user_data.pop('wiki_zip_kb_id', None)
+            context.user_data.pop('wiki_zip_url', None)
     else:
         kb_id = context.user_data.get('kb_id')
         if kb_id:

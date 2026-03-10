@@ -5,6 +5,7 @@ import re
 import shlex
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlsplit, urlunsplit
+from shared.utils import detect_language
 
 
 COMMAND_PREFIXES = (
@@ -28,6 +29,105 @@ COMMAND_PREFIXES = (
 SHELL_CONNECTORS = {"&&", "||", "|", ";"}
 SIGNATURE_WRAPPERS = {"sudo"}
 SCRIPT_SUFFIXES = (".sh", ".py", ".ps1", ".bat", ".cmd", ".exe")
+_PROMPT_LEAK_QUERY_RE = re.compile(
+    r"(?i)\b(system\s+prompt|hidden\s+prompt|hidden\s+system\s+prompt|internal\s+instructions|developer\s+instructions|"
+    r"системн(?:ый|ого|ом)\s+промпт|скрыт(?:ый|ого|ом)\s+промпт|внутренн(?:ие|их|ими)\s+инструкц)"
+)
+_SECRET_LEAK_QUERY_RE = re.compile(
+    r"(?i)\b(api[_ -]?key|password|passwd|token|secret|authorization|bearer|парол[ьяею]|токен|секрет)\b"
+)
+_LEAK_VERB_RE = re.compile(
+    r"(?i)\b(show|print|reveal|display|dump|extract|tell me|покажи|выведи|раскрой|выдай|перескажи|дай)\b"
+)
+_OVERBROAD_PRIVATE_RE = re.compile(
+    r"(?i)\b(all\s+private\s+(messages|chats?)|private\s+chat\s+export|personal\s+messages|"
+    r"все\s+личн(?:ые|ых)\s+сообщени|личн(?:ые|ых)\s+сообщени(?:я|й)\s+из\s+чата|"
+    r"даже\s+если\s+они\s+не\s+относятс[яь]\s+к\s+вопросу|не\s+относятс[яь]\s+к\s+вопросу)\b"
+)
+_CONTEXT_POISON_RE = re.compile(
+    r"(?is)\b(ignore\s+(all\s+)?previous\s+(instructions?|rules?)|disregard\s+(the\s+)?system|"
+    r"reveal\s+(the\s+)?system\s+prompt|print\s+(the\s+)?hidden\s+prompt|developer\s+instructions?|"
+    r"игнорируй\s+предыдущ(?:ие|ую)\s+инструкц|раскрой\s+системн(?:ый|ого)\s+промпт|"
+    r"покажи\s+скрыт(?:ый|ого)\s+промпт|внутренн(?:ие|их)\s+инструкц)"
+)
+_BENIGN_SECURITY_CONTEXT_RE = re.compile(
+    r"(?is)\b(example|for example|e\.g\.|must not|do not follow|do not execute|warning|security|prompt injection|"
+    r"attacker|malicious|untrusted|poison(?:ed|ing)|например|не\s+следует|не\s+выполняйте|не\s+запускайте|"
+    r"предупреждени|безопасност|вредоносн|недоверенн|prompt[- ]injection)\b"
+)
+
+
+def assess_query_security(query: str) -> Dict[str, object]:
+    normalized = re.sub(r"\s+", " ", str(query or "")).strip()
+    lowered = normalized.lower()
+    flags: List[str] = []
+    reason = ""
+
+    has_prompt_leak = bool(_PROMPT_LEAK_QUERY_RE.search(normalized))
+    has_secret_leak = bool(_SECRET_LEAK_QUERY_RE.search(normalized) and _LEAK_VERB_RE.search(normalized))
+    has_overbroad_private = bool(_OVERBROAD_PRIVATE_RE.search(lowered))
+
+    if has_prompt_leak or ("ignore previous" in lowered and ("prompt" in lowered or "instructions" in lowered)):
+        flags.append("suspicious_query")
+        reason = "prompt_leak"
+    elif has_secret_leak:
+        flags.append("suspicious_query")
+        reason = "secret_leak"
+    elif has_overbroad_private:
+        flags.append("suspicious_query")
+        reason = "access_scope"
+
+    return {
+        "should_refuse": bool(reason),
+        "reason": reason,
+        "flags": tuple(flags),
+    }
+
+
+def find_poisoned_context_rows(rows: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
+    suspicious: List[Dict[str, object]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content") or "")
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        haystack = "\n".join(
+            item
+            for item in (
+                content,
+                str(metadata.get("doc_title") or ""),
+                str(metadata.get("section_title") or ""),
+                str(metadata.get("section_path") or ""),
+            )
+            if item
+        )
+        if _CONTEXT_POISON_RE.search(haystack) and not _BENIGN_SECURITY_CONTEXT_RE.search(haystack):
+            suspicious.append(row)
+    return suspicious
+
+
+def build_security_refusal_message(query: str, reason: str) -> str:
+    language = detect_language(query)
+    normalized_reason = str(reason or "").strip().lower()
+    if language == "en":
+        if normalized_reason == "prompt_leak":
+            return "I cannot answer from the provided context or disclose protected system data."
+        if normalized_reason == "secret_leak":
+            return "I cannot answer from the provided context or disclose protected sensitive data."
+        if normalized_reason == "access_scope":
+            return "I cannot answer from the provided context or disclose unrelated private data."
+        if normalized_reason == "poisoned_context":
+            return "I cannot answer from the provided context because the retrieved material is not safe to follow."
+        return "I cannot answer this request from the provided context."
+    if normalized_reason == "prompt_leak":
+        return "Не могу ответить на этот запрос и раскрывать защищенные системные данные."
+    if normalized_reason == "secret_leak":
+        return "Не могу ответить на этот запрос и раскрывать защищенные чувствительные данные."
+    if normalized_reason == "access_scope":
+        return "Не могу ответить на этот запрос и раскрывать нерелевантные приватные данные."
+    if normalized_reason == "poisoned_context":
+        return "Не могу ответить на этот запрос, потому что найденный материал небезопасно использовать как инструкцию."
+    return "Не могу ответить на этот запрос по предоставленному контексту."
 
 
 def strip_unknown_citations(answer: str, context: str) -> str:

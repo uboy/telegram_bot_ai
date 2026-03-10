@@ -4,6 +4,7 @@ pytest.importorskip("fastapi")
 
 from backend.api.routes.rag import rag_query
 from backend.schemas.rag import RAGQuery
+from shared.database import KnowledgeBase, KnowledgeChunk
 from shared.rag_safety import strip_untrusted_urls
 
 
@@ -51,8 +52,12 @@ class DummyQuery:
 
 
 class DummyDB:
-    def query(self, _model):
-        return DummyQuery(rows=[DummyKB()])
+    def query(self, model):
+        if model is KnowledgeBase:
+            return DummyQuery(rows=[DummyKB()])
+        if model is KnowledgeChunk:
+            return DummyQuery(rows=[])
+        return DummyQuery(rows=[])
 
 
 def test_strip_untrusted_urls_preserves_grounded_gitee_url_from_allowlist():
@@ -79,7 +84,11 @@ def test_rag_query_preserves_grounded_source_url_and_strips_untrusted_url(monkey
     from backend.api.routes import rag as rag_module
 
     def fake_search(query=None, knowledge_base_id=None, top_k=8, **_kwargs):
-        assert query == "Where is the sync and build guide?"
+        assert query in {
+            "Where is the sync and build guide?",
+            "build guide",
+            "sync and build guide",
+        }
         assert knowledge_base_id == 1
         return [
             {

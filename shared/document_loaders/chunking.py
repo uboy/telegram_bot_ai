@@ -7,6 +7,22 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+_NUMBERED_LIST_RE = re.compile(r'(?m)^\s*\d+\.\s+')
+_BULLET_LIST_RE = re.compile(r'(?m)^\s*[-*•]\s+')
+_STEP_LIST_RE = re.compile(r'(?i)(?:^|\n)\s*(?:step\s+\d+|steps?)\s*:')
+
+
+def infer_structural_chunk_kind(text: str) -> str:
+    """Определить базовый структурный тип чанка по его содержимому."""
+    snippet = (text or "").strip()
+    if not snippet:
+        return "text"
+    if "__CODE_BLOCK_START__" in snippet or "```" in snippet:
+        return "code"
+    if _NUMBERED_LIST_RE.search(snippet) or _BULLET_LIST_RE.search(snippet) or _STEP_LIST_RE.search(snippet):
+        return "list"
+    return "text"
+
 
 def split_text_into_chunks(
     text: str,
@@ -543,4 +559,68 @@ def split_text_structurally(
         return overlapped_chunks
     
     return [c for c in chunks if c]
+
+
+def split_text_structurally_with_metadata(
+    text: str,
+    max_chars: int = None,
+    overlap: int = None,
+) -> List[dict]:
+    """
+    Вернуть структурные чанки с приблизительными диапазонами символов в исходном тексте.
+
+    `char_start`/`char_end` относятся к основному сегменту без overlap.
+    Контент чанка может включать overlap-префикс для downstream retrieval.
+    """
+    if max_chars is None:
+        try:
+            from shared.config import RAG_CHUNK_SIZE
+            max_chars = RAG_CHUNK_SIZE
+        except ImportError:
+            max_chars = 2000
+
+    if overlap is None:
+        try:
+            from shared.config import RAG_CHUNK_OVERLAP
+            overlap = RAG_CHUNK_OVERLAP
+        except ImportError:
+            overlap = 400
+
+    text = text or ""
+    if not text:
+        return []
+
+    try:
+        effective_overlap = int(overlap) if overlap is not None else 0
+    except (ValueError, TypeError):
+        effective_overlap = 0
+    if effective_overlap < 0:
+        effective_overlap = 0
+
+    base_chunks = split_text_structurally(text, max_chars=max_chars, overlap=0)
+    records: List[dict] = []
+    search_start = 0
+
+    for idx, part in enumerate(base_chunks):
+        if not part:
+            continue
+        char_start = text.find(part, search_start)
+        if char_start < 0:
+            char_start = search_start
+        char_end = char_start + len(part)
+        content = part
+        if effective_overlap > 0 and idx > 0:
+            prev = base_chunks[idx - 1]
+            overlap_text = prev[-effective_overlap:] if len(prev) > effective_overlap else prev
+            if overlap_text:
+                content = overlap_text + "\n\n" + part
+        records.append({
+            "content": content,
+            "char_start": char_start,
+            "char_end": char_end,
+            "chunk_kind": infer_structural_chunk_kind(part),
+        })
+        search_start = char_end
+
+    return records
 

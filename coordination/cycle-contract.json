@@ -1,30 +1,29 @@
 {
-  "task_id": "RAGEXEC-008",
+  "task_id": "BOTFOLLOW-001",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_service.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_service.py",
+    "python -m py_compile frontend/error_handlers.py frontend/bot_handlers.py tests/test_bot_error_handlers.py tests/test_bot_text_ai_mode.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_bot_error_handlers.py tests/test_bot_text_ai_mode.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "backend/services/rag_eval_service.py",
-    "tests/data/rag_eval_ready_data_v2.yaml",
-    "tests/test_rag_eval_dataset_contract.py",
-    "tests/test_rag_eval_service.py",
-    "docs/design/rag-near-ideal-task-breakdown-v1.md",
+    "frontend/error_handlers.py",
+    "frontend/bot_handlers.py",
+    "tests/test_bot_error_handlers.py",
+    "tests/test_bot_text_ai_mode.py",
     "SPEC.md",
-    "docs/TESTING.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
-    "coordination/reviews/ragexec-008-<date>.md",
+    "docs/OPERATIONS.md",
+    "coordination/reviews/botfollow-001-<date>.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"
   ],
   "size_limits": {
-    "max_files_changed": 30,
-    "max_lines_added": 2500,
-    "max_lines_deleted": 400
+    "max_files_changed": 10,
+    "max_lines_added": 350,
+    "max_lines_deleted": 120
   }
 }

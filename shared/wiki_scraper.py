@@ -20,6 +20,25 @@ from shared.document_loaders import document_loader_manager
 from shared.logging_config import logger
 
 
+def _build_sync_mode_stats(
+    *,
+    deleted_chunks: int,
+    pages_processed: int,
+    chunks_added: int,
+    wiki_root: str,
+    crawl_mode: str,
+    git_fallback_attempted: bool,
+) -> Dict[str, int | str | bool]:
+    return {
+        "deleted_chunks": deleted_chunks,
+        "pages_processed": pages_processed,
+        "chunks_added": chunks_added,
+        "wiki_root": wiki_root,
+        "crawl_mode": crawl_mode,
+        "git_fallback_attempted": git_fallback_attempted,
+    }
+
+
 def _should_use_git_wiki_loader(wiki_root: str) -> bool:
     """Определить, стоит ли предпочесть git loader вместо HTML-crawl.
 
@@ -91,8 +110,10 @@ def crawl_wiki_to_kb(
     - max_pages: ограничение на количество страниц (на всякий случай, от DoS)
     """
     wiki_root = _normalize_base_url(base_url)
+    git_fallback_attempted = False
 
     if _should_use_git_wiki_loader(wiki_root):
+        git_fallback_attempted = True
         try:
             from shared.wiki_git_loader import load_wiki_from_git  # local import to avoid circular import at module load
 
@@ -107,12 +128,14 @@ def crawl_wiki_to_kb(
                 loader_options=loader_options,
             )
             files_processed = int(stats.get("files_processed", 0) or 0)
-            return {
-                "deleted_chunks": int(stats.get("deleted_chunks", 0) or 0),
-                "pages_processed": files_processed,
-                "chunks_added": int(stats.get("chunks_added", 0) or 0),
-                "wiki_root": str(stats.get("wiki_root", wiki_root) or wiki_root),
-            }
+            return _build_sync_mode_stats(
+                deleted_chunks=int(stats.get("deleted_chunks", 0) or 0),
+                pages_processed=files_processed,
+                chunks_added=int(stats.get("chunks_added", 0) or 0),
+                wiki_root=str(stats.get("wiki_root", wiki_root) or wiki_root),
+                crawl_mode="git",
+                git_fallback_attempted=git_fallback_attempted,
+            )
         except Exception as e:
             logger.warning(
                 "[wiki] git loader fallback failed, continue with HTML-crawl: kb_id=%s wiki_root=%s error=%s",
@@ -196,19 +219,32 @@ def crawl_wiki_to_kb(
             logger.warning("[wiki] ошибка загрузки содержимого %s: %s", url, e)
             chunks = []
 
-        for chunk in chunks:
+        for chunk_no, chunk in enumerate(chunks, start=1):
             metadata = dict(chunk.get("metadata") or {})
             # Добавим метку корня вики, чтобы можно было дополнительно фильтровать при необходимости
             metadata.setdefault("wiki_root", wiki_root)
             # Сохраняем оригинальный URL страницы для нормализации при отображении
             metadata["original_url"] = url
             metadata["wiki_page_url"] = url  # Для совместимости
+            canonical_payload = rag_system._build_canonical_chunk_payload(
+                content=chunk.get("content", ""),
+                source_type="web",
+                source_path=url,
+                metadata=metadata,
+                chunk_no=chunk_no,
+                chunk_title=str(chunk.get("title") or url),
+                chunk_columns={"parser_profile": "loader:web:wiki_html:v1"},
+            )
             rag_system.add_chunk(
                 knowledge_base_id=knowledge_base_id,
                 content=chunk.get("content", ""),
                 source_type="web",
                 source_path=url,
-                metadata=metadata,
+                metadata=canonical_payload["metadata"],
+                metadata_json=canonical_payload["metadata_json"],
+                chunk_columns=canonical_payload["chunk_columns"],
+                chunk_no=chunk_no,
+                chunk_title=str(chunk.get("title") or url),
             )
             chunks_added += 1
 
@@ -251,12 +287,14 @@ def crawl_wiki_to_kb(
         chunks_added,
     )
 
-    return {
-        "deleted_chunks": deleted_chunks,
-        "pages_processed": pages_processed,
-        "chunks_added": chunks_added,
-        "wiki_root": wiki_root,
-    }
+    return _build_sync_mode_stats(
+        deleted_chunks=deleted_chunks,
+        pages_processed=pages_processed,
+        chunks_added=chunks_added,
+        wiki_root=wiki_root,
+        crawl_mode="html",
+        git_fallback_attempted=git_fallback_attempted,
+    )
 
 
 async def crawl_wiki_to_kb_async(

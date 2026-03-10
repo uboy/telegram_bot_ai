@@ -7,9 +7,14 @@ on:
       - main
       - master
 
+concurrency:
+  group: agent-quality-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality-gates:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,24 +36,27 @@ jobs:
       - name: Secret scan
         run: python scripts/scan_secrets.py
 
-      - name: Compile gate scripts
+      - name: Compile fail-fast lane
         run: |
           python -m py_compile scripts/ci_policy_gate.py
           python -m py_compile scripts/scan_secrets.py
           python -m py_compile scripts/rag_eval_quality_gate.py
           python -m py_compile scripts/rag_eval_baseline_runner.py
+          python -m py_compile tests/test_rag_eval_quality_gate.py
+          python -m py_compile tests/test_rag_eval_baseline_runner.py
+          python -m py_compile tests/test_rag_eval_dataset_contract.py
 
-      - name: Install dependencies for smoke tests
+      - name: Install dependencies for public-safe CI lanes
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Eval contract fast lane
+        env:
+          TELEGRAM_BOT_TOKEN: test-token
+        run: python -m pytest -q -p no:cacheprovider tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py
 
       - name: Smoke tests
         env:
           TELEGRAM_BOT_TOKEN: test-token
         run: python -m pytest -q -p no:cacheprovider tests/test_security_api_key.py tests/test_rag_safety.py
-
-      - name: Eval gate tests
-        env:
-          TELEGRAM_BOT_TOKEN: test-token
-        run: python -m pytest -q -p no:cacheprovider tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py

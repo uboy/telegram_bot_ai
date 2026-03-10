@@ -31,6 +31,8 @@ class WikiIngestionResponse(BaseModel):
     files_processed: int | None = None
     chunks_added: int
     wiki_root: str
+    crawl_mode: str | None = None
+    git_fallback_attempted: bool = False
 
 
 class DocumentIngestionResponse(BaseModel):
@@ -142,6 +144,8 @@ def ingest_wiki_crawl(
         files_processed=None,
         chunks_added=result.get("chunks_added", 0),
         wiki_root=result.get("wiki_root", str(url)),
+        crawl_mode=result.get("crawl_mode"),
+        git_fallback_attempted=bool(result.get("git_fallback_attempted", False)),
     )
 
 
@@ -171,6 +175,8 @@ def ingest_wiki_git(
         files_processed=result.get("files_processed"),
         chunks_added=result.get("chunks_added", 0),
         wiki_root=result.get("wiki_root", str(url)),
+        crawl_mode="git",
+        git_fallback_attempted=False,
     )
 
 
@@ -216,6 +222,8 @@ def ingest_wiki_zip(
         files_processed=result.get("files_processed"),
         chunks_added=result.get("chunks_added", 0),
         wiki_root=result.get("wiki_root", str(url)),
+        crawl_mode="zip",
+        git_fallback_attempted=False,
     )
 
 

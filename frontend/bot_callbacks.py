@@ -56,6 +56,18 @@ ADMIN_ID_STRINGS = {str(x) for x in ADMIN_IDS}
 # Глобальный session удалён - создаём session локально в функциях
 
 
+def _format_wiki_sync_mode(stats: dict) -> str:
+    mode = str((stats or {}).get("crawl_mode") or "html").lower()
+    attempted = bool((stats or {}).get("git_fallback_attempted", False))
+    if mode == "git":
+        return "git fallback (полная синхронизация wiki-репозитория)"
+    if mode == "zip":
+        return "ZIP archive import"
+    if attempted:
+        return "HTML crawl (после неудачной попытки git fallback)"
+    return "HTML crawl"
+
+
 def update_env_file(var_name: str, var_value: str) -> bool:
     """Обновить переменную окружения в .env файле"""
     env_file_path = ".env"
@@ -1571,10 +1583,12 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             pages = stats.get("pages_processed", 0) or 0
             added = stats.get("chunks_added", 0)
             wiki_root = stats.get("wiki_root", url)
+            sync_mode = _format_wiki_sync_mode(stats)
             text = (
                 "? Сканирование вики завершено.\n\n"
                 f"Исходный URL: {url}\n"
                 f"Корневой wiki-URL: {wiki_root}\n"
+                f"Режим синхронизации: {sync_mode}\n"
                 f"Удалено старых фрагментов: {deleted}\n"
                 f"Обработано страниц: {pages}\n"
                 f"Добавлено фрагментов: {added}"
@@ -1690,6 +1704,9 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
     
     if data.startswith('kb_wiki_crawl:'):
         kb_id = int(data.split(':')[1])
+        context.user_data.pop('wiki_urls', None)
+        context.user_data.pop('wiki_zip_kb_id', None)
+        context.user_data.pop('wiki_zip_url', None)
         context.user_data['kb_id_for_wiki'] = kb_id
         context.user_data['state'] = 'waiting_wiki_root'
         await safe_edit_message_text(
@@ -1699,93 +1716,24 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         )
         return
     
-    if data.startswith('wiki_git_load:'):
-        # Формат: wiki_git_load:kb_id:wiki_url_hash
+    if data.startswith('wiki_git_load:') or data.startswith('wiki_zip_load:'):
         parts = data.split(':', 2)
-        if len(parts) < 3:
+        if len(parts) < 2:
             await query.answer("Некорректный формат callback_data", show_alert=True)
             return
 
         kb_id = int(parts[1])
-        wiki_url_hash = parts[2]
-        # Получаем полный URL из context.user_data
-        wiki_url = context.user_data.get('wiki_urls', {}).get(wiki_url_hash)
-        if not wiki_url:
-            await query.answer("URL вики не найден. Попробуйте загрузить вики снова.", show_alert=True)
-            return
+        context.user_data.pop('wiki_urls', None)
+        context.user_data.pop('wiki_zip_kb_id', None)
+        context.user_data.pop('wiki_zip_url', None)
+        context.user_data['state'] = None
 
         await safe_edit_message_text(
             query,
-            "🔄 Загрузка вики через git-репозиторий...\n\n"
-            "Это может занять несколько минут в зависимости от размера репозитория."
-        )
-
-        try:
-            tg_id = str(query.from_user.id) if query.from_user else ""
-            username = query.from_user.username if query.from_user else ""
-
-            stats = backend_client.ingest_wiki_git(
-                kb_id=kb_id,
-                url=wiki_url,
-                telegram_id=tg_id or None,
-                username=username or None,
-            )
-            deleted = stats.get("deleted_chunks", 0)
-            files = stats.get("files_processed", 0)
-            added = stats.get("chunks_added", 0)
-            wiki_root = stats.get("wiki_root", wiki_url)
-
-            text = (
-                "✅ Загрузка вики через git завершена.\n\n"
-                f"Исходный URL: {wiki_url}\n"
-                f"Корневой wiki-URL: {wiki_root}\n"
-                f"Удалено старых фрагментов: {deleted}\n"
-                f"Обработано файлов: {files}\n"
-                f"Добавлено фрагментов: {added}"
-            )
-            await safe_edit_message_text(query, text, reply_markup=kb_actions_menu(kb_id))
-        except Exception as e:
-            logger.error(f"Ошибка при загрузке вики через git (backend): {e}", exc_info=True)
-            await safe_edit_message_text(
-                query,
-                f"❌ Ошибка при загрузке вики через git: {str(e)}\n\n"
-                "Убедитесь, что:\n"
-                "• Git установлен в системе\n"
-                "• Репозиторий доступен для клонирования\n"
-                "• URL вики корректный",
-                reply_markup=kb_actions_menu(kb_id),
-            )
-        return
-    
-    if data.startswith('wiki_zip_load:'):
-        # Формат: wiki_zip_load:kb_id:wiki_url_hash
-        parts = data.split(':', 2)
-        if len(parts) < 3:
-            await query.answer("Некорректный формат callback_data", show_alert=True)
-            return
-        
-        kb_id = int(parts[1])
-        wiki_url_hash = parts[2]
-        # Получаем полный URL из context.user_data
-        wiki_url = context.user_data.get('wiki_urls', {}).get(wiki_url_hash)
-        if not wiki_url:
-            await query.answer("URL вики не найден. Попробуйте загрузить вики снова.", show_alert=True)
-            return
-        
-        # Сохранить информацию для последующей обработки ZIP файла
-        context.user_data['wiki_zip_kb_id'] = kb_id
-        context.user_data['wiki_zip_url'] = wiki_url
-        context.user_data['state'] = 'waiting_wiki_zip'
-        
-        await safe_edit_message_text(
-            query,
-            f"📦 Загрузка вики из ZIP архива\n\n"
-            f"URL вики: {wiki_url}\n"
-            f"База знаний: {kb_id}\n\n"
-            "Отправьте ZIP архив с файлами вики. Бот автоматически:\n"
-            "• Извлечет все markdown файлы из архива\n"
-            "• Восстановит ссылки на оригинальные страницы вики\n"
-            "• Добавит их в базу знаний"
+            "⚠️ Эта кнопка использует устаревший путь загрузки вики.\n\n"
+            "Используйте «🌐 Собрать вики по URL» и отправьте корневой URL wiki-раздела.\n"
+            "Текущий поддерживаемый сценарий сам выберет корректный backend flow, включая git fallback для Gitee.",
+            reply_markup=kb_actions_menu(kb_id),
         )
         return
     

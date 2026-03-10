@@ -41,3 +41,24 @@ def test_rag_summary_mode_instructions(monkeypatch):
     payload = RAGSummaryQuery(query="Generate instructions", knowledge_base_id=1, mode="instructions")
     result = rag_summary(payload, db=DummyDB())
     assert "Составь пошаговую инструкцию" in result.answer
+
+
+def test_rag_summary_transport_error_uses_extractive_fallback(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(_mock_search)})())
+    monkeypatch.setattr(
+        rag_module,
+        "ai_manager",
+        type(
+            "Y",
+            (),
+            {"query": staticmethod(lambda _prompt: "Ошибка подключения к Ollama: Read timed out")},
+        )(),
+    )
+
+    payload = RAGSummaryQuery(query="Generate instructions", knowledge_base_id=1, mode="instructions")
+    result = rag_summary(payload, db=DummyDB())
+    assert "Показываю наиболее релевантные фрагменты" in result.answer
+    assert "Step 1 do this" in result.answer
+    assert "Read timed out" not in result.answer

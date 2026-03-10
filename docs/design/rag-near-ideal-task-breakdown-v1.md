@@ -174,25 +174,35 @@ Extra checks for quality-impacting tasks:
   - `SPEC.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
 
-### RAGEXEC-008: Eval corpus expansion for real uploaded knowledge
+### RAGEXEC-008: Dev-only eval dataset and local source-manifest contract
 - Goal:
-  - extend the fixed corpus with wiki/code/long-doc/multilingual cases.
+  - add a dev-only evaluation dataset/manifest contract that covers source families and security cases without committing real local corpora.
 - Files:
   - `tests/data/rag_eval_ready_data_v2.yaml`
+  - `tests/data/rag_eval_source_manifest_v1.yaml`
   - `backend/services/rag_eval_service.py`
   - `tests/test_rag_eval_dataset_contract.py`
+  - `tests/test_rag_eval_fixture_manifest.py`
+  - `tests/test_rag_eval_security_contract.py`
 - Checks:
-  - `pytest tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_service.py`
+  - `pytest tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py`
 - Review:
-  - reviewer must verify source-family coverage, not only dataset validity.
+  - reviewer must verify source-family/security coverage and confirm the slice does not embed real local corpus data in repo artifacts.
 - Docs:
   - `SPEC.md`
   - `docs/TESTING.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - `docs/CONFIGURATION.md`
+  - `docs/OPERATIONS.md`
 
 ### RAGEXEC-009: Slice-aware baseline runner and gate
 - Goal:
   - report quality by source family and failure mode, not only aggregate metrics.
+- Runtime contract:
+  - baseline artifacts must write per-label timestamped runs, stable latest snapshots, and append-only trend history,
+  - slice aliases passed via CLI or present in run metadata must normalize to canonical gate names,
+  - recorded/core slices from run metadata must remain required even when sample size falls to zero so the gate fails explicitly instead of pruning coverage,
+  - gate output must distinguish source-family and security/failure-mode slice groups instead of flattening everything into one list.
 - Files:
   - `scripts/rag_eval_baseline_runner.py`
   - `scripts/rag_eval_quality_gate.py`
@@ -204,12 +214,18 @@ Extra checks for quality-impacting tasks:
 - Review:
   - reviewer must confirm the gate blocks meaningful regressions.
 - Docs:
+  - `SPEC.md`
   - `docs/OPERATIONS.md`
   - `docs/TESTING.md`
+  - `docs/REQUIREMENTS_TRACEABILITY.md`
 
 ### RAGEXEC-010: CI fail-fast quality workflow
 - Goal:
   - enforce the quality gate in CI and document the required local sequence.
+- Workflow contract:
+  - committed CI must run a public-safe fail-fast lane in this order: policy gate, secret scan, eval-tooling compile, synthetic eval-contract tests, then smoke tests,
+  - CI must not require Ollama or developer-local corpora,
+  - local docs must describe the same fast lane separately from any developer-local slow verification flow.
 - Files:
   - `.github/workflows/agent-quality-gates.yml`
   - `docs/TESTING.md`
@@ -226,11 +242,15 @@ Extra checks for quality-impacting tasks:
 ### RAGEXEC-011: Canonical wiki ingestion UX
 - Goal:
   - keep one reachable wiki flow and remove unreachable callback branches or restore a proper producer path.
+- Runtime contract:
+  - admin UI must use one canonical path `kb_wiki_crawl -> waiting_wiki_root -> /ingestion/wiki-crawl`,
+  - stale legacy wiki callback buttons must not rely on missing `wiki_urls` state or start orphan zip/git subflows,
+  - canonical entry and completion must clear legacy wiki temp keys to avoid stale follow-up state.
 - Files:
   - `frontend/bot_callbacks.py`
   - `frontend/bot_handlers.py`
 - Checks:
-  - `pytest tests/test_bot_text_ai_mode.py`
+  - `pytest tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py`
 - Review:
   - reviewer must confirm no orphan callback path remains.
 - Docs:
@@ -241,12 +261,22 @@ Extra checks for quality-impacting tasks:
 ### RAGEXEC-012: Wiki fallback visibility and regressions
 - Goal:
   - make git-fallback vs HTML-crawl behavior visible and regression-tested.
+- Runtime contract:
+  - wiki-crawl stats must expose the actual sync mode plus whether git fallback was attempted,
+  - admin bot messages must show the resulting sync mode,
+  - Gitee git-loader success and git-loader-failure-to-HTML fallback both need dedicated regressions.
 - Files:
+  - `backend/api/routes/ingestion.py`
+  - `backend/services/ingestion_service.py`
+  - `frontend/bot_callbacks.py`
+  - `frontend/bot_handlers.py`
   - `shared/wiki_scraper.py`
   - `shared/wiki_git_loader.py`
+  - `tests/test_ingestion_routes.py`
+  - `tests/test_bot_wiki_callbacks.py`
   - `tests/test_wiki_scraper.py`
 - Checks:
-  - `pytest tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py -k wiki`
+  - `pytest tests/test_ingestion_routes.py tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py -k wiki`
 - Review:
   - reviewer must confirm degraded fallback behavior is explicit.
 - Docs:
@@ -268,6 +298,9 @@ Extra checks for quality-impacting tasks:
   - `SPEC.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
   - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-09: new runtime writes now dual-write canonical chunk metadata into `metadata_json` plus additive `knowledge_chunks` columns (`chunk_hash`, `chunk_no`, `block_type`, `section_path_norm`, `token_count_est`, `parser_profile`), with nullable parser/page/adjacency fields kept for later source-fidelity slices.
+  - review hardening closed the remaining gaps for secret redaction, direct wiki write-path canonicalization, and additive `migrate_database()` coverage.
 
 ### RAGEXEC-014: PDF/DOCX structural fidelity
 - Goal:
@@ -283,6 +316,8 @@ Extra checks for quality-impacting tasks:
 - Docs:
   - `SPEC.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
+- Status:
+  - completed 2026-03-09: PDF loader now preserves page-aware section/path/span metadata from normalized page text, and DOCX loader now preserves heading hierarchy plus paragraph-span hints with deterministic `chunk_no` and parser profiles.
 
 ### RAGEXEC-015: Web/wiki/code structural normalization
 - Goal:
@@ -299,6 +334,8 @@ Extra checks for quality-impacting tasks:
 - Docs:
   - `SPEC.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
+- Status:
+  - completed 2026-03-09: web chunks now keep stable document + heading hierarchy, code chunks keep chunk-level symbol/span hints, and wiki git/zip imports normalize forward-slash page/file identities across platforms.
 
 ### RAGEXEC-016: Evidence-pack context composer
 - Goal:
@@ -313,6 +350,8 @@ Extra checks for quality-impacting tasks:
 - Docs:
   - `SPEC.md`
   - `docs/REQUIREMENTS_TRACEABILITY.md`
+- Status:
+  - completed 2026-03-09: `/rag/query` and `/rag/summary` now assemble deterministic evidence packs with anchor-first ordering, same-doc structural support within bounded budgets, and query-focused excerpts for noisy long chunks.
 
 ### RAGEXEC-017: Context inclusion diagnostics
 - Goal:
@@ -328,6 +367,8 @@ Extra checks for quality-impacting tasks:
 - Docs:
   - `docs/API_REFERENCE.md`
   - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: diagnostics candidates now expose explicit final-context inclusion markers (`included_in_context`, `context_rank`, `context_reason`, `context_anchor_rank`), and evidence-pack support rows can appear as synthetic `context_support` entries without leaking internal persistence marker keys into public metadata.
 
 ### RAGEXEC-018: Multi-corpus quality slices and thresholds
 - Goal:
@@ -346,6 +387,137 @@ Extra checks for quality-impacting tasks:
   - `docs/REQUIREMENTS_TRACEABILITY.md`
   - `docs/TESTING.md`
   - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: eval runs now persist explicit per-slice thresholds for source families and failure modes, gate output separates `source_families` / `security_scenarios` / `failure_modes`, and baseline artifacts render dedicated failure-mode summaries instead of aggregate-only reporting.
+
+### RAGEXEC-019: Controlled query rewriting and multi-query retrieval
+- Goal:
+  - improve recall/precision for short, ambiguous, or conversational KB questions without hardcoding corpus-specific terms.
+- Files:
+  - `backend/api/routes/rag.py`
+  - `shared/rag_system.py`
+  - `backend/services/rag_eval_service.py`
+- Checks:
+  - `pytest tests/test_rag_query_definition_intent.py tests/test_rag_quality.py <new rewrite/multi-query tests>`
+- Review:
+  - reviewer must verify rewrites stay bounded, grounded, and do not overfit to one corpus.
+- Docs:
+  - `SPEC.md`
+  - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: generalized `/rag/query` now issues at most three bounded canonical variants (original + optional definition/point/fact/keyword focus rewrites), fuses hits by stable chunk identity via shared multi-query aggregation, and preserves legacy rollback mode as a single-query path; focused regressions cover bounded fan-out, rewrite-only recall gain, and fusion deduplication.
+
+### RAGEXEC-020: Local answer-level judge metrics and commit deltas
+- Goal:
+  - add local-only answer-quality scoring and commit-to-commit comparison for faithfulness, relevancy, refusal, citation, and security resilience.
+- Files:
+  - `backend/services/rag_eval_service.py`
+  - `scripts/rag_eval_baseline_runner.py`
+  - `scripts/rag_eval_quality_gate.py`
+  - `docs/TESTING.md`
+  - `docs/OPERATIONS.md`
+- Checks:
+  - local-only eval baseline + compare run on developer corpora/Ollama, plus committed-safe schema/gate tests
+- Review:
+  - reviewer must verify there is no local-corpus leakage into repo artifacts and that answer-level metrics are trendable per commit.
+- Docs:
+  - `SPEC.md`
+  - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - `docs/TESTING.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: local-only eval runs can now score answer-level metrics and commit deltas with optional Ollama judge support, persist answer/security summaries only when the lane is enabled, keep retrieval-only artifacts free of dormant answer-lane metadata, and reject non-ollama provider inheritance/overrides to avoid local-corpus leakage.
+
+### RAGFOLLOW-001: Refusal and security hardening for malicious or overbroad queries
+- Goal:
+  - improve refusal/security answer quality on real local corpora now that retrieval is already strong enough.
+- Files:
+  - `backend/api/routes/rag.py`
+  - `shared/rag_safety.py`
+  - `shared/utils.py`
+  - `backend/services/rag_eval_service.py`
+- Checks:
+  - `pytest tests/test_rag_security_refusals.py tests/test_rag_safety.py tests/test_rag_url_preservation.py tests/test_rag_eval_service.py`
+  - local answer-eval compare against the existing `live_kb3_answer_eval` baseline
+- Review:
+  - reviewer must verify deterministic refusal behavior for prompt-leak / secret-leak / overbroad private-data probes and confirm no regression in grounded URL handling.
+- Docs:
+  - `SPEC.md`
+  - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: `/rag/query` and `/rag/summary` now refuse prompt-leak / secret-leak / overbroad private-data probes before LLM generation, poisoned context is blocked while benign security-doc examples stay answerable, and local live eval improved `refusal_accuracy` from `0.6923` to `1.0000` and `security_resilience` from `0.6923` to `1.0000` without retrieval regression.
+
+### RAGFOLLOW-002: Fix retrieval diagnostics FK persistence
+- Goal:
+  - stop `retrieval_candidate_logs` from failing FK inserts when `retrieval_query_logs` should already exist.
+- Files:
+  - `backend/api/routes/rag.py`
+  - `shared/database.py`
+  - `tests/test_rag_diagnostics.py`
+- Checks:
+  - `pytest tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py`
+- Review:
+  - reviewer must confirm request-level retrieval log rows always exist before candidate rows are inserted.
+- Docs:
+  - `SPEC.md`
+  - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: `_persist_retrieval_logs()` now flushes the parent `retrieval_query_logs` row before candidate inserts, unit coverage enforces parent-before-child ordering, and a reversible real-DB smoke confirmed temporary query/candidate rows can be inserted and cleaned up without the earlier FK-ordering warning.
+
+### RAGFOLLOW-003: Remove zero-sample noise from local eval slices
+- Goal:
+  - make local live reports derive slice sets from actual suite coverage so filtered runs do not show irrelevant zero-sample slices.
+- Files:
+  - `backend/services/rag_eval_service.py`
+  - `scripts/rag_eval_baseline_runner.py`
+  - `scripts/rag_eval_quality_gate.py`
+- Checks:
+  - `pytest tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py`
+- Review:
+  - reviewer must confirm filtered local suites do not silently hide required recorded slices while avoiding irrelevant zero-sample clutter.
+- Docs:
+  - `docs/TESTING.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: auto local eval runs now derive `metrics.slices` from actual suite coverage, so filtered live reports stop rendering unsupported `open_harmony_code` / `indirect_injection` zero-sample groups, while explicit `--slices` overrides remain strict for gate/debug scenarios; verified both by committed-safe tests and live artifact `live_kb3_answer_eval_sec4`.
+
+### RAGFOLLOW-004: Local-only answer failure-analysis artifacts
+- Goal:
+  - persist per-case failure reasons and compact answer traces locally so answer regressions can be debugged faster than aggregate metrics allow.
+- Files:
+  - `backend/services/rag_eval_service.py`
+  - `scripts/rag_eval_baseline_runner.py`
+- Checks:
+  - `pytest tests/test_rag_eval_service.py tests/test_rag_eval_baseline_runner.py`
+- Review:
+  - reviewer must confirm local artifacts stay private and committed-safe outputs still avoid developer-local corpus leakage.
+- Docs:
+  - `docs/TESTING.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: local answer-eval artifacts now persist compact `case_analysis` entries with truncated query/answer previews, reasons, suspicious events, metric snapshots, and source-path hints; retrieval-only artifacts omit this debug payload, and live artifact `live_kb3_answer_eval_sec6` now renders `## Answer Failure Analysis` for real failing cases.
+
+### RAGFOLLOW-005: Extractive fallback on LLM transport failures
+- Goal:
+  - avoid returning raw Ollama/OpenAI transport errors as the final RAG answer when retrieval already found usable grounded evidence.
+- Files:
+  - `backend/api/routes/rag.py`
+  - `tests/test_rag_context_composer.py`
+  - `tests/test_rag_summary_modes.py`
+  - `tests/test_rag_security_refusals.py`
+- Checks:
+  - `pytest tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_security_refusals.py`
+- Review:
+  - reviewer must confirm `/rag/query` and `/rag/summary` return extractive grounded snippets with the existing `sources`, do not leak raw provider transport details, and preserve security refusals as higher priority than fallback.
+- Docs:
+  - `SPEC.md`
+  - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - `docs/OPERATIONS.md`
+- Status:
+  - completed 2026-03-10: `/rag/query` and `/rag/summary` now replace raw provider timeout/503 strings with retrieval-only extractive fallbacks built from the selected evidence pack, preserve grounded `sources`, and still route fallback output through the standard URL/citation/command safety post-processing.
 
 ## Completion Rule
 

@@ -136,10 +136,20 @@ def test_ingest_web_page_normalizes_chunk_metadata(monkeypatch):
     assert meta["section_title"] == "https://example.org/wiki"
     assert meta["section_path"] == "https://example.org/wiki"
     assert meta["chunk_kind"] == "text"
+    assert meta["block_type"] == "text"
     assert meta["document_class"] == "instruction"
     assert meta["language"] == "en"
     assert meta["doc_version"] == 4
+    assert meta["chunk_no"] == 1
+    assert len(meta["chunk_hash"]) == 64
+    assert meta["parser_profile"] == "loader:web:v1"
+    assert meta["section_path_norm"] == "https://example.org/wiki"
     assert "source_updated_at" in meta
+    assert captured_rows[0]["metadata_json"] == meta
+    assert captured_rows[0]["chunk_columns"]["chunk_hash"] == meta["chunk_hash"]
+    assert captured_rows[0]["chunk_columns"]["chunk_no"] == 1
+    assert captured_rows[0]["chunk_columns"]["block_type"] == "text"
+    assert captured_rows[0]["chunk_columns"]["section_path_norm"] == "https://example.org/wiki"
 
 
 def test_ingest_codebase_path_emits_code_and_codebase_events(monkeypatch, tmp_path: Path):
@@ -226,11 +236,20 @@ def test_ingest_codebase_path_sets_code_metadata_contract(monkeypatch, tmp_path:
     meta = captured_rows[0]["metadata"]
     assert meta["type"] == "code"
     assert meta["chunk_kind"] == "code_file"
+    assert meta["block_type"] == "code_file"
     assert meta["title"] == "main.py"
     assert meta["doc_title"] == "main.py"
     assert meta["section_title"] == "main.py"
     assert meta["section_path"] == "main.py"
+    assert meta["section_path_norm"] == "main.py"
     assert meta["code_lang"] == "python"
     assert meta["file_path"] == "main.py"
     assert meta["repo_root"] == "repo"
     assert meta["doc_version"] == 7
+    assert meta["chunk_no"] == 1
+    assert len(meta["chunk_hash"]) == 64
+    assert meta["parser_profile"] == "loader:code:v1"
+    assert captured_rows[0]["metadata_json"] == meta
+    assert captured_rows[0]["chunk_columns"]["block_type"] == "code_file"
+    assert captured_rows[0]["chunk_columns"]["chunk_no"] == 1
+    assert captured_rows[0]["chunk_columns"]["parser_profile"] == "loader:code:v1"

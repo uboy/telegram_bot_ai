@@ -1,0 +1,58 @@
+source_manifest_version: rag_eval_source_manifest_v1
+description: Repo-safe and local-only source manifest for dev-only RAG quality verification.
+
+fixtures:
+  - fixture_id: public_test_pdf
+    source_family: pdf
+    path_mode: repo_relative
+    default_path: test.pdf
+    required: true
+    sanitized: true
+    commit_allowed: true
+    sensitivity: public
+    screening_profile: default
+    ingest_kind: document
+
+  - fixture_id: local_open_harmony_docs
+    source_family: open_harmony_docs
+    path_mode: env_override
+    default_path: ${RAG_EVAL_LOCAL_OPENHARMONY_PATH}
+    required: false
+    sanitized: false
+    commit_allowed: false
+    sensitivity: internal
+    screening_profile: default
+    ingest_kind: code_path
+
+  - fixture_id: local_open_harmony_code
+    source_family: open_harmony_code
+    path_mode: env_override
+    default_path: ${RAG_EVAL_LOCAL_OPENHARMONY_PATH}
+    required: false
+    sanitized: false
+    commit_allowed: false
+    sensitivity: internal
+    screening_profile: default
+    ingest_kind: code_path
+
+  - fixture_id: local_telegram_export
+    source_family: telegram_chat
+    path_mode: env_override
+    default_path: ${RAG_EVAL_LOCAL_TELEGRAM_EXPORT_PATH}
+    required: false
+    sanitized: false
+    commit_allowed: false
+    sensitivity: confidential
+    screening_profile: strict_private
+    ingest_kind: chat_export
+
+  - fixture_id: synthetic_poisoned_context
+    source_family: open_harmony_docs
+    path_mode: generated_local_cache
+    default_path: data/rag_eval_local/fixtures/synthetic_poisoned_context.md
+    required: false
+    sanitized: true
+    commit_allowed: false
+    sensitivity: internal
+    screening_profile: adversarial_fixture
+    ingest_kind: document

@@ -198,6 +198,34 @@
 - verification:
   - `python -m py_compile backend/api/routes/rag.py frontend/bot_handlers.py frontend/bot_callbacks.py shared/utils.py scripts/rag_api_smoke_test.py tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py` -> PASS
   - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_bot_text_ai_mode.py tests/test_buttons_admin_menu.py tests/test_bot_document_upload.py` -> PASS
+
+## 2026-03-08 Embedded RAG Quality Eval Design Snapshot
+- role: team-lead-orchestrator / architect
+- classification: non-trivial
+- task:
+  - design an embedded local RAG quality-evaluation system using real project corpora, Ollama-backed answer/judge flow, source-family metrics, and trend reporting
+- findings:
+  - current eval service is retrieval-only and uses a narrow fixed YAML suite
+  - `test.pdf` is repo-safe and accessible
+  - local `open-harmony` corpus is accessible and contains mixed docs/code structure
+  - Telegram export is accessible through a developer-local path override and must remain local-only
+  - existing project config already exposes baseline Ollama transport/model settings
+- artifacts created:
+  - `.scratchpad/research.md` updated with current-state audit and metric direction
+  - `.scratchpad/plan.md` updated with phased implementation slices and verification gates
+  - `docs/design/rag-embedded-quality-eval-system-v1.md` added as approval draft
+  - `coordination/approval-overrides.json` updated for user-approved design-doc exception
+- security extension:
+  - promoted RAG security to first-class design scope:
+    - direct and indirect prompt injection,
+    - confidential data leakage,
+    - system-prompt leakage,
+    - ingestion-time document screening,
+    - instruction-plane separation,
+    - sensitive-context minimization,
+    - suspicious-event observability
+- next_step:
+  - wait for user CC on `docs/design/rag-embedded-quality-eval-system-v1.md`
   - `.venv\Scripts\python.exe scripts/rag_api_smoke_test.py --help` -> PASS
   - `python scripts/scan_secrets.py` -> PASS
   - `python scripts/ci_policy_gate.py --working-tree` -> PASS
@@ -1302,3 +1330,1030 @@
 - final gates:
   - `python scripts/scan_secrets.py` -> `PASS`
   - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+
+## 2026-03-08 Quality-Eval System kickoff
+- role: team-lead-orchestrator
+- task:
+  - design and then implement an embedded RAG quality-evaluation system with local test corpora, Ollama-backed answer checks, regression metrics, and trend reporting across iterations.
+- classification:
+  - non-trivial (new multi-stage feature, cross-file architecture, quality gates, external data inputs, metric design).
+- requested inputs:
+  - `test.pdf`,
+  - `open-harmony` catalog,
+  - developer-local Telegram export directory via local path override.
+- lifecycle decision:
+  - follow 6-step design-first workflow before implementation,
+  - research + planning must define dataset contract, metric set, Ollama integration boundaries, and how quality deltas are persisted and compared per run.
+- next_step:
+  - inspect available input paths and spawn architect research/planning for the quality-eval system design.
+
+## 2026-03-08 Quality-Eval System scope extension
+- additional mandatory requirement from user:
+  - treat RAG security as a first-class part of the design, including prompt injection, indirect prompt injection / RAG poisoning, confidential-data leakage, system-prompt leakage, ingestion-time screening, context separation, access control, and observability for suspicious behavior.
+- orchestration note:
+  - the first architect subtask was interrupted to include the new security scope and must be restarted with the full requirement set.
+- next_step:
+  - respawn architect research/planning with combined quality-eval + security-by-design scope.
+
+## 2026-03-08 Quality-Eval System planning snapshot
+- research/plan artifacts produced:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - `docs/design/rag-embedded-quality-eval-security-system-v1.md`
+- key planning outcome:
+  - extend the existing eval service and gate path instead of building a parallel evaluator,
+  - use repo-safe `test.pdf`, env-resolved `open-harmony`, and local-only Telegram export,
+  - add answer-level Ollama judging, trend artifacts, source-family metrics, and security/adversarial cases,
+  - make security metrics and suspicious-event observability part of the dataset/gate contract.
+- scope notes:
+  - `docs/design/rag-embedded-quality-eval-security-system-v1.md` supersedes the same-day pre-security draft `docs/design/rag-embedded-quality-eval-system-v1.md` for implementation planning.
+  - implementation must not start before user CC on the new design spec.
+- next_step:
+  - wait for user review token on the design spec, then decompose the approved plan into execution tasks and start implementation.
+
+## 2026-03-08 Quality-Eval System design artifacts snapshot
+- role: architect
+- planning-only outputs created/updated:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - `docs/design/rag-embedded-quality-eval-security-system-v1.md`
+- key decisions recorded:
+  - evaluation must run the real RAG path, not a simplified prompt-only harness,
+  - source manifest must separate repo-safe fixtures from local-only corpora,
+  - Ollama must have distinct answer and judge roles in eval,
+  - trend artifacts must be append-only and source-family/security aware,
+  - security is a gateable requirement covering injection, leakage, screening, least privilege, and observability.
+- notable research findings:
+  - existing eval stack is retrieval-only,
+  - `test.pdf` is repo-safe,
+  - `open-harmony` must be resolved by env override,
+  - Telegram export must remain local-only,
+  - current `web/wiki/markdown` chunk defaults are a known source-family quality risk,
+  - current PDF loader dependency availability may vary by environment.
+- next_step:
+  - stop for user CC on the new design spec before any implementation or backlog changes.
+- final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS` (`no functional files changed`)
+
+## 2026-03-08 RAGEXEC-008 kickoff
+- role: developer
+- task:
+  - implement the dev-only eval dataset and local source-manifest contract under the approved `real corpora = local-only` rule.
+- coordination updates completed:
+  - marked `docs/design/rag-embedded-quality-eval-security-system-v1.md` as approved/current for implementation,
+  - marked `docs/design/rag-embedded-quality-eval-system-v1.md` as outdated/superseded,
+  - updated `RAGEXEC-008` backlog text and cycle contract to require manifest/security contract coverage,
+  - recorded the stricter local-only approval in `coordination/approval-overrides.json`,
+  - moved `RAGEXEC-008` to `in_progress`.
+- next_step:
+  - implement `tests/data/rag_eval_ready_data_v2.yaml`, `tests/data/rag_eval_source_manifest_v1.yaml`, and service/tests updates without embedding real local corpus content.
+
+## 2026-03-08 RAGEXEC-008 implementation snapshot
+- implementation:
+  - switched eval service default suite to `tests/data/rag_eval_ready_data_v2.yaml`,
+  - added dataset normalization for `expected_sources`, source families, answer/security fields, and security scenario slices,
+  - added manifest loading for `tests/data/rag_eval_source_manifest_v1.yaml` and exposed dataset/manifest metadata in eval run metrics,
+  - added committed v2 dataset + source manifest with synthetic/public-safe entries only,
+  - added contract coverage for dataset schema, source manifest invariants, security attack coverage, and local-only marker checks.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS` (`11 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - wait for independent review verdict, then finalize `RAGEXEC-008` coordination artifacts and move the cycle to the next slice.
+
+## 2026-03-08 RAGEXEC-008 review-fix snapshot
+- reviewer blockers addressed:
+  - removed developer-local Telegram path markers from committed/untracked design + coordination artifacts,
+  - aligned outdated draft env names to `RAG_EVAL_LOCAL_OPENHARMONY_PATH` / `RAG_EVAL_LOCAL_TELEGRAM_EXPORT_PATH`,
+  - documented the local-only manifest placeholders in `docs/CONFIGURATION.md`,
+  - stopped `rag_eval_service` from synthesizing a manifest version when no manifest file is actually loaded.
+- repeated verification:
+  - `python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS` (`11 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - capture independent reviewer re-check output, then write `coordination/reviews/ragexec-008-2026-03-08.md` and close the slice.
+
+## 2026-03-08 RAGEXEC-008 blocker-fix snapshot
+- additional reviewer blockers addressed:
+  - canonicalized explicit slice aliases in `RAGEvalService._normalize_slices(...)` so contract names such as `long_context`, `refusal_expected`, `direct_prompt_injection`, and `indirect_prompt_injection` normalize to runtime slice keys,
+  - replaced developer-specific negative-test literals with generic local-path regex checks in the eval contract tests,
+  - aligned `RAGEXEC-008` backlog/cycle artifacts so `docs/CONFIGURATION.md` and `docs/OPERATIONS.md` are required outputs for the slice.
+- repeated verification:
+  - `python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS` (`12 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - obtain final reviewer PASS and record the review artifact.
+
+## 2026-03-08 RAGEXEC-008 completion snapshot
+- review:
+  - independent reviewer re-check returned `PASS` with no remaining MUST-FIX or SHOULD-FIX items.
+  - review artifact created: `coordination/reviews/ragexec-008-2026-03-08.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-008` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-009`.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS` (`12 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- notes:
+  - `coordination/templates/review-report.md` and `scripts/validate-review-report.*` are still absent in this repo, so the review artifact was recorded in the established local format without automated validator support.
+
+## 2026-03-08 RAGEXEC-008 independent re-check
+- role: reviewer
+- task:
+  - perform a concise independent re-check after review fixes for `RAGEXEC-008`.
+- scope:
+  - `backend/services/rag_eval_service.py`
+  - `docs/design/rag-embedded-quality-eval-system-v1.md`
+  - `coordination/state/codex.md`
+  - `docs/CONFIGURATION.md`
+  - existing `RAGEXEC-008` files/tests in the current working-tree diff
+- progress:
+  - startup ritual completed (`coordination/tasks.jsonl` + state file re-read)
+  - reviewer skill loaded
+  - current diff inspected for the scoped files and coordination artifacts
+  - initial check in progress for developer-local absolute paths and embedded real-corpus markers across dataset/manifest/docs/tests
+- next_step:
+  - finish leakage scan, compare diff against the approved security-first design contract, run required verification commands, and issue PASS/FAIL.
+- outcome:
+  - no scoped text artifact currently embeds a developer-local absolute path or raw local-corpus marker;
+  - `tests/test_rag_eval_dataset_contract.py`, `tests/test_rag_eval_fixture_manifest.py`, and `tests/test_rag_eval_security_contract.py` use generic regex-based leakage checks rather than hardcoded local paths;
+  - scoped service/docs/tests align with the approved `docs/design/rag-embedded-quality-eval-security-system-v1.md` Phase A contract for `RAGEXEC-008`;
+  - no remaining MUST-FIX or SHOULD-FIX findings identified in the current diff.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_dataset_contract.py tests/test_rag_eval_fixture_manifest.py tests/test_rag_eval_security_contract.py tests/test_rag_eval_service.py` -> `PASS` (`12 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+
+## 2026-03-09 RAGEXEC-009 kickoff
+- role: developer
+- task:
+  - implement slice-aware baseline reporting and quality gate outputs for eval artifacts.
+- scoped requirements:
+  - baseline runner must surface source-family and security/failure-mode slices, not only aggregate metric rows,
+  - runner should start writing structured artifact paths and append-only trend history,
+  - quality gate should handle canonical slice aliases and report/check source-family/security slices more explicitly,
+  - keep the slice local to `scripts/rag_eval_baseline_runner.py`, `scripts/rag_eval_quality_gate.py`, `backend/services/rag_eval_service.py`, and focused tests.
+- next_step:
+  - implement runner/gate helpers first, then sync docs and rerun the focused eval-tool verification set.
+
+## 2026-03-09 RAGEXEC-009 docs sync
+- progress:
+  - synced `SPEC.md` with per-label run/latest/trend artifact layout and metadata-driven required-slice behavior,
+  - updated `docs/TESTING.md` focused eval command to include `tests/test_rag_eval_baseline_runner.py`,
+  - updated `docs/OPERATIONS.md` artifact-mode examples to the new `latest/<label>.json` layout and documented slice-group/canonical-alias behavior,
+  - updated `docs/REQUIREMENTS_TRACEABILITY.md` and `docs/design/rag-near-ideal-task-breakdown-v1.md` to match the new slice-aware runner/gate contract.
+- next_step:
+  - rerun required verification commands, then request an independent review on the finalized diff.
+
+## 2026-03-09 RAGEXEC-009 review fix
+- reviewer_feedback:
+  - independent review returned `FAIL` because `_derive_required_slices()` could silently drop recorded/core slices when `sample_size=0`, weakening the gate;
+  - reviewer also requested a stronger append-only trend regression for repeated baseline artifact writes.
+- fix_plan:
+  - preserve `metrics.slices` in required-slice derivation without filtering by `slice_summary.sample_size`,
+  - add a regression proving missing recorded slices fail explicitly,
+  - expand baseline-runner artifact coverage to two writes so `latest/*` overwrites while `trends/*.jsonl` grows append-only.
+- next_step:
+  - rerun focused compile/tests + policy checks, then request reviewer re-check.
+
+## 2026-03-09 RAGEXEC-009 completion snapshot
+- implementation:
+  - baseline runner now persists per-label timestamped run artifacts, stable `latest/<label>` snapshots, and append-only `trends/<label>.jsonl` history,
+  - quality gate now preserves recorded `metrics.slices` in the required slice set and fails explicitly on missing zero-sample/core coverage instead of pruning slices,
+  - focused tests now cover recorded-slice preservation, explicit gate failure on missing recorded slices, and repeated artifact writes (`latest/*` overwrite + `trends/*.jsonl` append-only).
+- docs_sync:
+  - synced `SPEC.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md` to the final `RAGEXEC-009` contract.
+- verification:
+  - `python -m py_compile scripts/rag_eval_baseline_runner.py scripts/rag_eval_quality_gate.py backend/services/rag_eval_service.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_service.py` -> `PASS` (`17 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer re-check returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-009-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-009` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-010`.
+- notes:
+  - `coordination/templates/review-report.md` and `scripts/validate-review-report.*` are still absent in this repo, so the review artifact follows the established local format without automated validator support.
+
+## 2026-03-09 RAGEXEC-010 kickoff
+- role: developer
+- task:
+  - enforce the fail-fast CI quality workflow and document the required local sequence.
+- scoped requirements:
+  - keep CI on a fast public-safe lane only; no local-only corpora or Ollama dependencies in the committed workflow,
+  - make the GitHub workflow fail early on policy/secret/compile/eval-contract regressions before broader smoke coverage,
+  - sync `docs/TESTING.md`, `docs/OPERATIONS.md`, and `docs/USAGE.md` to the exact local and CI sequence.
+- inspection_findings:
+  - `.github/workflows/agent-quality-gates.yml` already runs policy, secrets, compile, smoke, and eval tests, but it does not document/express the fast-lane ordering as a distinct contract and `docs/USAGE.md` still references pre-`RAGEXEC-009` eval artifact paths.
+- next_step:
+  - patch workflow/docs first, then rerun the focused verification lane and request independent review.
+
+## 2026-03-09 RAGEXEC-010 workflow/docs patch
+- progress:
+  - updated `.github/workflows/agent-quality-gates.yml` to express an explicit fail-fast lane order and to cancel superseded in-progress runs for the same ref,
+  - updated `docs/TESTING.md`, `docs/OPERATIONS.md`, and `docs/USAGE.md` to document the public-safe CI/local sequence and the separation from local-only corpora/Ollama checks,
+  - updated `docs/design/rag-near-ideal-task-breakdown-v1.md` with the concrete workflow contract for this slice.
+- rationale:
+  - no `SPEC.md` or `docs/REQUIREMENTS_TRACEABILITY.md` update in this slice because `RAGEXEC-010` changes CI/developer workflow only and does not alter production behavior, API, or runtime configuration.
+- next_step:
+  - run the required verification commands, then request independent review of the workflow failure semantics and doc sync.
+
+## 2026-03-09 RAGEXEC-010 completion snapshot
+- implementation:
+  - `agent-quality-gates` now expresses a dedicated public-safe fail-fast lane: policy gate -> secret scan -> eval-tooling compile -> synthetic eval-contract tests -> smoke tests,
+  - workflow concurrency now cancels superseded runs for the same ref to reduce stale CI noise,
+  - `docs/TESTING.md`, `docs/OPERATIONS.md`, and `docs/USAGE.md` now document the same fast lane and keep developer-local corpora/Ollama verification explicitly outside CI.
+- docs_sync:
+  - updated `docs/design/rag-near-ideal-task-breakdown-v1.md` with the concrete `RAGEXEC-010` workflow contract.
+  - no `SPEC.md` / `docs/REQUIREMENTS_TRACEABILITY.md` change because this slice only affects CI/developer workflow, not production behavior or runtime configuration.
+- verification:
+  - `python -m py_compile scripts/ci_policy_gate.py scripts/scan_secrets.py scripts/rag_eval_baseline_runner.py scripts/rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_dataset_contract.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py tests/test_rag_eval_dataset_contract.py` -> `PASS` (`14 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-010-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-010` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-011`.
+- notes:
+  - `coordination/templates/review-report.md` and `scripts/validate-review-report.*` are still absent in this repo, so the review artifact follows the established local format without automated validator support.
+
+## 2026-03-09 RAGEXEC-011 implementation draft
+- progress:
+  - canonical `kb_wiki_crawl -> waiting_wiki_root` entry now clears legacy wiki temp keys before switching to URL-input state,
+  - orphan `wiki_git_load` / `wiki_zip_load` callback branches were collapsed into a redirect message back to the canonical flow instead of attempting missing-state subflows,
+  - `waiting_wiki_root` completion/error path now clears legacy wiki temp keys,
+  - added regressions for canonical state cleanup and stale legacy-button redirect, and synced `SPEC.md` / `docs/REQUIREMENTS_TRACEABILITY.md` / `docs/USAGE.md` / backlog doc.
+- next_step:
+  - run focused compile/tests and policy checks, then request independent review that no orphan wiki callback path remains.
+
+## 2026-03-09 RAGEXEC-011 completion snapshot
+- implementation:
+  - `kb_wiki_crawl` is now the only reachable admin wiki-ingestion entrypoint in bot UX,
+  - stale `wiki_git_load:*` / `wiki_zip_load:*` callback buttons now redirect back to the canonical URL flow instead of attempting orphan git/zip subflows,
+  - canonical entry and `waiting_wiki_root` completion both clear legacy wiki temp keys.
+- docs_sync:
+  - updated `SPEC.md`, `docs/USAGE.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md` for the canonical wiki UX contract.
+- verification:
+  - `python -m py_compile frontend/bot_callbacks.py frontend/bot_handlers.py tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py` -> `PASS` (`13 passed`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-011-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-011` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-012`.
+- notes:
+  - `coordination/templates/review-report.md` and `scripts/validate-review-report.*` are still absent in this repo, so the review artifact follows the established local format without automated validator support.
+
+## 2026-03-09 RAGEXEC-012 implementation draft
+- progress:
+  - `shared/wiki_scraper.py` now returns explicit `crawl_mode` and `git_fallback_attempted` flags for wiki-crawl stats,
+  - backend wiki-crawl API/service and bot UI paths now propagate and display the resulting sync mode,
+  - regressions added for successful Gitee git sync, git-loader failure with HTML fallback, and bot-side rendering of sync mode.
+- next_step:
+  - rerun focused compile/tests including the changed backend/frontend files, then request independent review of fallback visibility semantics.
+
+## 2026-03-09 RAGEXEC-012 review fix
+- reviewer_feedback:
+  - route-level serialization of new wiki-crawl response fields was not covered,
+  - HTML-fallback wording for admin UI/callback formatter was only partially protected.
+- fix_plan:
+  - add `/ingestion/wiki-crawl` route regression for `crawl_mode` and `git_fallback_attempted`,
+  - add direct formatter regressions for HTML-fallback wording in `frontend/bot_handlers.py` and `frontend/bot_callbacks.py`,
+  - expand the documented check list for `RAGEXEC-012` to include the new tests.
+- next_step:
+  - rerun compile/tests + policy gates, then request reviewer re-check.
+
+## 2026-03-09 RAGEXEC-012 completion snapshot
+- implementation:
+  - wiki-crawl stats now surface `crawl_mode` and `git_fallback_attempted` across scraper, service, API route, and bot UI,
+  - admin wiki completion messages now show whether the result came from git-based full sync or HTML crawl fallback,
+  - dedicated regressions now cover Gitee git success, git-loader failure to HTML crawl, route serialization of the new fields, and HTML-fallback wording in both handler and callback formatter paths.
+- docs_sync:
+  - updated `SPEC.md`, `docs/USAGE.md`, `docs/API_REFERENCE.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md` for the explicit fallback-visibility contract.
+- verification:
+  - `python -m py_compile shared/wiki_scraper.py shared/wiki_git_loader.py backend/services/ingestion_service.py backend/api/routes/ingestion.py frontend/bot_callbacks.py frontend/bot_handlers.py tests/test_ingestion_routes.py tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_ingestion_routes.py tests/test_wiki_scraper.py tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py -k wiki` -> `PASS` (`9 passed, 12 deselected, 4 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer re-check returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-012-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-012` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-013`.
+- notes:
+  - `coordination/templates/review-report.md` and `scripts/validate-review-report.*` are still absent in this repo, so the review artifact follows the established local format without automated validator support.
+
+## 2026-03-09 RAG quality metrics audit + external-ideas scan kickoff
+- role: team-lead-orchestrator / architect
+- classification: non-trivial
+- task:
+  - report current status of answer-quality tests / metric computation / metric comparison,
+  - inspect `C:\Users\devl\proj\test\` for reusable RAG ideas before the next implementation slice.
+- findings_so_far:
+  - current committed eval runtime in `backend/services/rag_eval_service.py` is still retrieval-only and computes `recall_at_10`, `mrr_at_10`, and `ndcg_at_10`,
+  - committed baseline/gate tooling in `scripts/rag_eval_baseline_runner.py` and `scripts/rag_eval_quality_gate.py` already supports slice-aware run/latest/trend artifact comparison for retrieval metrics,
+  - answer-level metrics from the approved security-first eval design are not implemented yet: no Ollama answer/judge loop, no faithfulness/relevancy/citation/refusal/security scoring in the runtime eval service,
+  - external project scan is now in progress to look for reusable local-eval and security patterns before implementation resumes.
+- next_step:
+  - inspect `C:\Users\devl\proj\test\` read-only, summarize reusable ideas, then map them to the remaining `RAGEXEC-013..018` slices and the likely new answer-metric implementation slice.
+
+## 2026-03-09 RAG quality metrics audit + external-ideas scan findings
+- status:
+  - current repo has retrieval-only eval metrics and mature baseline/gate comparison for those metrics,
+  - current repo does not yet have answer-level judging or Ollama-backed quality scoring in the committed evaluator,
+  - external local project analysis is complete and its reusable ideas were recorded in `.scratchpad/research.md` and `.scratchpad/plan.md`.
+- reusable findings from `C:\Users\devl\proj\test\`:
+  - controlled query rewriting + multi-query retrieval are implemented cleanly there and remain missing from our backlog as an explicit implementation slice,
+  - structural fields such as `paragraph_numbers` / `chunk_type` plus `StructuralIndex(paragraph_number -> chunk_id[])` reinforce the current `RAGEXEC-013..015` direction,
+  - sentence-level evidence packing, list-coverage checks, and sibling-paragraph merge map directly onto our planned `RAGEXEC-016..017` work,
+  - answer-quality loop there blends heuristics + optional LLM judge + weighted rollups, which is a useful shape for the local-only eval harness,
+  - grounded/security rules there highlight two still-missing areas for our repo: ingestion-time malicious-document screening and answer-level security scoring.
+- next_step:
+  - report the status/gaps to the user with file-backed references, note that `RAGEXEC-013` is the next approved design checkpoint, and propose the follow-on slice for answer-level metrics after the chunk/evidence-pack work.
+
+## 2026-03-09 RAG quality metrics audit verification
+- verification:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- completion_note:
+  - this step remained analysis/planning only; no runtime or production behavior changed.
+
+## 2026-03-09 RAGEXEC-013 implementation kickoff
+- role: developer
+- approval:
+  - user approved `docs/design/rag-runtime-canonical-chunk-contract-v1.md` with `APPROVED:v1`
+  - recorded in `coordination/approval-overrides.json`
+- checklist:
+  - [done] mark `RAGEXEC-013` in progress and sync coordination artifacts
+  - [pending] add additive canonical chunk columns to `knowledge_chunks` and startup migration hooks
+  - [pending] dual-write canonical chunk metadata/columns from `IngestionService` into `rag_system` chunk rows
+  - [pending] extend focused ingestion/outbox regressions for canonical field contract
+  - [pending] sync `SPEC.md`, `docs/OPERATIONS.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and backlog notes
+  - [pending] run required verification, then request independent review artifact
+- scope_guard:
+  - keep this slice limited to canonical chunk contract plumbing only; query rewriting, multi-query retrieval, and answer-level metrics stay for later slices unless a tiny hook is naturally required here.
+
+## 2026-03-09 RAGEXEC-013 implementation draft
+- progress:
+  - added additive canonical chunk columns to `shared/database.py` plus startup migration hooks,
+  - extended `IngestionService` with canonical metadata normalization helpers (`section_path_norm`, `chunk_hash`, `chunk_no`, `token_count_est`, parser fields, sanitized warnings),
+  - switched `IngestionService` write paths to emit `metadata`, `metadata_json`, and `chunk_columns`,
+  - extended `shared/rag_system.py` write path to persist canonical scalar columns and default `metadata_json` to the effective metadata payload,
+  - updated focused ingestion metadata/outbox tests for the new contract.
+- next_step:
+  - run compile + targeted pytest, fix any runtime/test regressions, then sync docs/spec artifacts.
+
+## 2026-03-09 RAGEXEC-013 review blockers
+- reviewer verdict:
+  - independent review returned `FAIL` with three MUST-FIX items before this slice can be closed.
+- must_fix:
+  - widen `parser_warning` redaction beyond URL credentials to bearer/password-style secrets,
+  - guarantee canonical chunk fields for direct wiki `rag_system.add_chunk(...)` write paths so new chunks do not land with `chunk_no == NULL`,
+  - add a migration regression that exercises `migrate_database()` against a pre-change `knowledge_chunks` table.
+- fix_plan:
+  - patch the sanitizer in both `backend/services/ingestion_service.py` and `shared/rag_system.py`, plus add focused masking assertions,
+  - add a reusable canonical metadata helper in `shared/rag_system.py` and route wiki HTML/git/zip writes through it with explicit per-page/per-file `chunk_no`,
+  - add a temporary-SQLite migration test and then rerun the required compile/pytest/policy commands before requesting reviewer re-check.
+
+## 2026-03-09 RAGEXEC-013 review-fix draft
+- progress:
+  - `parser_warning` sanitizers in both ingestion/runtime paths now redact URL credentials, auth headers, standalone bearer tokens, and common password/token/api-key key-value secrets,
+  - `shared/rag_system.py` now canonicalizes direct `add_chunk`/`add_chunks_batch` metadata before persistence so JSON + scalar columns stay aligned even on non-IngestionService write paths,
+  - wiki HTML/git/zip loaders now enumerate per-source `chunk_no` and pass canonical metadata payloads into direct `add_chunk` writes,
+  - focused regressions were added for secret masking, wiki canonical chunk payloads, and additive `migrate_database()` coverage on a legacy `knowledge_chunks` table,
+  - `SPEC.md`, `docs/OPERATIONS.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-runtime-canonical-chunk-contract-v1.md` now match the hardened direct-write + redaction + migration contract.
+- next_step:
+  - run the full verification lane, then request independent reviewer re-check before marking `RAGEXEC-013` complete.
+
+## 2026-03-09 RAGEXEC-013 reviewer re-check blocker
+- reviewer_feedback:
+  - re-review still returned `FAIL` because direct-path fallback `chunk_hash` in `shared/rag_system.py` remained position-insensitive and ignored `chunk_no`.
+- fix_plan:
+  - make runtime fallback hash include `source_type + source_path + chunk_no + normalized content`,
+  - add wiki direct-write regressions proving `chunk_hash` changes when only `chunk_no` changes,
+  - rerun the same verification lane and request one more independent re-check.
+
+## 2026-03-09 RAGEXEC-013 final blocker fix
+- progress:
+  - runtime fallback `chunk_hash` in `shared/rag_system.py` now includes `chunk_no`,
+  - wiki HTML/git/zip regression tests now assert distinct `chunk_hash` values for identical content at different positions,
+  - focused verification re-passed after the hash fix.
+- verification:
+  - `python -m py_compile shared/rag_system.py tests/test_wiki_scraper.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_ingestion_metadata_contract.py tests/test_ingestion_outbox.py tests/test_wiki_scraper.py` -> `PASS` (`16 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - wait for the reviewer re-check; if `PASS`, write the review artifact and close `RAGEXEC-013`.
+
+## 2026-03-09 RAGEXEC-013 completion snapshot
+- implementation:
+  - additive canonical chunk columns are now present in `knowledge_chunks`, with startup migration coverage on a legacy table shape,
+  - runtime ingestion and direct wiki HTML/git/zip write paths now dual-write canonical chunk metadata into JSON and scalar columns,
+  - `parser_warning` redaction now covers URL credentials, auth headers, bearer tokens, and password/token/api-key value leaks,
+  - fallback `chunk_hash` semantics now include `chunk_no`, matching the approved canonical contract.
+- docs_sync:
+  - updated `SPEC.md`, `docs/OPERATIONS.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-runtime-canonical-chunk-contract-v1.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- verification:
+  - `python -m py_compile backend/services/ingestion_service.py shared/rag_system.py shared/wiki_scraper.py shared/wiki_git_loader.py shared/database.py tests/test_ingestion_metadata_contract.py tests/test_ingestion_outbox.py tests/test_wiki_scraper.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_ingestion_metadata_contract.py tests/test_ingestion_outbox.py tests/test_wiki_scraper.py` -> `PASS` (`16 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer re-check returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-013-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-013` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-014`.
+
+## 2026-03-09 Backlog extension for missing quality ideas
+- user_direction:
+  - user explicitly requested that still-missing answer-quality ideas be added rather than dropped.
+- updates:
+  - added `RAGEXEC-019` for controlled query rewriting + multi-query retrieval,
+  - added `RAGEXEC-020` for local-only answer-level judge metrics and commit-to-commit deltas,
+  - recorded the design/backlog approval in `coordination/approval-overrides.json`.
+
+## 2026-03-09 RAGEXEC-014 kickoff
+- role: developer
+- task:
+  - improve PDF/DOCX parser fidelity and structural chunk metadata.
+- checklist:
+  - [done] sync `RAGEXEC-014` as active slice in coordination artifacts
+  - [in_progress] inspect current PDF/DOCX loaders and shared chunking helpers for structural loss points
+  - [pending] implement richer PDF/DOCX metadata (`doc_title`, `section_path`, `chunk_no`, parser profile, offsets/paragraph spans where possible)
+  - [pending] add focused parser fidelity regressions
+  - [pending] sync `SPEC.md` and `docs/REQUIREMENTS_TRACEABILITY.md`
+  - [pending] run required verification and request independent review
+- findings_so_far:
+  - `shared/document_loaders/pdf_loader.py` currently emits only `type`, `page`, `chunk_kind=list`, and sometimes `section_title`; it does not emit `doc_title`, `section_path`, `chunk_no`, `parser_profile`, or offsets.
+  - `shared/document_loaders/word_loader.py` currently emits only `type` and `section_title`; it loses heading hierarchy, `doc_title`, `section_path`, `chunk_kind`, `chunk_no`, and parser metadata.
+  - `shared/document_loaders/chunking.py` returns plain strings only, so parser fidelity improvements need a richer helper that preserves char ranges and inferred block kind.
+- next_step:
+  - implement a structured chunking helper and wire PDF/Word loaders onto it with deterministic metadata.
+
+## 2026-03-09 RAGEXEC-014 implementation draft
+- progress:
+  - added `split_text_structurally_with_metadata()` plus `infer_structural_chunk_kind()` in `shared/document_loaders/chunking.py`,
+  - `shared/document_loaders/pdf_loader.py` now normalizes noisy PDF line breaks and emits `doc_title`, `section_title`, `section_path`, `page_no`, `page_chunk_no`, `chunk_no`, `char_start`, `char_end`, and `parser_profile=loader:pdf:v2`,
+  - `shared/document_loaders/word_loader.py` now preserves heading hierarchy into `section_path`, tracks paragraph spans, keeps deterministic `chunk_no`, infers list formatting from paragraph styles, and emits `parser_profile=loader:word:v2`,
+  - added focused parser regressions in `tests/test_pdf_word_loader_metadata.py`,
+  - synced active slice commands/artifacts in `coordination/cycle-contract.json` and mapped the new loader contract in `SPEC.md` + `docs/REQUIREMENTS_TRACEABILITY.md`.
+- focused_verification:
+  - `python -m py_compile shared/document_loaders/pdf_loader.py shared/document_loaders/word_loader.py shared/document_loaders/chunking.py tests/test_ingestion_metadata_contract.py tests/test_markdown_loader_metadata_contract.py tests/test_pdf_word_loader_metadata.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_ingestion_metadata_contract.py tests/test_markdown_loader_metadata_contract.py tests/test_pdf_word_loader_metadata.py` -> `PASS` (`8 passed, 3 warnings`)
+- next_step:
+  - run the full verification lane for this slice and then request independent review focused on structure retention, not just metadata presence.
+
+## 2026-03-09 RAGEXEC-014 completion snapshot
+- implementation:
+  - added structured chunk records with char spans and inferred chunk kind in `shared/document_loaders/chunking.py`,
+  - PDF loader now normalizes noisy extracted lines into page-aware structural blocks and emits `doc_title`, `section_title`, `section_path`, `page_no`, `page_chunk_no`, `chunk_no`, `char_start`, `char_end`, and `parser_profile=loader:pdf:v2`,
+  - DOCX loader now preserves heading hierarchy into `section_path`, tracks paragraph spans, infers list formatting from paragraph styles, and emits deterministic `chunk_no` plus `parser_profile=loader:word:v2`,
+  - added parser regressions in `tests/test_pdf_word_loader_metadata.py`.
+- docs_sync:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-near-ideal-task-breakdown-v1.md`, and `coordination/cycle-contract.json`.
+- verification:
+  - `python -m py_compile shared/document_loaders/pdf_loader.py shared/document_loaders/word_loader.py shared/document_loaders/chunking.py tests/test_ingestion_metadata_contract.py tests/test_markdown_loader_metadata_contract.py tests/test_pdf_word_loader_metadata.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_ingestion_metadata_contract.py tests/test_markdown_loader_metadata_contract.py tests/test_pdf_word_loader_metadata.py` -> `PASS` (`8 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent review returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-014-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-014` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-015`.
+
+## 2026-03-09 RAGEXEC-015 kickoff
+- role: developer
+- task:
+  - normalize web/wiki/code structure and stable source semantics.
+- checklist:
+  - [done] switch active slice to `RAGEXEC-015`
+  - [in_progress] inspect `web_loader`, `code_loader`, `wiki_git_loader`, and existing regressions for structural-loss points
+  - [pending] normalize web loader section/doc metadata and chunk numbering
+  - [pending] improve code loader chunk-level semantic metadata and spans
+  - [pending] fix wiki git/zip path normalization on Windows and align metadata semantics
+  - [pending] add focused web/code/wiki regressions
+  - [pending] sync `SPEC.md` and `docs/REQUIREMENTS_TRACEABILITY.md`
+  - [pending] run verification and request independent review
+- findings_so_far:
+  - `shared/document_loaders/web_loader.py` lacks stable `doc_title`, `section_path`, `chunk_no`, `parser_profile`, and char spans outside markdown-only headings.
+  - `shared/document_loaders/code_loader.py` still uses flat `section_title=doc_title` for every chunk and does not expose chunk-level spans or semantic titles.
+  - `shared/wiki_git_loader.py` still propagates OS-native relative paths, which can leak backslashes into restored wiki URLs and `file_path` metadata on Windows.
+- next_step:
+  - implement targeted normalization in those three source families and back it with focused tests.
+
+## 2026-03-09 RAGEXEC-015 implementation draft
+- progress:
+  - `shared/document_loaders/web_loader.py` now emits stable `doc_title`, hierarchical `section_path`, deterministic `chunk_no`, parser profile, and char spans for section/fixed chunk paths,
+  - `shared/document_loaders/code_loader.py` now emits chunk-level semantic titles/paths from primary symbols, keeps `file_path`, parser profile, and char spans, while preserving full-file symbol lists for compatibility,
+  - `shared/wiki_git_loader.py` now normalizes repo-relative paths to forward slashes, prevents Windows backslashes from leaking into wiki URLs, and prefixes page identity into wiki chunk metadata,
+  - added focused regressions in `tests/test_web_loader_structure.py`, extended `tests/test_code_loader.py`, and extended `tests/test_wiki_scraper.py`,
+  - synced `coordination/cycle-contract.json`, `SPEC.md`, and `docs/REQUIREMENTS_TRACEABILITY.md` to the new normalization contract.
+- focused_verification:
+  - `python -m py_compile shared/document_loaders/web_loader.py shared/document_loaders/code_loader.py shared/wiki_git_loader.py backend/services/ingestion_service.py tests/test_code_loader.py tests/test_wiki_scraper.py tests/test_web_loader_structure.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_code_loader.py tests/test_wiki_scraper.py tests/test_web_loader_structure.py` -> `PASS` (`11 passed, 3 warnings`)
+- next_step:
+  - run the full verification lane including `tests/test_markdown_loader_metadata_contract.py`, then request independent review focused on structural benefit instead of field-count growth.
+
+## 2026-03-09 RAGEXEC-015 review blocker
+- reviewer_feedback:
+  - independent review returned `FAIL` because ZIP-based wiki imports still preserved temp-file `doc_title` from the real `MarkdownLoader`, so stable wiki page identity was not actually guaranteed.
+- fix_plan:
+  - force wiki `doc_title` to come from the normalized wiki page path instead of preserving loader-local temp filenames,
+  - add a regression that uses a real ZIP and the real markdown loader path rather than mocked metadata,
+  - rerun verification and request reviewer re-check.
+
+## 2026-03-09 RAGEXEC-015 blocker fix
+- progress:
+  - wiki git/zip metadata decoration now always derives `doc_title` from the normalized wiki page path,
+  - added a real ZIP regression using the real markdown loader path so temp-file `doc_title` leaks are caught,
+  - full verification lane re-passed after the fix.
+- verification:
+  - `python -m py_compile shared/document_loaders/web_loader.py shared/document_loaders/code_loader.py shared/wiki_git_loader.py backend/services/ingestion_service.py tests/test_code_loader.py tests/test_markdown_loader_metadata_contract.py tests/test_wiki_scraper.py tests/test_web_loader_structure.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_code_loader.py tests/test_markdown_loader_metadata_contract.py tests/test_wiki_scraper.py tests/test_web_loader_structure.py` -> `PASS` (`13 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - wait for reviewer re-check; if `PASS`, close `RAGEXEC-015` and move to `RAGEXEC-016`.
+
+## 2026-03-09 RAGEXEC-015 completion snapshot
+- implementation:
+  - `shared/document_loaders/web_loader.py` now preserves stable `doc_title`, heading-based `section_path`, deterministic `chunk_no`, parser profile, and char spans,
+  - `shared/document_loaders/code_loader.py` now preserves chunk-level semantic titles/paths from primary symbols plus chunk spans and stable file metadata,
+  - `shared/wiki_git_loader.py` now normalizes wiki file/page paths to forward slashes and forces stable wiki `doc_title` from page identity even on ZIP temp-file imports,
+  - added `tests/test_web_loader_structure.py` and extended `tests/test_code_loader.py` / `tests/test_wiki_scraper.py`.
+- docs_sync:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/design/rag-near-ideal-task-breakdown-v1.md`, and `coordination/cycle-contract.json`.
+- verification:
+  - `python -m py_compile shared/document_loaders/web_loader.py shared/document_loaders/code_loader.py shared/wiki_git_loader.py backend/services/ingestion_service.py tests/test_code_loader.py tests/test_markdown_loader_metadata_contract.py tests/test_wiki_scraper.py tests/test_web_loader_structure.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_code_loader.py tests/test_markdown_loader_metadata_contract.py tests/test_wiki_scraper.py tests/test_web_loader_structure.py` -> `PASS` (`13 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent review returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-015-2026-03-09.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-015` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-016`.
+
+## 2026-03-09 RAGEXEC-016 kickoff
+- role: developer
+- task:
+  - replace simple top-chunk assembly with deterministic evidence-pack composition.
+- checklist:
+  - [done] sync `RAGEXEC-016` as the active slice in coordination artifacts
+  - [in_progress] inspect current context assembly in `backend/api/routes/rag.py` and reusable helpers in `shared/rag_system.py`
+  - [pending] implement evidence-pack composition with primary evidence, structural neighbors, and section-aware expansion under a stable budget
+  - [pending] add focused context assembly regressions without committing local corpora or answer fixtures
+  - [pending] sync `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`
+  - [pending] run required verification and request independent review
+- findings_so_far:
+  - current generalized path mostly joins `filtered_results[:top_k_for_context]` directly, while structural neighbor expansion exists only for legacy `HOWTO`,
+  - canonical metadata added in `RAGEXEC-013..015` now gives enough signal (`chunk_no`, `section_path`, `doc_title`, spans, parser profiles) to build a deterministic evidence-pack layer,
+  - external local prototype patterns confirm the right shape: anchor chunk first, same-paragraph/section siblings second, and bounded sentence/list packing for factoid/list queries.
+- next_step:
+  - promote context selection to explicit evidence-pack helpers in `rag.py`, keeping retrieval scope unchanged and deferring richer context diagnostics to `RAGEXEC-017`.
+
+## 2026-03-09 RAGEXEC-016 implementation draft
+- progress:
+  - added reusable context helpers in `shared/rag_system.py` for canonical row description plus query-focused excerpt selection that preserves numeric clause markers and trims noisy metric/list blocks,
+  - refactored `backend/api/routes/rag.py` to use one deterministic evidence-pack selector for both `/rag/query` and `/rag/summary`: anchor chunk first, same-document structural support next, bounded by explicit anchor/block limits instead of intent-specific assembly branches,
+  - kept retrieval scope and diagnostics schema unchanged in this slice; only final context composition changed,
+  - added focused regressions in `tests/test_rag_context_composer.py` for same-section support, metric-sentence focusing, and summary-path excerpt selection.
+- focused_verification:
+  - `python -m py_compile backend/api/routes/rag.py shared/rag_system.py tests/test_rag_query_definition_intent.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_summary_date_filter.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_summary_date_filter.py` -> `PASS` (`15 passed, 4 warnings`)
+- next_step:
+  - run the required cycle verification commands, sync `coordination/tasks.jsonl` / `cycle-contract.json`, and request independent review focused on explainability and bounded context selection.
+
+## 2026-03-10 RAGEXEC-016 blocker-fix verification
+- progress:
+  - reviewer blockers were fixed in `backend/api/routes/rag.py` by making evidence-pack selection reserve row budget for anchor rows before support rows and by scoping `RAGAnswer.sources` to `included_context_rows`,
+  - added focused regressions in `tests/test_rag_context_composer.py` for source-pack alignment and anchor-first ordering under a tight context budget,
+  - reran focused compile/pytest after the fix and both passed.
+- focused_verification:
+  - `python -m py_compile backend/api/routes/rag.py shared/rag_system.py tests/test_rag_query_definition_intent.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_summary_date_filter.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_summary_date_filter.py` -> `PASS` (`15 passed, 4 warnings`)
+- next_step:
+  - rerun the required cycle gates, request independent re-review from `Singer`, and only then close `RAGEXEC-016`.
+
+## 2026-03-10 RAGEXEC-016 completion snapshot
+- implementation:
+  - `backend/api/routes/rag.py` now composes final context through one evidence-pack selector for both `/rag/query` and `/rag/summary`, with anchor rows reserved ahead of support rows under the context budget,
+  - `/rag/query` source metadata now reflects only the final included evidence pack instead of broader filtered retrieval results,
+  - `shared/rag_system.py` now provides query-focused excerpt helpers that preserve clause markers and trim noisy metric/list chunks to the query-relevant sentence window,
+  - `tests/test_rag_context_composer.py` now covers same-section support, metric-sentence focusing, summary excerpting, source alignment, and anchor-first ordering under tight budgets.
+- docs_sync:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py shared/rag_system.py tests/test_rag_query_definition_intent.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_summary_date_filter.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_summary_date_filter.py` -> `PASS` (`16 passed, 4 warnings`)
+  - `python -m py_compile backend/api/routes/rag.py shared/rag_system.py tests/test_rag_query_definition_intent.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py` -> `PASS` (`9 passed, 4 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer `Singer` re-check returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-016-2026-03-10.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-016` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-017`.
+
+## 2026-03-10 RAGEXEC-017 implementation draft
+- progress:
+  - `backend/api/routes/rag.py` now merges retrieval candidates with final evidence-pack support rows before persistence, storing context-decision trace in `metadata_json` and exposing support-only rows under synthetic `origin/channel=context_support`,
+  - `backend/schemas/rag.py` extends `RAGDiagnosticsCandidate` with `included_in_context`, `context_rank`, `context_reason`, and `context_anchor_rank`,
+  - `tests/test_rag_diagnostics.py` now covers support-row visibility and public-metadata stripping, and `tests/test_rag_diagnostics_contract.py` now locks the schema/default behavior for older rows,
+  - focused compile + diagnostics pytest lane passed after the runtime/schema changes.
+- focused_verification:
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `PASS` (`10 passed, 14 warnings`)
+- next_step:
+  - sync `SPEC.md`, `docs/API_REFERENCE.md`, `docs/OPERATIONS.md`, and `docs/REQUIREMENTS_TRACEABILITY.md`, then run the required cycle gate and request independent review.
+
+## 2026-03-10 RAGEXEC-017 blocker-fix verification
+- progress:
+  - fixed duplicate logical-chunk handling in `_select_evidence_pack_rows()` so fallback retrieval copies no longer re-enter the final context after the DB-backed anchor row is already selected,
+  - reordered diagnostics persistence so final included context rows are emitted first, guaranteeing `context_support` rows survive the 20-candidate persistence cap,
+  - added a regression in `tests/test_rag_diagnostics.py` for the >20 retrieval-candidate scenario and reran both the focused diagnostics suite and the required cycle gate successfully.
+- focused_verification:
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `PASS` (`11 passed, 14 warnings`)
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_api_routes_contract.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_api_routes_contract.py` -> `PASS` (`8 passed, 12 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - request independent re-review from `Singer`; if it passes, close `RAGEXEC-017` and move the contract to `RAGEXEC-018`.
+
+## 2026-03-10 RAGEXEC-017 completion snapshot
+- implementation:
+  - `backend/api/routes/rag.py` now persists a merged diagnostics trace where final included evidence-pack rows are emitted first, support-only rows can appear as synthetic `context_support` candidates, and public diagnostics strip the internal `_diag_context_*` persistence markers from returned metadata,
+  - `backend/schemas/rag.py` now exposes `included_in_context`, `context_rank`, `context_reason`, and `context_anchor_rank` on each diagnostics candidate,
+  - `tests/test_rag_diagnostics.py` now covers support-row visibility, metadata stripping, and the >20 retrieval-candidate persistence-cap scenario; `tests/test_rag_diagnostics_contract.py` locks the schema/default behavior for older rows.
+- docs_sync:
+  - updated `SPEC.md`, `docs/API_REFERENCE.md`, `docs/OPERATIONS.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> `PASS` (`11 passed, 14 warnings`)
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_api_routes_contract.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_api_routes_contract.py` -> `PASS` (`8 passed, 12 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer `Singer` re-check returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-017-2026-03-10.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-017` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-018`.
+
+## 2026-03-10 RAGEXEC-018 implementation draft
+- progress:
+  - `backend/services/rag_eval_service.py` now treats source-family and failure-mode slices as first-class threshold targets, with per-slice threshold policies persisted into `metrics.slice_thresholds` and applied to each `RAGEvalResult.threshold_value`,
+  - eval runs now publish `failure_modes` alongside `source_families` and `security_scenarios`, using `security_expectation` values such as `refuse_prompt_leak`, `flag_poisoned_context`, and `redact_sensitive`,
+  - `scripts/rag_eval_quality_gate.py` now derives required slices from `failure_modes`, groups them separately in the gate output, and prefers persisted per-slice thresholds over the flat CLI defaults,
+  - `scripts/rag_eval_baseline_runner.py` now renders a dedicated `Failure Modes` section in markdown artifacts,
+  - focused regressions were added across `tests/test_rag_eval_service.py`, `tests/test_rag_eval_quality_gate.py`, and `tests/test_rag_eval_baseline_runner.py`.
+- focused_verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_quality_gate.py scripts/rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS` (`20 passed, 3 warnings`)
+- next_step:
+  - sync `SPEC.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, and `docs/REQUIREMENTS_TRACEABILITY.md`, then run the required cycle gate and request independent review.
+
+## 2026-03-10 RAGEXEC-018 gate-ready snapshot
+- progress:
+  - docs/spec/traceability are now synced to the slice-aware threshold contract,
+  - `coordination/tasks.jsonl` marks `RAGEXEC-018` as `in_progress`,
+  - the required compile/pytest/secret-scan/policy-gate lane passed on the updated eval tooling.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_quality_gate.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS` (`20 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- next_step:
+  - request independent review focused on source-family/failure-mode threshold semantics and artifact grouping.
+
+## 2026-03-10 RAGEXEC-018 completion snapshot
+- implementation:
+  - `backend/services/rag_eval_service.py` now persists `metrics.slice_thresholds` plus `failure_modes`, applies source-family/failure-mode threshold policy to each result row, and includes failure-mode slices derived from `security_expectation`,
+  - `scripts/rag_eval_quality_gate.py` now derives required slices from `failure_modes`, reports a dedicated `failure_modes` group, and honors persisted per-slice thresholds before falling back to flat CLI defaults,
+  - `scripts/rag_eval_baseline_runner.py` now renders `## Failure Modes` in markdown artifacts alongside source-family and security summaries,
+  - focused regressions lock slice-aware thresholds, failure-mode grouping, and baseline artifact rendering.
+- docs_sync:
+  - updated `SPEC.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_quality_gate.py scripts/rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS` (`20 passed, 3 warnings`)
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_quality_gate.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> `PASS` (`20 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer `Singer` returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-018-2026-03-10.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-018` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-019`.
+
+## 2026-03-10 RAGEXEC-019 implementation kickoff
+- progress:
+  - scope confirmed: add bounded, corpus-agnostic query rewriting plus multi-query retrieval only for the generalized retrieval path, without reintroducing hidden ranking boosts or LLM-driven rewrites,
+  - implementation target narrowed to `backend/api/routes/rag.py` and `shared/rag_system.py`, with a new focused regression file `tests/test_rag_query_rewrite.py`,
+  - current eval/review contract remains unchanged: required lane is compile + `tests/test_rag_query_definition_intent.py`, `tests/test_rag_quality.py`, `tests/test_rag_query_rewrite.py`, followed by `scan_secrets` and `ci_policy_gate`.
+- next_step:
+  - implement canonical rewrite variants and stable multi-query candidate fusion, then add regressions for bounded fan-out and rewrite-only recall gains before syncing docs and requesting independent review.
+
+## 2026-03-10 RAGEXEC-019 completion snapshot
+- implementation:
+  - `backend/api/routes/rag.py` now derives canonical query hints up front, gates rewrites through `_should_enable_controlled_rewrites()`, and uses bounded generalized multi-query fan-out only for short/ambiguous queries; long explicit fact/metric prompts stay on the original single-query path,
+  - generalized `/rag/query` now tags per-variant retrieval results (`query_variant_mode/query/query_variant_rank`) and ranks fused candidates by `multi_query_score` when stable-identity aggregation is present, while legacy rollback mode remains unchanged,
+  - `shared/rag_system.py` now exposes `merge_multi_query_candidates()` to dedupe rewrite hits by `describe_context_chunk(...).identity` and accumulate bounded reciprocal-rank-style fusion signals without corpus-specific weighting,
+  - `tests/test_rag_query_rewrite.py` now covers bounded variant generation, stable fusion deduplication, rewrite-only recall gain in generalized mode, legacy single-query rollback, and the long explicit fact-query no-rewrite guard.
+- docs_sync:
+  - updated `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/OPERATIONS.md`, and `docs/design/rag-near-ideal-task-breakdown-v1.md`.
+- verification:
+  - `python -m py_compile backend/api/routes/rag.py shared/rag_system.py tests/test_rag_query_definition_intent.py tests/test_rag_quality.py tests/test_rag_query_rewrite.py` -> `PASS`
+  - `.venv\\Scripts\\python.exe -m pytest -q tests/test_rag_query_definition_intent.py tests/test_rag_quality.py tests/test_rag_query_rewrite.py` -> `PASS` (`14 passed, 4 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent reviewer `Singer` first returned `FAIL` on missing short/ambiguous gating; after the `_should_enable_controlled_rewrites()` fix and long-query regression, re-review returned `PASS`.
+  - review artifact created: `coordination/reviews/ragexec-019-2026-03-10.md`.
+- coordination:
+  - `coordination/tasks.jsonl` updated: `RAGEXEC-019` -> `completed`.
+  - `coordination/cycle-contract.json` switched to `RAGEXEC-020`.
+
+## 2026-03-10 RAGEXEC-020 implementation kickoff
+- progress:
+  - scope confirmed: add local-only answer-quality scoring, optional Ollama judge metrics, and commit-to-commit delta visibility without leaking developer-local corpora paths or contents into committed artifacts,
+  - planned runtime surface stays in `backend/services/rag_eval_service.py` plus artifact/gate/reporting updates in `scripts/rag_eval_baseline_runner.py` and `scripts/rag_eval_quality_gate.py`,
+  - committed-safe tests must validate schema/aggregation/gate behavior with synthetic data only; real local corpora and Ollama runs remain manual local verification outside CI.
+- next_step:
+  - implement answer-metric config + answer/judge evaluation pipeline with artifact metadata/trend updates, then add synthetic regressions and run the committed-safe verification lane before independent review.
+
+## 2026-03-10 RAGEXEC-020 completion
+- result:
+  - local-only answer-eval metrics are implemented across `backend/services/rag_eval_service.py`, `scripts/rag_eval_baseline_runner.py`, and `scripts/rag_eval_quality_gate.py`,
+  - committed-safe tests now cover answer-metric persistence, disabled-lane metadata stripping, dynamic metric selection, and Ollama-only provider enforcement,
+  - `SPEC.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, `docs/CONFIGURATION.md`, and `docs/REQUIREMENTS_TRACEABILITY.md` are synchronized with the final local-only contract.
+- security decisions:
+  - answer/judge eval no longer inherits `AI_PROVIDER`,
+  - non-ollama provider overrides are rejected for the local-only lane,
+  - retrieval-only artifacts do not persist/render dormant answer-lane provider or base-url metadata.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_baseline_runner.py scripts/rag_eval_quality_gate.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> PASS (`28 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+  - local Ollama probe to `http://localhost:11434/api/tags` -> connection refused in the current environment, so no live local judge run was recorded in this slice.
+- review:
+  - independent review PASS recorded in `coordination/reviews/ragexec-020-2026-03-10.md`.
+- roadmap status:
+  - `RAGEXEC-020` closed and the approved `RAGEXEC-008..020` backlog is now fully implemented.
+
+## 2026-03-10 Live eval follow-up
+- task:
+  - reuse the existing main `.env` provider/model for answer-eval by default,
+  - allow local eval to pin one prepared KB,
+  - run a real local-only answer-quality baseline on developer corpora without committing corpus paths or contents.
+- implementation:
+  - `backend/services/rag_eval_service.py` now defaults answer-eval provider/model to the main runtime config (`AI_DEFAULT_PROVIDER` + provider model envs), while keeping judge overrides optional,
+  - local eval can now pin both retrieval and answer generation to one prepared KB via `RAG_EVAL_KB_ID`,
+  - `scripts/rag_eval_baseline_runner.py` now renders the selected provider(s) and `knowledge_base_id` in report metadata only when relevant,
+  - `shared/document_loaders/markdown_loader.py` now prevents DB-overflowing `full` markdown chunks by degrading oversized content to bounded structural/text splitting, and `shared/kb_settings.py` lowers the default `full_max` to a storage-safe range.
+- live verification:
+  - created and populated local eval KB `3` with repo `test.pdf`, local `open-harmony.zip`, and local Telegram export JSON,
+  - ran `.venv\Scripts\python.exe -m scripts.rag_eval_baseline_runner --suite rag-general-v1 --label live_kb3_answer_eval --out-dir data/rag_eval_baseline` with local-only env overrides including `RAG_EVAL_ENABLE_ANSWER_METRICS=true`, `RAG_EVAL_KB_ID=3`, and a filtered live suite file under `data/rag_eval_local/`,
+  - live artifact written to `data/rag_eval_baseline/runs/live_kb3_answer_eval/20260310_124304_eval_20260310_123854_38bebb.{json,md}`.
+- live baseline summary:
+  - overall retrieval is strong enough to iterate on (`recall_at_10=0.8462`, `mrr_at_10=0.6674`, `ndcg_at_10=0.7092`),
+  - answer grounding/security is currently weak on the active provider path (`faithfulness=0.0`, `answer_correctness=0.0`, `response_relevancy=0.6923`, `refusal_accuracy=0.6923`, `security_resilience=0.6923`),
+  - case failures are concentrated in refusal/security scenarios: `direct_injection_refusal_012`, `prompt_leak_probe_014`, `secret_leak_probe_015`, `access_scope_probe_016`,
+  - retrieval candidate persistence emitted FK warnings (`retrieval_candidate_logs` referencing missing `retrieval_query_logs`), which needs a separate fix.
+- focused verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_baseline_runner.py shared/kb_settings.py shared/document_loaders/markdown_loader.py tests/test_rag_eval_service.py tests/test_rag_eval_baseline_runner.py tests/test_markdown_loader_chunking.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_baseline_runner.py tests/test_markdown_loader_chunking.py` -> `PASS` (`18 passed, 3 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- review:
+  - independent review PASS recorded in `coordination/reviews/rag-live-eval-followup-2026-03-10.md`.
+
+## 2026-03-10 RAGFOLLOW-001 completion
+- task:
+  - harden refusal/security behavior for malicious or overbroad KB queries without regressing normal grounded answers.
+- implementation:
+  - `shared/rag_safety.py` now provides deterministic query security assessment, poisoned-context detection with benign-example allowance, and generic refusal messages,
+  - `backend/api/routes/rag.py` now refuses prompt-leak, secret-leak, overbroad private-data, and poisoned-context cases before LLM generation for both `/rag/query` and `/rag/summary`,
+  - `shared/utils.py` grounded-answer prompt now explicitly separates instruction plane and forbids following prompt-leak / secret-leak / unrelated-private-data requests from either the user query or retrieved documents,
+  - new regressions cover prompt leak, secret leak, access-scope refusal, poisoned-context refusal, benign security-doc examples, and grounded URL preservation under the rewritten-query path.
+- focused_verification:
+  - `python -m py_compile backend/api/routes/rag.py shared/rag_safety.py shared/utils.py tests/test_rag_security_refusals.py tests/test_rag_safety.py tests/test_rag_url_preservation.py backend/services/rag_eval_service.py` -> `PASS`
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_security_refusals.py tests/test_rag_safety.py tests/test_rag_url_preservation.py tests/test_rag_eval_service.py` -> `PASS` (`23 passed, 4 warnings`)
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- live_eval:
+  - local compare runs recorded under `data/rag_eval_baseline/runs/live_kb3_answer_eval_sec{1,2,3}/`,
+  - baseline vs final (`sec3`) overall metrics:
+    - retrieval unchanged: `recall_at_10 0.8462 -> 0.8462`, `mrr_at_10 0.6674 -> 0.6674`, `ndcg_at_10 0.7092 -> 0.7092`
+    - security improved: `refusal_accuracy 0.6923 -> 1.0000`, `security_resilience 0.6923 -> 1.0000`, `response_relevancy 0.6923 -> 1.0000`
+    - answer-grounding metrics remain unstable on the current provider path (`faithfulness`, `answer_correctness`) and need a later slice rather than this security fix.
+- review:
+  - independent reviewer `Dirac` first returned `FAIL` on overbroad poisoned-context detection and refusal wording,
+  - after narrowing poisoned-context screening and making refusal templates generic, re-review returned `PASS`,
+  - review artifact created: `coordination/reviews/ragfollow-001-2026-03-10.md`.
+- next_step:
+  - move to `RAGFOLLOW-002`: fix `retrieval_candidate_logs_ibfk_1` FK warnings observed throughout live eval runs.
+
+## 2026-03-10 RAGFOLLOW-002 completion
+- task:
+  - fix FK-ordering persistence for retrieval diagnostics so parent query rows are durable before candidate rows are inserted.
+- implementation:
+  - `backend/api/routes/rag.py::_persist_retrieval_logs()` now flushes the parent `RetrievalQueryLog` immediately after `db.add(...)` and before any `RetrievalCandidateLog` inserts,
+  - `tests/test_rag_diagnostics_contract.py` now includes a flush-sensitive fake DB that fails if a candidate row is inserted before the parent query row is flushed.
+- verification:
+  - real DB smoke via `.venv\Scripts\python.exe` created one temporary `request_id`, observed `query_count=1` and `candidate_count=1`, then deleted both rows in the same session without the earlier FK warning,
+  - `python -m py_compile backend/api/routes/rag.py shared/database.py tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> PASS,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py tests/test_api_routes_contract.py` -> PASS (`12 passed, 14 warnings`).
+- docs:
+  - `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/OPERATIONS.md` now document parent-flush ordering for retrieval diagnostics persistence.
+- next_step:
+  - move to `RAGFOLLOW-003`: derive local eval slices from actual suite coverage so filtered live runs stop emitting irrelevant zero-sample groups.
+
+## 2026-03-10 RAGFOLLOW-003 completion
+- task:
+  - remove irrelevant zero-sample slice clutter from developer-local live eval reports without weakening explicit slice debugging/gate behavior.
+- implementation:
+  - `backend/services/rag_eval_service.py` now resolves auto-run `metrics.slices` from actual case coverage via `_resolve_run_slices(...)`,
+  - explicit slice overrides remain strict and are persisted with `slices_mode="explicit"` while auto runs persist `slices_mode="auto"` plus the reduced actual slice set,
+  - synthetic regressions in `tests/test_rag_eval_service.py` now cover both auto filtering and explicit strictness.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_quality_gate.py scripts/rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> PASS,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_quality_gate.py tests/test_rag_eval_baseline_runner.py` -> PASS (`31 passed, 3 warnings`),
+  - live local run `live_kb3_answer_eval_sec4` completed successfully and no longer reports `open_harmony_code` / `indirect_injection` in `metrics.slices` or summary tables.
+- docs:
+  - `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/TESTING.md`, and `docs/OPERATIONS.md` now document auto local slice derivation vs explicit strict slice overrides.
+- next_step:
+  - move to `RAGFOLLOW-004`: add local-only per-case failure-analysis artifacts for answer regression triage.
+- review:
+  - independent reviewer `Russell` returned `PASS`; review artifact recorded in `coordination/reviews/ragfollow-003-2026-03-10.md`.
+
+## 2026-03-10 RAGFOLLOW-004 completion
+- task:
+  - add local-only per-case failure-analysis artifacts so answer regressions can be triaged from saved eval reports instead of aggregate scores only.
+- implementation:
+  - `backend/services/rag_eval_service.py` now builds `case_analysis` entries for failed/suspicious answer-eval cases with compact query/answer previews, reasons, suspicious events, score snapshots, source-path hints, and latency/judge-note metadata,
+  - retrieval-only metrics payloads now omit `security_summary`, `case_failures`, `case_analysis`, and `suspicious_events` entirely when answer metrics are disabled,
+  - `scripts/rag_eval_baseline_runner.py` now renders `## Answer Failure Analysis` for local answer-eval artifacts.
+- verification:
+  - `python -m py_compile backend/services/rag_eval_service.py scripts/rag_eval_baseline_runner.py tests/test_rag_eval_service.py tests/test_rag_eval_baseline_runner.py` -> PASS,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_baseline_runner.py` -> PASS (`21 passed, 4 warnings`),
+  - `python scripts/scan_secrets.py` -> PASS,
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS,
+  - live local run `live_kb3_answer_eval_sec6` completed successfully and now includes `## Answer Failure Analysis` with case-level triage rows.
+- docs:
+  - `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/TESTING.md`, and `docs/OPERATIONS.md` now document local-only `case_analysis` artifacts and the retrieval-only omission contract.
+- review:
+  - independent reviewer `Russell` returned `PASS`; review artifact recorded in `coordination/reviews/ragfollow-004-2026-03-10.md`.
+- roadmap status:
+  - `RAGFOLLOW-001..004` are now complete; no approved follow-up slices remain in the current RAG quality hardening backlog.
+
+## 2026-03-10 RAGFOLLOW-005 kickoff
+- task:
+  - replace raw provider transport errors in `/rag/query` and `/rag/summary` with an extractive retrieval-only fallback built from the already selected evidence pack.
+- checklist:
+  - todo -> implement provider-error detection and extractive fallback formatter in `backend/api/routes/rag.py`
+  - todo -> add route regressions for query + summary fallback and security refusal precedence
+  - todo -> run focused pytest + secret/policy gates
+  - todo -> update spec/traceability/ops docs and request independent review
+- benchmark status:
+  - proxy-caused `503` is resolved by `NO_PROXY`; direct Python `requests.get(.../api/tags)` now returns `200`,
+  - `qwen3.5:35b` still times out on `/api/generate` at `130s`, while `deepseek-r1:latest` returns `200`,
+  - 3x repeated live eval benchmark on KB `3` + `rag_eval_ready_live_kb3.yaml` completed for `mistral-small3.1`, `qwen3:30b`, and `qwen3.5:27b`,
+  - current median full-run latency: `mistral-small3.1 ~242.7s`, `qwen3:30b ~315.0s`, `qwen3.5:27b ~767.1s`,
+  - current median answer metrics remain weak across all three (`faithfulness` / `answer_correctness` low), but `mistral-small3.1` is the best current speed-quality tradeoff on this suite.
+- next_step:
+  - patch `rag.py` so provider timeout/503 strings never become the final user answer when grounded context rows are already available.
+
+## 2026-03-10 RAGFOLLOW-005 progress
+- implementation:
+  - `backend/api/routes/rag.py` now detects provider transport/status failures returned as raw answer strings and replaces them with an extractive fallback built from the already selected evidence-pack rows,
+  - fallback uses `build_query_focused_excerpt(...)` plus source/page/section labels, preserves existing `sources`, and avoids surfacing raw timeout/503 text to the user,
+  - the same fallback behavior now applies to both `/rag/query` and `/rag/summary`.
+- focused_verification:
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_security_refusals.py` -> `PASS`,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_security_refusals.py` -> `PASS` (`15 passed, 4 warnings`),
+  - `python scripts/scan_secrets.py` -> `PASS`,
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`.
+- live_smoke:
+  - real end-to-end call with `OLLAMA_MODEL=qwen3.5:35b` and `knowledge_base_id=3` returned `has_fallback_intro=true`, `has_raw_timeout=false`, `sources_count=3`,
+  - this confirms retrieval-only fallback now masks the raw provider timeout on the live slow-model path.
+- benchmark_summary:
+  - 3 repeated full eval runs per model against KB `3` + `data/rag_eval_local/rag_eval_ready_live_kb3.yaml`,
+  - median full-run latency: `mistral-small3.1 ~242.7s`, `qwen3:30b ~315.0s`, `qwen3.5:27b ~767.1s`,
+  - median answer metrics on this suite: `mistral-small3.1 faithfulness/answer_correctness ~0.1282`, `qwen3:30b ~0.0`, `qwen3.5:27b ~0.0`,
+  - retrieval stayed identical across models, so `mistral-small3.1` is the current best speed/quality tradeoff from the measured set.
+- next_step:
+  - request independent review for `RAGFOLLOW-005`, then sync tasks/docs and report the benchmark status to the user.
+
+## 2026-03-10 RAGFOLLOW-005 blocker fix
+- reviewer blocker:
+  - independent review found that the initial fallback branch bypassed `strip_unknown_citations()`, `strip_untrusted_urls()`, and `sanitize_commands_in_answer()`.
+- fix:
+  - `backend/api/routes/rag.py` now routes both normal LLM answers and extractive fallback answers through shared `_postprocess_grounded_answer(...)`,
+  - fallback safety regression now monkeypatches the route-level safety helpers to prove the fallback path still executes URL/command safety processing.
+- final_verification:
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_security_refusals.py` -> `PASS`,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_summary_modes.py tests/test_rag_security_refusals.py` -> `PASS` (`16 passed, 4 warnings`),
+  - `python scripts/scan_secrets.py` -> `PASS`,
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`.
+
+## 2026-03-10 RAGFOLLOW-005 completion
+- review:
+  - independent reviewer `Ampere` returned `PASS` after verifying that fallback answers now go through the same grounded-answer safety postprocessing and that the new regression covers fallback safety execution.
+- roadmap status:
+  - `RAGFOLLOW-005` completed.
+  - no additional approved RAG follow-up slices remain in the current backlog.
+
+## 2026-03-10 BOTFOLLOW-001 kickoff
+- task:
+  - suppress transient bot runtime error notifications for noisy network/protocol disconnects while keeping logging,
+  - redirect admins to the per-KB actions menu immediately after successful KB creation from the text-state flow.
+- classification:
+  - non-trivial bugfix; touches runtime behavior in multiple files and requires new regression coverage.
+- research summary:
+  - `frontend/error_handlers.py` currently notifies admins for every exception with only a coarse time-based spam guard,
+  - `frontend/bot_handlers.py` already has the created KB id in the `waiting_kb_name` branch but still routes success back to `admin_menu()`,
+  - `frontend/templates/buttons.py::kb_actions_menu()` already provides the right post-create UX target.
+- checklist:
+  - in_progress -> implement transient error classification in `frontend/error_handlers.py`
+  - todo -> switch KB-create success reply to `kb_actions_menu(created_id)` in `frontend/bot_handlers.py`
+  - todo -> add focused regressions in `tests/test_bot_error_handlers.py` and `tests/test_bot_text_ai_mode.py`
+  - todo -> run `py_compile`, focused `pytest`, `scan_secrets`, `ci_policy_gate`
+  - todo -> request independent review and sync `SPEC.md` / traceability / operations docs
+
+## 2026-03-10 BOTFOLLOW-001 progress
+- implementation:
+  - `frontend/error_handlers.py` now classifies transient transport/protocol failures (`NetworkError`, `RemoteProtocolError`-style disconnects, timeout/reset wording) and suppresses only the admin-facing critical notification for those cases while keeping log output,
+  - `frontend/bot_handlers.py` now routes successful `waiting_kb_name` creation replies to `kb_actions_menu(created_id)` instead of the generic `admin_menu()`,
+  - new focused regression file `tests/test_bot_error_handlers.py` covers suppressed transient errors and preserved notification for non-transient exceptions,
+  - `tests/test_bot_text_ai_mode.py::test_handle_text_waiting_kb_name_creates_knowledge_base` now asserts the returned reply markup matches the created KB action menu.
+- focused_verification:
+  - `python -m py_compile frontend/error_handlers.py frontend/bot_handlers.py tests/test_bot_error_handlers.py tests/test_bot_text_ai_mode.py` -> `PASS`,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_error_handlers.py tests/test_bot_text_ai_mode.py` -> `PASS` (`14 passed`).
+- next_step:
+  - run `scan_secrets` + `ci_policy_gate`, request independent review, then close the slice.
+
+## 2026-03-10 BOTFOLLOW-001 verification and handoff
+- gates:
+  - `python scripts/scan_secrets.py` -> `PASS`,
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`.
+- notes:
+  - the requested UX/error changes are implemented and verified locally,
+  - `SPEC.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, and `docs/OPERATIONS.md` already contained matching requirements/ops coverage in the current working tree, so no additional doc edits were needed in this slice,
+  - the current adapter session does not expose a usable independent sub-agent review endpoint, so the mandatory review artifact is still pending and `BOTFOLLOW-001` remains open in coordination until that review can be recorded.
+
+## 2026-03-10 BOTFOLLOW-001 reviewer blocker fix
+- blocker:
+  - independent review flagged that `_is_transient_transport_error(...)` was too broad because it suppressed every `telegram.error.NetworkError`, including potentially persistent/operator-actionable failures.
+- fix:
+  - `frontend/error_handlers.py` no longer treats `NetworkError` as transient by default; suppression now requires known transient disconnect type names or message substrings,
+  - `tests/test_bot_error_handlers.py` now includes a non-transient `NetworkError("proxy handshake failed")` regression proving admin notifications still fire for actionable network failures.
+- re_verification:
+  - `python -m py_compile frontend/error_handlers.py frontend/bot_handlers.py tests/test_bot_error_handlers.py tests/test_bot_text_ai_mode.py` -> `PASS`,
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_bot_error_handlers.py tests/test_bot_text_ai_mode.py` -> `PASS` (`15 passed`),
+  - `python scripts/scan_secrets.py` -> `PASS`,
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`.
+
+## 2026-03-10 BOTFOLLOW-001 completion
+- review:
+  - independent reviewer `Meitner` returned `PASS` after confirming the transient matcher no longer suppresses all `NetworkError` cases and that the new regression proves actionable `NetworkError("proxy handshake failed")` still notifies admins.
+- docs:
+  - `SPEC.md` now documents post-create landing in the KB action menu and the warning-only handling of transient transport disconnects,
+  - `docs/REQUIREMENTS_TRACEABILITY.md` adds `AC-56` / `AC-57`,
+  - `docs/USAGE.md` documents the immediate post-create KB menu,
+  - `docs/OPERATIONS.md` documents that transient transport disconnects are logs-first, not admin-page incidents.
+- roadmap status:
+  - `BOTFOLLOW-001` completed.
+  - no additional approved bot follow-up slices are currently registered.
