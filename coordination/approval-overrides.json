@@ -1,6 +1,18 @@
 {
   "entries": [
     {
+      "id": "2026-03-11-botfollow-004-gitee-public-loader-followup",
+      "approved_on": "2026-03-11",
+      "approved_by": "user",
+      "reason": "User explicitly requested continuing with the remaining wiki/open-harmony fixes and validating search quality after ingesting the real Gitee wiki corpus, which requires a focused follow-up design note and spec sync for the public Gitee wiki loader path.",
+      "files": [
+        "docs/design/gitee-wiki-public-loader-followup-v1.md",
+        "SPEC.md",
+        "docs/REQUIREMENTS_TRACEABILITY.md",
+        "coordination/approval-overrides.json"
+      ]
+    },
+    {
       "id": "2026-03-10-botfollow-003-wiki-openharmony-followup",
       "approved_on": "2026-03-10",
       "approved_by": "user",

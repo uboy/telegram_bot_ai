@@ -820,6 +820,44 @@ def _resolve_doc_chunk_anchor_index(anchor: dict, doc_chunks: List[dict]) -> Opt
     return None
 
 
+def _generalized_field_match_score(
+    query: str,
+    hints: Optional[Dict[str, Any]],
+    result: Dict[str, Any],
+) -> float:
+    hints = hints or {}
+    meta = result.get("metadata") or {}
+    source_path = _normalize_query_text(result.get("source_path") or "").lower()
+    doc_title = _normalize_query_text(meta.get("doc_title") or meta.get("title") or "").lower()
+    section_title = _normalize_query_text(meta.get("section_title") or "").lower()
+    section_path = _normalize_query_text(meta.get("section_path") or "").lower()
+    field_text = " | ".join(part for part in (source_path, doc_title, section_title, section_path) if part).strip()
+    if not field_text:
+        return 0.0
+
+    focus_terms: List[str] = []
+    for token in [*(hints.get("key_phrases") or []), *(hints.get("strict_fact_terms") or []), *(hints.get("fact_terms") or [])]:
+        normalized = _normalize_query_text(token).lower()
+        if normalized and normalized not in focus_terms:
+            focus_terms.append(normalized)
+    if not focus_terms:
+        focus_terms = [token for token in re.findall(r"[a-zа-яё0-9]{3,}", _normalize_query_text(query).lower()) if token not in {"how", "what", "when"}]
+    if not focus_terms:
+        return 0.0
+
+    overlap_terms = [term for term in focus_terms if term in field_text]
+    if not overlap_terms:
+        return 0.0
+
+    score = min(0.9, 0.3 * len(overlap_terms))
+    if len(overlap_terms) >= 2 and len(focus_terms) >= 2:
+        score += 0.6
+    compound_markers = {"sync", "build", "mirror", "master", "repo"}
+    if len(overlap_terms) >= 2 and compound_markers.intersection(overlap_terms):
+        score += 0.4
+    return score
+
+
 def _expand_anchor_evidence_rows(anchor: dict, doc_chunks: List[dict]) -> List[dict]:
     if not doc_chunks:
         return [anchor]
@@ -974,6 +1012,100 @@ def _select_evidence_pack_rows(
             if len(pack_rows) >= context_limit:
                 break
     return pack_rows
+
+
+def _select_provider_fallback_rows(
+    *,
+    query: str,
+    ranked_results: List[dict],
+    load_doc_chunks: Callable[[str], List[dict]],
+    anchor_limit: int,
+    context_limit: int,
+) -> List[dict]:
+    if not ranked_results:
+        return []
+    query_lower = _normalize_query_text(query).lower()
+    query_tokens = set(re.findall(r"[a-zа-яё0-9]{3,}", query_lower))
+    howto_like = any(token in query_lower for token in ("how to", "как ", "build", "sync", "install", "setup", "configure", "run"))
+    procedural_markers = ("how to", "guide", "steps", "initialize", "setup", "install", "configure", "prepare", "sync", "build", "run")
+    troubleshooting_markers = (
+        "issue",
+        "issues",
+        "error",
+        "errors",
+        "fix",
+        "fixes",
+        "patch",
+        "workaround",
+        "debug",
+        "troubleshoot",
+        "regeneration",
+        "failed",
+        "failure",
+    )
+
+    def fallback_priority(row: dict) -> tuple[float, float]:
+        info = describe_context_chunk(row)
+        meta = row.get("metadata") or {}
+        doc_title = _normalize_query_text(meta.get("doc_title") or meta.get("title") or "").lower()
+        section_title = _normalize_query_text(meta.get("section_title") or "").lower()
+        section_path = _normalize_query_text(meta.get("section_path") or "").lower()
+        text = _normalize_query_text(row.get("content") or "").lower()
+        score = 0.0
+        if howto_like:
+            if any(marker in doc_title for marker in procedural_markers):
+                score += 1.2
+            if any(marker in section_title for marker in procedural_markers):
+                score += 1.5
+            if any(marker in section_path for marker in procedural_markers):
+                score += 0.9
+            if any(marker in text for marker in ("repo init", "repo sync", "./build.sh", "build/prebuilts_download.sh")):
+                score += 1.4
+            if any(marker in doc_title for marker in troubleshooting_markers):
+                score -= 1.2
+            if any(marker in section_title for marker in troubleshooting_markers):
+                score -= 1.8
+            if any(marker in section_path for marker in troubleshooting_markers):
+                score -= 1.4
+        overlap = sum(1 for token in query_tokens if token in doc_title or token in section_title or token in section_path)
+        score += min(1.5, overlap * 0.35)
+        return (score, float(row.get("rank_score") or row.get("rerank_score") or 0.0))
+
+    ordered_results = sorted(ranked_results, key=fallback_priority, reverse=True)
+
+    pack_rows: List[dict] = []
+    seen_identities: set[str] = set()
+    seen_anchor_scopes: set[tuple[str, str]] = set()
+
+    def append_row(candidate: dict) -> bool:
+        identity = str(describe_context_chunk(candidate).get("identity") or "")
+        if not identity or identity in seen_identities:
+            return False
+        seen_identities.add(identity)
+        pack_rows.append(dict(candidate))
+        return True
+
+    for anchor in ordered_results:
+        anchor_info = describe_context_chunk(anchor)
+        anchor_scope = (str(anchor_info.get("doc_key") or ""), str(anchor_info.get("scope_key") or ""))
+        if anchor_scope in seen_anchor_scopes:
+            continue
+        if len(seen_anchor_scopes) >= max(2, anchor_limit + 1):
+            break
+        seen_anchor_scopes.add(anchor_scope)
+        doc_id = str(anchor.get("doc_id") or anchor_info.get("source_path") or "").strip()
+        doc_chunks = load_doc_chunks(doc_id) if doc_id else []
+        expanded_rows = _expand_anchor_evidence_rows(anchor, doc_chunks) or [anchor]
+        for candidate in expanded_rows:
+            append_row(candidate)
+            if len(pack_rows) >= max(5, context_limit * 2):
+                return pack_rows
+
+    for candidate in ordered_results:
+        append_row(candidate)
+        if len(pack_rows) >= max(5, context_limit * 2):
+            break
+    return pack_rows or ordered_results[: max(5, context_limit * 2)]
 
 
 def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict[str, Any]]) -> dict:
@@ -1424,14 +1556,46 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     score += 1.0
 
             if intent == "HOWTO":
+                procedural_markers = ("how to", "guide", "steps", "initialize", "setup", "install", "configure", "prepare")
+                troubleshooting_markers = (
+                    "issue",
+                    "issues",
+                    "error",
+                    "errors",
+                    "fix",
+                    "fixes",
+                    "patch",
+                    "workaround",
+                    "debug",
+                    "troubleshoot",
+                    "regeneration",
+                    "failed",
+                    "failure",
+                )
                 if any(t in section_title for t in ("how to", "build", "run", "steps")):
                     score += 1.0
+                if any(t in doc_title for t in procedural_markers):
+                    score += 0.8
+                if any(t in section_title for t in procedural_markers):
+                    score += 1.0
+                if any(t in section_path for t in procedural_markers):
+                    score += 0.6
                 if any(t in section_title for t in ("overview", "introduction")):
                     score -= 1.0
+                if any(t in section_title for t in troubleshooting_markers):
+                    score -= 2.4
+                if any(t in doc_title for t in troubleshooting_markers):
+                    score -= 1.8
+                if any(t in section_path for t in troubleshooting_markers):
+                    score -= 1.5
                 # Prefer explicit Sync&Build docs for sync/build queries.
                 if "sync" in q and "build" in q:
                     if "sync&build" in source_path or "sync&build" in doc_title or "sync&build" in section_title:
                         score += 4.0
+                    if ("sync" in section_title or "sync" in section_path) and ("build" in section_title or "build" in section_path):
+                        score += 1.6
+                    if ("sync" in doc_title or "sync" in source_path) and ("build" in doc_title or "build" in source_path):
+                        score += 1.2
                 if "sync" in q:
                     if "sync" in source_path or "sync" in doc_title or "sync" in section_title:
                         score += 1.5
@@ -1808,6 +1972,8 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 r["rank_score"] = _metric_to_float(r.get("multi_query_score"))
                 if r["rank_score"] is None:
                     r["rank_score"] = base_score(r)
+                r["field_match_score"] = _generalized_field_match_score(payload.query, precomputed_query_hints, r)
+                r["rank_score"] += float(r.get("field_match_score") or 0.0)
             else:
                 r["rank_score"] = apply_boosts(payload.query, r, intent, query_hints)
             ranked_results.append(r)
@@ -1962,11 +2128,19 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         ai_answer = ai_manager.query(prompt)
         provider_error = _classify_provider_transport_error(ai_answer)
         if provider_error:
+            fallback_rows = _select_provider_fallback_rows(
+                query=payload.query,
+                ranked_results=filtered_results,
+                load_doc_chunks=load_doc_chunks,
+                anchor_limit=max(1, top_k_for_context),
+                context_limit=max(3, top_k_for_context),
+            ) or selected_context_rows or included_context_rows
             ai_answer = _build_extractive_fallback_answer(
                 payload.query,
-                included_context_rows,
+                fallback_rows,
                 failure_reason=provider_error,
             )
+            sources = _build_rag_sources(fallback_rows)
         ai_answer = _postprocess_grounded_answer(
             ai_answer,
             context_text=context_text,
@@ -2324,11 +2498,19 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
     answer = ai_manager.query(prompt)
     provider_error = _classify_provider_transport_error(answer)
     if provider_error:
+        fallback_rows = _select_provider_fallback_rows(
+            query=payload.query,
+            ranked_results=results,
+            load_doc_chunks=load_doc_chunks,
+            anchor_limit=max(1, top_k),
+            context_limit=max(2, top_k),
+        ) or selected_context_rows
         answer = _build_extractive_fallback_answer(
             payload.query,
-            selected_context_rows,
+            fallback_rows,
             failure_reason=provider_error,
         )
+        sources = _build_rag_sources(fallback_rows)
     answer = _postprocess_grounded_answer(
         answer,
         context_text=context_text,

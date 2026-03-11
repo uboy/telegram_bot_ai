@@ -1,0 +1,49 @@
+{
+  "ok": false,
+  "mode": "zip",
+  "answer_mode": "extractive",
+  "knowledge_base_id": 1,
+  "db_path": "C:\\Users\\devl\\proj\\PycharmProjects\\telegram_bot_ai\\data\\openharmony-smoke-direct2.db",
+  "wiki_url": "https://gitee.com/mazurdenis/open-harmony/wikis",
+  "ingest": {
+    "files_processed": 93,
+    "chunks_added": 768,
+    "wiki_root": "https://gitee.com/mazurdenis/open-harmony/wikis"
+  },
+  "queries": [
+    {
+      "query": "how to sync code with local mirror",
+      "top_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/Run%20HelloWorld%20v133",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Documentation/How%20to%20use%20the%20ndk%20tools",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Development/How%20to%20get%20previewer%20and%20SDK%20for%20ACE%20FW"
+      ],
+      "top_sections": [],
+      "answer_preview": "Модель ответа сейчас временно недоступна. Показываю наиболее релевантные фрагменты из базы знаний. 1. Run HelloWorld v133 | Partial update rk3568 with koala_mirror artifacts\nFrom Windows CMD: ```\nhdc target mount\nhdc file send out\\rk3568\\obj\\foundation\\arkui\\ace_engine\\frameworks\\bridge\\arkts_frontend\\koala_mirror\\arkoala-arkts\\arkoala.abc /system/framework/arkoala.abc\nhdc file send out\\rk3568\\arkui\\ace_engine\\libace_compatible.z.so /system/lib/platformsdk/libace_compatible.z.so\nhdc file send out\\rk3568\\arkui\\ace_engine\\libArkoalaNative_ark.z.so /system/lib/libArkoalaNative_ark.z.so... 2. How to use the ndk tools | Create an executable\n###################################################### 3. How to get previewer and SDK for ACE FW\n1. Previwer C:\\Huawei\\OpenHarmony\\Sdk\\previewer\\3.2.2.5\nIn order to run under virtual environment (cloud PC, Virtualbox, etc) download library 64bit_lib (https://gitee.com/mazurdenis/open-harmony/raw/master/libs/SWOpenGL64.rar) and put along with previwer.exe, e.g. C:\\Huawei\\OpenHarmony\\Sdk\\previewer\\3.2.2.5\\common\\bin\\\noriginally got from GitHub (https://github.com/pal1000/mesa-dist-win/releases)",
+      "answer_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/Run%20HelloWorld%20v133",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Documentation/How%20to%20use%20the%20ndk%20tools",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Development/How%20to%20get%20previewer%20and%20SDK%20for%20ACE%20FW"
+      ]
+    },
+    {
+      "query": "how to build and sync",
+      "top_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Arkoala/Arkoala%20build%20and%20run",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Headless%20tests/Build%20and%20run%20headless%20tests%20hap%20with%20previwer%20from%20OHOS%20master"
+      ],
+      "top_sections": [],
+      "answer_preview": "Модель ответа сейчас временно недоступна. Показываю наиболее релевантные фрагменты из базы знаний. 1. Arkoala build and run | Copy `arkoala-plugin.js` to your SDK\npath_to_sdk_/ets/build-tools/ets-loader/lib/fast_build/ets_ui 2. Arkoala build and run | arkoala-plugin.js\n```\nnpm install\nKOALA_BZ=1 npm run ohos-sdk\nexport HOS_SDK_HOME=`pwd`/arkoala/ohos-sdk/ohos-sdk\nKOALA_BZ=1 npm run arkoala:plugin\nfile ./arkoala/tools/arkoala-transformer/arkoala-plugin.js\n``` 3. Build and run headless tests hap with previwer from OHOS master | If you have build error (use --fast-rebuild):\n(1) _foundation/ability/ability_runtime/frameworks/ets/ani/native_constructor/context_native_constructor.cpp_\nAdd ```\n#include <array>\n``` (2) _foundation/arkui/ace_engine/adapter/preview/sdk/BUILD.gn _\nComment\n```",
+      "answer_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Arkoala/Arkoala%20build%20and%20run",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Headless%20tests/Build%20and%20run%20headless%20tests%20hap%20with%20previwer%20from%20OHOS%20master"
+      ]
+    }
+  ],
+  "failures": [
+    "how to sync code with local mirror: expected source fragment `Sync%26Build/Sync%26Build` not found in top sources",
+    "how to sync code with local mirror: answer preview missing expected fragments ['repo init', 'repo sync', 'ohos_mirror']",
+    "how to build and sync: expected source fragment `Sync%26Build/Sync%26Build` not found in top sources",
+    "how to build and sync: answer preview missing expected fragments ['repo sync', 'build/prebuilts_download.sh']"
+  ]
+}

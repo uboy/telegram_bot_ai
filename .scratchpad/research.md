@@ -837,3 +837,57 @@ The lecture metrics are necessary but not sufficient. The design needs five metr
    - current-style `full`,
    - candidate `section`.
 4. Use the committed open-harmony-oriented query set in `tests/rag_eval.yaml` plus a few direct `rag_query` answer inspections.
+## 2026-03-11 BOTFOLLOW-004 - Gitee public wiki ingest blocker
+
+- Live backend log confirms the remaining root cause for URL-based Gitee wiki ingest:
+  - current loader tries to clone `https://gitee.com/<owner>/<repo>.git`;
+  - clone fails with `fatal: could not read Username for 'https://gitee.com'`;
+  - runtime falls back to HTML crawl and indexes only the wiki root page (`pages=1`, `chunks=4`).
+- This means the weak `open-harmony` answers seen in Telegram are downstream of incomplete ingest, not only ranking quality.
+- Local-only validation already showed that once the real OpenHarmony wiki corpus is ingested with section chunking, relevance improves materially for build/sync questions.
+- Implementation target:
+  - switch the Gitee path to try public wiki repo candidates non-interactively before HTML fallback;
+  - preserve current HTML fallback as last resort;
+  - re-run local-only open-harmony ingest/query comparison after the fix.
+
+## 2026-03-11 BOTFOLLOW-005 - local-only open-harmony wiki smoke harness
+
+- User requested turning the manual open-harmony ingest/query verification into an actual test workflow.
+- Constraints stay the same:
+  - no hardcoded private/local corpus paths in repo;
+  - local-only corpus paths must come from env;
+  - committed test must be opt-in and must not run in CI by default.
+- The most stable answer check is not live LLM generation but the existing retrieval-only extractive fallback path:
+  - ingest the real open-harmony wiki corpus into a temporary local SQLite DB;
+  - build the runtime index;
+  - call `/rag/query` logic with a forced provider transport error to trigger the deterministic extractive fallback;
+  - assert both top sources and extracted answer text for key build/sync queries.
+- Runtime findings from implementation:
+  - the helper must always run under `.venv\Scripts\python.exe`; system `python` does not have project deps such as `sqlalchemy`,
+  - a first version timed out because it did duplicate retrieval plus CPU reranking; the helper is now optimized to disable reranking by default, use a single `rag_query()` pass, and derive `top_sources` from `answer.sources`,
+  - repeated direct runs against the same SQLite DB need unique KB names to avoid `knowledge_bases.name` uniqueness failures.
+- Current smoke result on local `open-harmony.wiki.zip`:
+  - ingest succeeds (`93` files, `768` chunks),
+  - both target queries still fail semantically:
+    - `how to sync code with local mirror` surfaces `Run HelloWorld v133` / NDK / previewer docs,
+    - `how to build and sync` surfaces `Arkoala build and run` / headless tests docs,
+  - so the harness is working and is now exposing a real remaining open-harmony ranking/context-quality gap.
+
+## 2026-03-11 BOTFOLLOW-006 - open-harmony build/sync relevance follow-up
+
+- BOTFOLLOW-005 proved the remaining problem is not ingest coverage anymore; the local ZIP smoke ingests `93` files / `768` chunks successfully but the final candidate set for broad procedural queries is still wrong.
+- The current route layer already has a generic `_generalized_field_match_score(...)` and HOWTO boosts in `backend/api/routes/rag.py`, but they only help after the right page is already present in `results`.
+- That points to a candidate-generation gap, not just a final ranking gap.
+- The most promising generic fix is to add a third retrieval channel in `shared/rag_system.py` that scores only structural metadata fields:
+  - `source_path`
+  - `doc_title`
+  - `section_title`
+  - `section_path`
+- This stays generic:
+  - no hardcoded `open-harmony` URLs,
+  - no hardcoded `Sync&Build`,
+  - no special-case branch by corpus,
+  - only general procedural-document signals.
+- Expected effect:
+  - procedural/how-to pages with strong field matches should enter the fused candidate set more reliably,
+  - existing generalized route-level boosts can then promote them to the top for `build/sync/mirror` style questions.

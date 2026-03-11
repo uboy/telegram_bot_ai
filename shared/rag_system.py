@@ -242,6 +242,55 @@ def _candidate_rank_score(candidate: Dict[str, Any]) -> float:
     return -distance
 
 
+def _group_chunk_embeddings_by_kb(chunks: List[Any]) -> Dict[str, Any]:
+    chunks_by_kb = defaultdict(list)
+    all_chunks_by_kb = defaultdict(list)
+    expected_dim_by_kb: Dict[int, int] = {}
+    dim_mismatches_by_kb: Dict[int, int] = defaultdict(int)
+    chunks_with_embedding = 0
+
+    for chunk in chunks or []:
+        kb_id = int(getattr(chunk, "knowledge_base_id", 0) or 0)
+        all_chunks_by_kb[kb_id].append(chunk)
+        raw_embedding = getattr(chunk, "embedding", None)
+        if not raw_embedding:
+            continue
+        try:
+            embedding = np.array(json.loads(raw_embedding), dtype="float32").reshape(-1)
+        except Exception as e:
+            logger.debug("Failed to parse embedding for chunk %s: %s", getattr(chunk, "id", None), e)
+            continue
+        if embedding.size == 0:
+            continue
+
+        embedding_dim = int(embedding.shape[0])
+        expected_dim = expected_dim_by_kb.get(kb_id)
+        if expected_dim is None:
+            expected_dim_by_kb[kb_id] = embedding_dim
+            expected_dim = embedding_dim
+        if embedding_dim != expected_dim:
+            dim_mismatches_by_kb[kb_id] += 1
+            logger.warning(
+                "Skipping chunk %s in KB %s: embedding dimension %s != expected %s",
+                getattr(chunk, "id", None),
+                kb_id,
+                embedding_dim,
+                expected_dim,
+            )
+            continue
+
+        chunks_by_kb[kb_id].append((chunk, embedding))
+        chunks_with_embedding += 1
+
+    return {
+        "chunks_by_kb": chunks_by_kb,
+        "all_chunks_by_kb": all_chunks_by_kb,
+        "expected_dim_by_kb": expected_dim_by_kb,
+        "dim_mismatches_by_kb": dim_mismatches_by_kb,
+        "chunks_with_embedding": chunks_with_embedding,
+    }
+
+
 def merge_multi_query_candidates(
     candidate_batches: List[List[Dict[str, Any]]],
     *,
@@ -420,6 +469,7 @@ class RAGSystem:
         self.chunks = []  # Устаревший: все чанки вместе
         # Индексы по базам знаний (для раздельного поиска)
         self.index_by_kb: Dict[int, faiss.Index] = {}
+        self.index_dimension_by_kb: Dict[int, int] = {}
         self.chunks_by_kb: Dict[int, List[KnowledgeChunk]] = {}
         # BM25 индексы (in-memory)
         self.bm25_index_by_kb: Dict[int, Dict] = {}
@@ -964,46 +1014,23 @@ class RAGSystem:
             self.index = None
             self.chunks = []
             self.index_by_kb.clear()
+            self.index_dimension_by_kb.clear()
             self.chunks_by_kb.clear()
             return
 
-        # Группировать чанки по knowledge_base_id и подсчитать coverage
-        chunks_by_kb = defaultdict(list)
-        all_chunks_by_kb = defaultdict(list)
-        chunks_with_embedding = 0
-        expected_dim = None
-        dim_mismatches = 0
-        
-        for chunk in chunks:
-            all_chunks_by_kb[chunk.knowledge_base_id].append(chunk)
-            if chunk.embedding:
-                try:
-                    embedding = np.array(json.loads(chunk.embedding))
-                    embedding_dim = embedding.shape[0] if len(embedding.shape) == 1 else embedding.shape[1]
-                    
-                    # Запомнить expected_dim при первой валидной эмбеддинге
-                    if expected_dim is None:
-                        expected_dim = embedding_dim
-                    
-                    # Пропустить эмбеддинги с другой размерностью
-                    if embedding_dim != expected_dim:
-                        dim_mismatches += 1
-                        logger.warning(
-                            f"Skipping chunk {chunk.id}: embedding dimension {embedding_dim} != expected {expected_dim}"
-                        )
-                        continue
-                    
-                    chunks_by_kb[chunk.knowledge_base_id].append((chunk, embedding))
-                    chunks_with_embedding += 1
-                except Exception as e:
-                    logger.debug(f"Failed to parse embedding for chunk {chunk.id}: {e}")
-                    continue
-        
-        # Логировать информацию о несоответствиях размерности
-        if dim_mismatches > 0:
-            logger.warning(
-                f"Skipped {dim_mismatches} chunks with dimension mismatch (expected {expected_dim})"
+        grouped_embeddings = _group_chunk_embeddings_by_kb(chunks)
+        chunks_by_kb = grouped_embeddings["chunks_by_kb"]
+        all_chunks_by_kb = grouped_embeddings["all_chunks_by_kb"]
+        expected_dim_by_kb = grouped_embeddings["expected_dim_by_kb"]
+        dim_mismatches_by_kb = grouped_embeddings["dim_mismatches_by_kb"]
+        chunks_with_embedding = int(grouped_embeddings["chunks_with_embedding"])
+
+        if dim_mismatches_by_kb:
+            summary = ", ".join(
+                f"KB {kb_id}: skipped {count} (expected {expected_dim_by_kb.get(kb_id)})"
+                for kb_id, count in sorted(dim_mismatches_by_kb.items())
             )
+            logger.warning("Skipped chunks with dimension mismatch: %s", summary)
         
         # Логировать coverage для диагностики
         if total_chunks > 0:
@@ -1016,6 +1043,9 @@ class RAGSystem:
                 logger.warning(f"Low embedding coverage ({coverage_pct:.1f}%) - many chunks will fall back to keyword search")
         
         # Построить индексы для каждой KB отдельно
+        self.index_by_kb.clear()
+        self.index_dimension_by_kb.clear()
+        self.chunks_by_kb.clear()
         for kb_id, chunk_emb_pairs in chunks_by_kb.items():
             if not chunk_emb_pairs:
                 continue
@@ -1032,6 +1062,7 @@ class RAGSystem:
             index.add(embeddings)
             
             self.index_by_kb[kb_id] = index
+            self.index_dimension_by_kb[kb_id] = dimension
             self.chunks_by_kb[kb_id] = valid_chunks
             self.bm25_chunks_by_kb[kb_id] = all_chunks_by_kb.get(kb_id, [])
             self.bm25_index_by_kb[kb_id] = self._build_bm25_index(self.bm25_chunks_by_kb[kb_id])
@@ -1044,10 +1075,14 @@ class RAGSystem:
 
         # Для обратной совместимости: если запрошен общий индекс
         if knowledge_base_id is None and chunks_by_kb:
-            # Объединить все чанки для старого API
+            target_dim = self.dimension if isinstance(getattr(self, "dimension", None), int) else None
+            if target_dim is None and self.index_dimension_by_kb:
+                target_dim = next(iter(self.index_dimension_by_kb.values()))
             all_chunks = []
             all_embeddings = []
             for kb_id, chunk_emb_pairs in chunks_by_kb.items():
+                if target_dim is not None and self.index_dimension_by_kb.get(kb_id) != target_dim:
+                    continue
                 for chunk, emb in chunk_emb_pairs:
                     all_chunks.append(chunk)
                     all_embeddings.append(emb)
@@ -1123,6 +1158,107 @@ class RAGSystem:
                 scores.append((idx, score))
         scores.sort(key=lambda x: x[1], reverse=True)
         return [idx for idx, _ in scores[:top_k]]
+
+    def _metadata_field_search(self, query: str, chunks: List[Any], top_k: int) -> List[Dict[str, Any]]:
+        """Generic metadata-first retrieval channel over stable document fields."""
+        import re
+
+        query_lower = str(query or "").lower()
+        if not query_lower or not chunks or top_k <= 0:
+            return []
+
+        stop_words = {
+            "how", "what", "when", "where", "with", "from", "that", "this", "into", "your",
+            "the", "and", "for", "are", "как", "что", "где", "когда", "для", "или",
+            "это", "эти", "при", "под", "над", "using",
+        }
+        query_words = [
+            word for word in re.findall(r"\w+", query_lower)
+            if len(word) >= 3 and word not in stop_words
+        ]
+        if not query_words:
+            return []
+
+        is_howto = self._is_howto_query(query)
+        scored_chunks: List[tuple[float, Any, Dict[str, Any]]] = []
+        for chunk in chunks:
+            metadata: Dict[str, Any] = {}
+            try:
+                if chunk.chunk_metadata:
+                    metadata = json.loads(chunk.chunk_metadata)
+            except Exception:
+                metadata = {}
+
+            source_path_lower = (chunk.source_path or "").lower()
+            doc_title_lower = (metadata.get("doc_title") or metadata.get("title") or "").lower()
+            section_title_lower = (metadata.get("section_title") or "").lower()
+            section_path_lower = (metadata.get("section_path") or "").lower()
+
+            field_hits = 0
+            score = 0.0
+            for word in query_words:
+                if word in doc_title_lower:
+                    score += 3.0
+                    field_hits += 1
+                if word in section_title_lower:
+                    score += 3.5
+                    field_hits += 1
+                if word in section_path_lower:
+                    score += 2.8
+                    field_hits += 1
+                if word in source_path_lower:
+                    score += 2.4
+                    field_hits += 1
+
+            if query_lower in doc_title_lower:
+                score += 8.0
+            if query_lower in section_title_lower:
+                score += 9.0
+            if query_lower in section_path_lower:
+                score += 7.0
+            if query_lower in source_path_lower:
+                score += 6.0
+
+            if field_hits >= 2:
+                score += min(4.0, 0.8 * field_hits)
+
+            if is_howto:
+                procedural_markers = (
+                    "how to",
+                    "guide",
+                    "steps",
+                    "instruction",
+                    "instructions",
+                    "setup",
+                    "configure",
+                    "sync",
+                    "build",
+                    "run",
+                    "install",
+                )
+                if any(marker in section_title_lower for marker in procedural_markers):
+                    score += 1.5
+                if any(marker in doc_title_lower for marker in procedural_markers):
+                    score += 1.2
+
+            if score > 0.0:
+                scored_chunks.append((score, chunk, metadata))
+
+        scored_chunks.sort(key=lambda item: item[0], reverse=True)
+
+        results: List[Dict[str, Any]] = []
+        for score, chunk, metadata in scored_chunks[:top_k]:
+            results.append(
+                {
+                    "content": chunk.content,
+                    "metadata": metadata,
+                    "source_type": chunk.source_type,
+                    "source_path": chunk.source_path,
+                    "distance": 1.0 / (score + 1.0),
+                    "origin": "field",
+                }
+            )
+        return results
 
     def _rrf_fuse(self, ranked_lists: List[List[object]], k: int = 60) -> List[object]:
         scores: Dict[object, float] = {}
@@ -1719,6 +1855,24 @@ class RAGSystem:
 
             # Нормализовать query embedding для cosine similarity
             query_embedding_norm = query_embedding.reshape(1, -1).astype('float32')
+            query_dim = int(query_embedding_norm.shape[1])
+            if knowledge_base_id is not None:
+                expected_dim = self.index_dimension_by_kb.get(knowledge_base_id)
+                if expected_dim is not None and query_dim != expected_dim:
+                    logger.warning(
+                        "Dense search dimension mismatch for KB %s: query=%s index=%s; fallback to keyword search",
+                        knowledge_base_id,
+                        query_dim,
+                        expected_dim,
+                    )
+                    return self._simple_search(query, knowledge_base_id, top_k)
+            elif self.dimension and query_dim != int(self.dimension):
+                logger.warning(
+                    "Dense search dimension mismatch for global index: query=%s index=%s; fallback to keyword search",
+                    query_dim,
+                    self.dimension,
+                )
+                return self._simple_search(query, knowledge_base_id, top_k)
             faiss.normalize_L2(query_embedding_norm)
             dense_candidate_k = min(dense_candidate_k, len(chunks))
             scores, indices = index.search(query_embedding_norm, dense_candidate_k)
@@ -1778,6 +1932,13 @@ class RAGSystem:
                     }
                 )
 
+        field_candidates = self._metadata_field_search(
+            query,
+            bm25_chunks,
+            min(self.bm25_candidate_budget, total_docs),
+        )
+        field_ranked_keys = [(c.get("source_path") or "", (c.get("content") or "")[:200]) for c in field_candidates]
+
         # RRF fusion on stable keys
         ranked_lists = []
         dense_ranked_keys = [(c.get("source_path") or "", (c.get("content") or "")[:200]) for c in dense_candidates]
@@ -1785,12 +1946,20 @@ class RAGSystem:
             ranked_lists.append(dense_ranked_keys)
         if bm25_ranked_keys:
             ranked_lists.append(bm25_ranked_keys)
+        if field_ranked_keys:
+            ranked_lists.append(field_ranked_keys)
         fused_keys = self._rrf_fuse(ranked_lists) if ranked_lists else []
+        if is_howto_query and field_ranked_keys:
+            preferred_field_keys = list(field_ranked_keys[: max(1, min(3, top_k))])
+            fused_keys = preferred_field_keys + [key for key in fused_keys if key not in preferred_field_keys]
 
         # Объединяем кандидатов и убираем дубли по (source_path, content)
         merged: List[Dict] = []
         seen = set()
-        candidate_map = { (c.get("source_path") or "", (c.get("content") or "")[:200]): c for c in dense_candidates + bm25_candidates }
+        candidate_map = {
+            (c.get("source_path") or "", (c.get("content") or "")[:200]): c
+            for c in dense_candidates + bm25_candidates + field_candidates
+        }
         for key in fused_keys:
             cand = candidate_map.get(key)
             if not cand:
@@ -1798,6 +1967,7 @@ class RAGSystem:
             if key in seen:
                 continue
             seen.add(key)
+            cand["rank_score"] = 1.0 / (len(merged) + 1)
             merged.append(cand)
 
         if not merged:
@@ -1865,11 +2035,10 @@ class RAGSystem:
                 return (is_code_or_list, origin_priority, distance - boost)
             merged_sorted = sorted(merged, key=sort_key_howto)[: top_k]
         else:
-            # Для обычных запросов: только по distance
-            merged_sorted = sorted(
-                merged,
-                key=lambda c: float(c.get("distance", float("inf"))) - compute_source_boost(c),
-            )[: top_k]
+            # В generalized path без reranker сохраняем explicit fusion order:
+            # повторная сортировка по distance ломает hybrid retrieval и выталкивает
+            # metadata/BM25 rescue обратно за dense candidates.
+            merged_sorted = merged[: top_k]
         
         results = []
         for cand in merged_sorted:

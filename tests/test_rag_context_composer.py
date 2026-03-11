@@ -461,6 +461,190 @@ def test_rag_query_fallback_still_runs_answer_safety_filters(monkeypatch):
     assert "503" not in result.answer
 
 
+def test_rag_query_fallback_uses_selected_rows_beyond_llm_context_budget(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+
+    selected_rows = [
+        {
+            "content": "Краткое интро про build pipeline.",
+            "metadata": {
+                "doc_title": "Build Guide",
+                "section_title": "Overview",
+                "section_path": "Build Guide > Overview",
+                "section_path_norm": "build guide > overview",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://build-guide",
+            "source_type": "markdown",
+            "rerank_score": 0.95,
+            "distance": 0.05,
+        },
+        {
+            "content": "repo sync -c -j 8\nbuild/prebuilts_download.sh",
+            "metadata": {
+                "doc_title": "Sync Guide",
+                "section_title": "Sync and Build",
+                "section_path": "Sync Guide > Sync and Build",
+                "section_path_norm": "sync guide > sync and build",
+                "chunk_no": 2,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://sync-guide",
+            "source_type": "markdown",
+            "rerank_score": 0.90,
+            "distance": 0.06,
+        },
+    ]
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(lambda query, knowledge_base_id=None, top_k=8: list(selected_rows))})(),
+    )
+    monkeypatch.setattr(rag_module, "_select_evidence_pack_rows", lambda **kwargs: list(selected_rows))  # noqa: ARG005
+    monkeypatch.setattr(
+        rag_module,
+        "_build_context_block",
+        lambda query, row, base_context_length, full_multiplier, enable_citations=False: (  # noqa: ARG005
+            "X" * 5000 if (row.get("source_path") or "") == "doc://sync-guide" else "short intro"
+        ),
+    )
+    monkeypatch.setattr(rag_module, "_load_doc_chunks_for_context", lambda db, doc_id, kb_id=None: [])  # noqa: ARG005
+    monkeypatch.setattr(
+        rag_module,
+        "ai_manager",
+        type("Y", (), {"query": staticmethod(lambda _prompt: "Ошибка подключения к Ollama: Read timed out")})(),
+    )
+
+    payload = RAGQuery(query="how to build and sync", knowledge_base_id=1)
+    result = rag_query(payload, db=DummyDB())
+
+    assert "repo sync -c -j 8" in result.answer
+    assert "build/prebuilts_download.sh" in result.answer
+    assert "Read timed out" not in result.answer
+    assert {source.source_path for source in result.sources} == {"doc://sync-guide", "doc://build-guide"}
+
+
+def test_rag_query_howto_demotes_troubleshooting_pages(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_legacy_heuristics(monkeypatch, enabled=True)
+
+    results = [
+        {
+            "content": "Build failed related to advanced_ui_component_static. Apply this patch as a workaround.",
+            "metadata": {
+                "doc_title": "Stable Build & Regeneration v135",
+                "section_title": "Possible build issues",
+                "section_path": "Stable Build & Regeneration > Possible build issues",
+                "section_path_norm": "stable build & regeneration > possible build issues",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://stable-build-issues",
+            "source_type": "markdown",
+            "distance": 0.01,
+        },
+        {
+            "content": "repo init -u https://gitcode.com/openharmony/manifest.git -b master --no-repo-verify\nrepo sync -c -j 8\nbuild/prebuilts_download.sh",
+            "metadata": {
+                "doc_title": "Sync&Build",
+                "section_title": "Initialize repository and sync code",
+                "section_path": "Sync&Build > Initialize repository and sync code",
+                "section_path_norm": "sync&build > initialize repository and sync code",
+                "chunk_no": 2,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://sync-build",
+            "source_type": "markdown",
+            "distance": 0.20,
+        },
+    ]
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(lambda query, knowledge_base_id=None, top_k=8: list(results))})(),
+    )
+    monkeypatch.setattr(rag_module, "_load_doc_chunks_for_context", lambda db, doc_id, kb_id=None: [])  # noqa: ARG005
+    monkeypatch.setattr(
+        rag_module,
+        "ai_manager",
+        type("Y", (), {"query": staticmethod(lambda _prompt: "Ошибка подключения к Ollama: Read timed out")})(),
+    )
+
+    payload = RAGQuery(query="how to build and sync", knowledge_base_id=1)
+    result = rag_query(payload, db=DummyDB())
+
+    assert "repo sync -c -j 8" in result.answer
+    assert "build/prebuilts_download.sh" in result.answer
+    assert result.sources[0].source_path == "doc://sync-build"
+    assert all(source.source_path != "doc://stable-build-issues" for source in result.sources[:1])
+
+
+def test_rag_query_fallback_expands_neighboring_procedural_chunks(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_legacy_heuristics(monkeypatch, enabled=True)
+
+    search_results = [
+        {
+            "content": "repo init -u https://gitcode.com/openharmony/manifest.git -b master --no-repo-verify",
+            "metadata": {
+                "doc_title": "Sync&Build",
+                "section_title": "Initialize repository and sync code",
+                "section_path": "Sync&Build > Initialize repository and sync code",
+                "section_path_norm": "sync&build > initialize repository and sync code",
+                "chunk_no": 10,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://sync-build",
+            "source_type": "markdown",
+            "distance": 0.10,
+        }
+    ]
+    doc_chunks = [
+        dict(search_results[0]),
+        {
+            "content": "repo sync -c -j 8\nbuild/prebuilts_download.sh",
+            "metadata": {
+                "doc_title": "Sync&Build",
+                "section_title": "Initialize repository and sync code",
+                "section_path": "Sync&Build > Initialize repository and sync code",
+                "section_path_norm": "sync&build > initialize repository and sync code",
+                "chunk_no": 11,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://sync-build",
+            "source_type": "markdown",
+            "distance": 0.11,
+        },
+    ]
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(lambda query, knowledge_base_id=None, top_k=8: list(search_results))})(),
+    )
+    monkeypatch.setattr(rag_module, "_load_doc_chunks_for_context", lambda db, doc_id, kb_id=None: list(doc_chunks))  # noqa: ARG005
+    monkeypatch.setattr(
+        rag_module,
+        "ai_manager",
+        type("Y", (), {"query": staticmethod(lambda _prompt: "Ошибка подключения к Ollama: Read timed out")})(),
+    )
+
+    payload = RAGQuery(query="how to build and sync", knowledge_base_id=1)
+    result = rag_query(payload, db=DummyDB())
+
+    assert "repo init" in result.answer
+    assert "repo sync -c -j 8" in result.answer
+    assert "build/prebuilts_download.sh" in result.answer
+    assert result.sources[0].source_path == "doc://sync-build"
+
+
 def test_rag_summary_returns_extractive_fallback_on_provider_timeout(monkeypatch):
     from backend.api.routes import rag as rag_module
 
