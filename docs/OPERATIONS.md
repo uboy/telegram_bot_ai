@@ -193,6 +193,8 @@ Main knobs:
   - optional nullable fields: `page_no`, `char_start`, `char_end`, `parser_confidence`, `parser_warning`, `parent_chunk_id`, `prev_chunk_id`, `next_chunk_id`
 - `backend/services/ingestion_service.py` is the primary canonical normalizer for runtime ingestion paths and now emits both `chunk_metadata` and `metadata_json` payloads with the same canonical contract.
 - `shared/rag_system.py` auto-fills the required canonical fields for direct `add_chunk`/`add_chunks_batch` callers so legacy wiki/runtime paths do not leave `chunk_no` or JSON mirrors unset.
+- Public Gitee wiki sync now tries wiki-specific clone targets (`.wiki.git`, `.wikis.git`, `/wikis.git`) with interactive git prompts disabled before falling back to HTML crawl; if live logs still show HTML fallback with only one page indexed, treat that as an ingest outage rather than a retrieval-only bug.
+- Mixed embedding dimensions are isolated per KB in the legacy dense index path; if one KB is re-embedded with a new model dimension, other KBs remain searchable and only a KB-local dimension mismatch degrades to keyword search.
 - `parser_warning` values are sanitized before persistence and must not retain URL credentials, auth headers, bearer tokens, or password/token/api-key key-value secrets.
 - Additive migration safety is covered by a focused temporary-SQLite regression that exercises `migrate_database()` on a legacy `knowledge_chunks` table shape.
 - Rollback stays additive:

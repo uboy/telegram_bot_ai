@@ -114,3 +114,37 @@ Note: with `--prepare-test-kb`, wrapper auto-generates cases from the uploaded P
 - Use `.venv` to keep dependency versions consistent with `requirements.txt`.
 - Committed eval inputs must stay synthetic/public-safe; real local corpora are for developer-local verification only and must not be embedded in repo fixtures or reports.
 - CI intentionally does not run local-only corpora or Ollama-based evaluation.
+
+## Local OpenHarmony Wiki Smoke
+
+- This smoke stays local-only and opt-in; it is not part of CI.
+- It ingests the real open-harmony wiki corpus into a temporary SQLite DB and validates retrieval plus deterministic extractive answers for key build/sync queries.
+- Required env:
+
+```powershell
+$env:RAG_OPENHARMONY_WIKI_LOCAL_SMOKE="1"
+$env:RAG_OPENHARMONY_WIKI_ZIP_PATH="C:\Users\devl\proj\open-harmony.wiki.zip"
+$env:RAG_OPENHARMONY_WIKI_TOP_K="5"
+```
+
+- Run the pytest wrapper:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q tests/test_openharmony_wiki_local_smoke.py
+```
+
+- Run the helper directly first when you want the raw JSON payload without a pytest-style status:
+
+```powershell
+.venv\Scripts\python.exe scripts/openharmony_wiki_local_smoke.py --mode zip --zip-path $env:RAG_OPENHARMONY_WIKI_ZIP_PATH --answer-mode extractive --top-k $env:RAG_OPENHARMONY_WIKI_TOP_K
+```
+
+- Optional live modes:
+  - `RAG_OPENHARMONY_WIKI_MODE=git` to exercise the public Gitee clone path against `RAG_OPENHARMONY_WIKI_URL`.
+  - `RAG_OPENHARMONY_WIKI_ANSWER_MODE=llm` to let the current provider generate full answers instead of forcing the extractive fallback.
+  - `RAG_ENABLE_RERANK=true` if you explicitly want the smoke run to include the CPU-heavy reranker. By default the helper disables reranking to keep the local ZIP ingest + answer check practical on developer machines.
+
+- Notes:
+  - The helper now uses a single `rag_query()` pass per query and derives `top_sources` from the final answer sources.
+- The local smoke is allowed to fail when the real corpus exposes a regression, but the current BOTFOLLOW-006 target state is green on the reference open-harmony ZIP when the generic procedural retrieval/fallback path is healthy.
+- For compound procedural queries, the smoke validates both source choice and extractive fallback content, so a regression may come from retrieval ordering, route-level HOWTO ranking, or fallback evidence-pack expansion.

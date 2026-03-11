@@ -93,14 +93,16 @@ def _extract_repo_info_from_wiki_url(wiki_url: str) -> Optional[Dict[str, str]]:
         repo = path_parts[1]   # open-harmony
         
         base_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo}"
-        git_url = f"{base_url}.git"
+        git_urls = _build_candidate_git_urls(parsed.scheme, parsed.netloc, owner, repo, base_url)
+        git_url = git_urls[0]
         wiki_root = f"{base_url}/wikis"
-        
+
         return {
             'owner': owner,
             'repo': repo,
             'base_url': base_url,
             'git_url': git_url,
+            'git_urls': git_urls,
             'wiki_root': wiki_root,
         }
     except Exception as e:
@@ -108,7 +110,30 @@ def _extract_repo_info_from_wiki_url(wiki_url: str) -> Optional[Dict[str, str]]:
         return None
 
 
-def _clone_wiki_repo(git_url: str, temp_dir: str) -> Optional[str]:
+def _build_candidate_git_urls(scheme: str, netloc: str, owner: str, repo: str, base_url: str) -> list[str]:
+    candidates = [
+        f"{scheme}://{netloc}/{owner}/{repo}.wiki.git",
+        f"{scheme}://{netloc}/{owner}/{repo}.wikis.git",
+        f"{base_url}/wikis.git",
+        f"{base_url}.git",
+    ]
+    deduped: list[str] = []
+    for url in candidates:
+        if url not in deduped:
+            deduped.append(url)
+    return deduped
+
+
+def _build_non_interactive_git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
+    env.setdefault("GIT_ASKPASS", "echo")
+    env.setdefault("SSH_ASKPASS", "echo")
+    return env
+
+
+def _clone_wiki_repo(git_url: str, temp_dir: str, repo_dir_name: str = "wiki_repo") -> Optional[str]:
     """
     Клонировать git-репозиторий вики во временную директорию.
     
@@ -116,14 +141,15 @@ def _clone_wiki_repo(git_url: str, temp_dir: str) -> Optional[str]:
         Путь к клонированному репозиторию или None при ошибке
     """
     try:
-        repo_path = os.path.join(temp_dir, "wiki_repo")
-        
+        repo_path = os.path.join(temp_dir, repo_dir_name)
+
         logger.info(f"[wiki-git] Клонирование репозитория: {git_url}")
         result = subprocess.run(
             ['git', 'clone', '--depth', '1', git_url, repo_path],
             capture_output=True,
             text=True,
             timeout=300,  # 5 минут на клонирование
+            env=_build_non_interactive_git_env(),
         )
         
         if result.returncode != 0:
@@ -138,6 +164,14 @@ def _clone_wiki_repo(git_url: str, temp_dir: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"[wiki-git] Исключение при клонировании: {e}")
         return None
+
+
+def _clone_first_available_wiki_repo(git_urls: list[str], temp_dir: str) -> Optional[str]:
+    for idx, git_url in enumerate(git_urls, start=1):
+        repo_path = _clone_wiki_repo(git_url, temp_dir, repo_dir_name=f"wiki_repo_{idx}")
+        if repo_path:
+            return repo_path
+    return None
 
 
 def _create_wiki_zip(repo_path: str, temp_dir: str) -> Optional[str]:
@@ -270,7 +304,12 @@ def load_wiki_from_git(
     
     try:
         # Клонировать репозиторий
-        repo_path = _clone_wiki_repo(repo_info['git_url'], temp_dir)
+        git_urls = list(repo_info.get('git_urls') or [])
+        if not git_urls:
+            fallback_git_url = str(repo_info.get('git_url') or '').strip()
+            if fallback_git_url:
+                git_urls = [fallback_git_url]
+        repo_path = _clone_first_available_wiki_repo(git_urls, temp_dir)
         if not repo_path:
             raise Exception("Не удалось клонировать репозиторий")
         

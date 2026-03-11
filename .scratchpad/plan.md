@@ -689,3 +689,29 @@ Supersedes:
 - [x] Compare `full` vs `section` chunking on local `open-harmony.wiki.zip`.
 - [x] Choose `section` as the new default for `wiki` / `markdown`.
 - [x] Re-run independent review and close `BOTFOLLOW-003`.
+## 2026-03-11 BOTFOLLOW-004
+
+- [done] Confirm the live blocker from backend logs and isolate it to the wrong Gitee clone target.
+- [done] Update `shared/wiki_git_loader.py` to use public wiki repo candidates with prompt-disabled git execution and add regressions.
+- [done] Re-run focused verification and a local-only open-harmony ingest/query comparison to confirm the live-path quality improvement.
+
+## 2026-03-11 BOTFOLLOW-005
+
+- [x] Inspect current testing/smoke patterns and define an opt-in local-only open-harmony wiki smoke workflow.
+- [x] Add a local-only helper script plus pytest wrapper that ingest the real corpus into temporary SQLite and validate retrieval/extractive answers.
+- [x] Run the smoke test against the local open-harmony wiki ZIP via env-supplied path and record the result.
+- [x] Optimize the helper so the local smoke run stays practical:
+  - disable reranking by default,
+  - use a single `rag_query()` pass,
+  - support `RAG_OPENHARMONY_WIKI_TOP_K`,
+  - make repeated direct runs idempotent with unique KB names.
+- [x] Request independent review and decide whether BOTFOLLOW-005 closes as completed tooling with a documented product-quality failure signal, or rolls straight into a new retrieval-quality fix slice.
+- [x] Close BOTFOLLOW-005 as completed local-only tooling and register `BOTFOLLOW-006` for the remaining open-harmony build/sync relevance issue.
+
+## 2026-03-11 BOTFOLLOW-006
+
+- [in_progress] Record the active follow-up scope in coordination/state and keep BOTFOLLOW-006 generic, without hardcoding to one wiki.
+- [pending] Add a metadata-field retrieval channel in `shared/rag_system.py` so strong `doc_title / section_title / section_path / source_path` matches can enter the hybrid candidate set.
+- [pending] Add focused regressions for metadata-field candidate rescue and procedural build/sync queries.
+- [pending] Re-run the local open-harmony smoke harness and check whether the two build/sync cases move from `XFAIL` to `PASS`.
+- [pending] Run `py_compile`, focused `pytest`, `scan_secrets`, `ci_policy_gate`, and request an independent review.

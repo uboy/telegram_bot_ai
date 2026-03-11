@@ -1,34 +1,32 @@
 {
-  "task_id": "BOTFOLLOW-003",
+  "task_id": "BOTFOLLOW-006",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile frontend/bot_callbacks.py frontend/bot_handlers.py shared/kb_settings.py shared/wiki_git_loader.py tests/test_bot_wiki_callbacks.py tests/test_bot_text_ai_mode.py tests/test_wiki_scraper.py tests/test_kb_settings.py",
-    ".venv\\Scripts\\python.exe -m pytest -q tests/test_bot_wiki_callbacks.py tests/test_bot_text_ai_mode.py tests/test_wiki_scraper.py tests/test_kb_settings.py",
+    "python -m py_compile shared/rag_system.py backend/api/routes/rag.py tests/test_rag_metadata_field_search.py tests/test_rag_context_composer.py tests/test_openharmony_wiki_local_smoke.py",
+    "$env:MYSQL_URL=''; $env:DB_PATH='data\\botfollow006-test.db'; .venv\\Scripts\\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_metadata_field_search.py",
+    "$env:RAG_OPENHARMONY_WIKI_LOCAL_SMOKE='1'; $env:RAG_OPENHARMONY_WIKI_ZIP_PATH='C:\\Users\\devl\\proj\\open-harmony.wiki.zip'; $env:RAG_OPENHARMONY_WIKI_TOP_K='5'; .venv\\Scripts\\python.exe -m pytest -q tests/test_openharmony_wiki_local_smoke.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "frontend/bot_callbacks.py",
-    "frontend/bot_handlers.py",
-    "shared/kb_settings.py",
-    "shared/wiki_git_loader.py",
-    "tests/test_bot_wiki_callbacks.py",
-    "tests/test_bot_text_ai_mode.py",
-    "tests/test_wiki_scraper.py",
-    "tests/test_kb_settings.py",
+    "shared/rag_system.py",
+    "backend/api/routes/rag.py",
+    "tests/test_rag_metadata_field_search.py",
+    "tests/test_rag_context_composer.py",
+    "tests/test_openharmony_wiki_local_smoke.py",
     "SPEC.md",
-    "docs/design/wiki-openharmony-quality-followup-v1.md",
+    "docs/design/botfollow-006-procedural-howto-retrieval-v1.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
-    "coordination/approval-overrides.json",
-    "coordination/reviews/botfollow-003-<date>.md",
+    "docs/TESTING.md",
+    "coordination/reviews/botfollow-006-<date>.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"
   ],
   "size_limits": {
-    "max_files_changed": 11,
+    "max_files_changed": 8,
     "max_lines_added": 420,
-    "max_lines_deleted": 160
+    "max_lines_deleted": 120
   }
 }

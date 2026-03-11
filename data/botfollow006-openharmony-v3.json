@@ -1,0 +1,56 @@
+{
+  "ok": false,
+  "mode": "zip",
+  "answer_mode": "extractive",
+  "knowledge_base_id": 1,
+  "db_path": "C:\\Users\\devl\\proj\\PycharmProjects\\telegram_bot_ai\\data\\botfollow006-openharmony-v3.db",
+  "wiki_url": "https://gitee.com/mazurdenis/open-harmony/wikis",
+  "ingest": {
+    "files_processed": 93,
+    "chunks_added": 768,
+    "wiki_root": "https://gitee.com/mazurdenis/open-harmony/wikis"
+  },
+  "queries": [
+    {
+      "query": "how to sync code with local mirror",
+      "top_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Previewer/ArkTS%201.2%20Linux%20Previewer%20for%20mirror%20v140.2",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Sync%26Build/Sync%26Build",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/XTS/XTS%20build%20and%20run"
+      ],
+      "top_sections": [
+        "Sync and Build",
+        "Initialize repository and sync code",
+        "Initialize ohos repository and sync the code."
+      ],
+      "answer_preview": "Модель ответа сейчас временно недоступна. Показываю наиболее релевантные фрагменты из базы знаний. 1. ArkTS 1.2 Linux Previewer for mirror v140.2 | Sync and Build\nUse the following instruction for sync the stable version of the mirror configuration v140.2:\nhttps://gitee.com/rri_opensource/koala_projects/wikis/Arkoala/Stable%20Builds/v140%20Stable%20Build?sort_id=14709448#2025-10-30-guozejun-changes\nThan download and apply the Linux Previewer ArkTS 1.2 patch:... 2. Sync&Build | Initialize repository and sync code\n1. Obtain code for trunk (add --depth 1 for faster sync, https faster):\nreference=/data/shared/ohos_mirror - use this option for local repo mirror (it is synced every 15 minutes) to achieve better time of code sync 3. XTS build and run | Initialize ohos repository and sync the code.\nUse the instruction (https://gitee.com/mazurdenis/open-harmony/wikis/Sync&Build/Sync%26Build#initialize-repository-and-sync-code).",
+      "answer_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Previewer/ArkTS%201.2%20Linux%20Previewer%20for%20mirror%20v140.2",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Sync%26Build/Sync%26Build",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/XTS/XTS%20build%20and%20run"
+      ]
+    },
+    {
+      "query": "how to build and sync",
+      "top_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/e2e/v135/Stable%20Build%20%26%20Regeneration%20v135",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/e2e/v137/Stable%20Build%20v137",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Sync%26Build/Sync%26Build"
+      ],
+      "top_sections": [
+        "Possible build issues",
+        "Possible build issues",
+        "Initialize repository and sync code"
+      ],
+      "answer_preview": "Модель ответа сейчас временно недоступна. Показываю наиболее релевантные фрагменты из базы знаний. 1. Stable Build & Regeneration v135 | Possible build issues\n1) Build failed related to advanced_ui_component_static ```\ndiff --git a/adapter/ohos/build/BUILD.gn b/adapter/ohos/build/BUILD.gn\nindex e5214e4da48..7836a87cea6 100644\n--- a/adapter/ohos/build/BUILD.gn\n+++ b/adapter/ohos/build/BUILD.gn\n@@ -20,7 +20,7 @@ group(\"ace_packages\") { deps = [ \"$ace_root/adapter/ohos/tools:tools_target\", \"$ace_root/advanced_ui_component:advanced_ui_component\",... 2. Sync&Build | Initialize repository and sync code\n1. create project directory inside \"project's root\" directory created on first step\n1. Obtain code for trunk (add --depth 1 for faster sync, https faster):\nssh: repo init -u git@gitcode.com:openharmony/manifest.git -b master --no-repo-verify --reference=/data/shared/ohos_mirror\nhttps: repo init -u https://gitcode.com/openharmony/manifest.git -b master --no-repo-verify --reference=/data/shared/ohos_mirror",
+      "answer_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/e2e/v135/Stable%20Build%20%26%20Regeneration%20v135",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/e2e/v137/Stable%20Build%20v137",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Sync%26Build/Sync%26Build"
+      ]
+    }
+  ],
+  "failures": [
+    "how to build and sync: answer preview missing expected fragments ['repo sync', 'build/prebuilts_download.sh']"
+  ]
+}

@@ -9,6 +9,48 @@ def test_should_use_git_wiki_loader_for_gitee_urls():
     assert wiki_scraper._should_use_git_wiki_loader("https://example.com/org/repo/wikis") is False
 
 
+def test_extract_repo_info_from_wiki_url_prefers_public_wiki_git_candidates():
+    from shared import wiki_git_loader
+
+    info = wiki_git_loader._extract_repo_info_from_wiki_url("https://gitee.com/mazurdenis/open-harmony/wikis")
+
+    assert info is not None
+    assert info["git_url"] == "https://gitee.com/mazurdenis/open-harmony.wiki.git"
+    assert info["git_urls"] == [
+        "https://gitee.com/mazurdenis/open-harmony.wiki.git",
+        "https://gitee.com/mazurdenis/open-harmony.wikis.git",
+        "https://gitee.com/mazurdenis/open-harmony/wikis.git",
+        "https://gitee.com/mazurdenis/open-harmony.git",
+    ]
+
+
+def test_clone_wiki_repo_disables_interactive_prompts(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from shared import wiki_git_loader
+
+    captured = {}
+
+    def _fake_run(args, capture_output, text, timeout, env):  # noqa: ANN001
+        captured["args"] = args
+        captured["capture_output"] = capture_output
+        captured["text"] = text
+        captured["timeout"] = timeout
+        captured["env"] = env
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(wiki_git_loader.subprocess, "run", _fake_run)
+
+    repo_path = wiki_git_loader._clone_wiki_repo("https://gitee.com/org/repo.wiki.git", str(tmp_path))
+
+    assert repo_path == str(tmp_path / "wiki_repo")
+    assert captured["args"] == ["git", "clone", "--depth", "1", "https://gitee.com/org/repo.wiki.git", str(tmp_path / "wiki_repo")]
+    assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert captured["env"]["GCM_INTERACTIVE"] == "Never"
+    assert captured["env"]["GIT_ASKPASS"] == "echo"
+    assert captured["env"]["SSH_ASKPASS"] == "echo"
+
+
 def test_restore_wiki_url_from_path_normalizes_windows_separators():
     from shared import wiki_git_loader
 
@@ -203,7 +245,11 @@ def test_load_wiki_from_git_adds_canonical_chunk_payload(monkeypatch, tmp_path):
             "owner": "mazurdenis",
             "repo": "open-harmony",
             "base_url": "https://gitee.com/mazurdenis/open-harmony",
-            "git_url": "https://gitee.com/mazurdenis/open-harmony.git",
+            "git_url": "https://gitee.com/mazurdenis/open-harmony.wiki.git",
+            "git_urls": [
+                "https://gitee.com/mazurdenis/open-harmony.wiki.git",
+                "https://gitee.com/mazurdenis/open-harmony.git",
+            ],
             "wiki_root": "https://gitee.com/mazurdenis/open-harmony/wikis",
         },
     )
@@ -247,6 +293,67 @@ def test_load_wiki_from_git_adds_canonical_chunk_payload(monkeypatch, tmp_path):
     assert added_chunks[0]["metadata"]["section_path"] == "Guide/Intro > Heading A"
     assert added_chunks[0]["metadata"]["chunk_hash"] != added_chunks[1]["metadata"]["chunk_hash"]
     assert added_chunks[0]["chunk_columns"]["chunk_hash"] != added_chunks[1]["chunk_columns"]["chunk_hash"]
+
+
+def test_load_wiki_from_git_tries_public_candidates_until_success(monkeypatch, tmp_path):
+    from shared import wiki_git_loader
+
+    repo_root = tmp_path / "repo"
+    section_dir = repo_root / "Guide"
+    section_dir.mkdir(parents=True)
+    (section_dir / "Intro.md").write_text("# Intro\nbody\n", encoding="utf-8")
+    clone_calls = []
+
+    monkeypatch.setattr(
+        wiki_git_loader,
+        "_extract_repo_info_from_wiki_url",
+        lambda _url: {
+            "owner": "mazurdenis",
+            "repo": "open-harmony",
+            "base_url": "https://gitee.com/mazurdenis/open-harmony",
+            "git_url": "https://gitee.com/mazurdenis/open-harmony.wiki.git",
+            "git_urls": [
+                "https://gitee.com/mazurdenis/open-harmony.wiki.git",
+                "https://gitee.com/mazurdenis/open-harmony.wikis.git",
+                "https://gitee.com/mazurdenis/open-harmony.git",
+            ],
+            "wiki_root": "https://gitee.com/mazurdenis/open-harmony/wikis",
+        },
+    )
+
+    def _fake_clone(git_url, temp_dir, repo_dir_name="wiki_repo"):  # noqa: ANN001
+        clone_calls.append((git_url, repo_dir_name))
+        if git_url.endswith(".wikis.git"):
+            return str(repo_root)
+        return None
+
+    monkeypatch.setattr(wiki_git_loader, "_clone_wiki_repo", _fake_clone)
+    monkeypatch.setattr(
+        wiki_git_loader.rag_system,
+        "delete_chunks_by_source_prefix",
+        lambda **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        wiki_git_loader.document_loader_manager,
+        "load_document",
+        lambda *_args, **_kwargs: [{"content": "alpha chunk body", "metadata": {"section_path": "Heading A"}}],
+    )
+    monkeypatch.setattr(
+        wiki_git_loader.rag_system,
+        "add_chunk",
+        lambda **_kwargs: None,
+    )
+
+    result = wiki_git_loader.load_wiki_from_git(
+        wiki_url="https://gitee.com/mazurdenis/open-harmony/wikis",
+        knowledge_base_id=15,
+    )
+
+    assert result["files_processed"] == 1
+    assert clone_calls == [
+        ("https://gitee.com/mazurdenis/open-harmony.wiki.git", "wiki_repo_1"),
+        ("https://gitee.com/mazurdenis/open-harmony.wikis.git", "wiki_repo_2"),
+    ]
 
 
 def test_load_wiki_from_zip_adds_canonical_chunk_payload(monkeypatch, tmp_path):

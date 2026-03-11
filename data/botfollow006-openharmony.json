@@ -1,0 +1,56 @@
+{
+  "ok": false,
+  "mode": "zip",
+  "answer_mode": "extractive",
+  "knowledge_base_id": 2,
+  "db_path": "C:\\Users\\devl\\proj\\PycharmProjects\\telegram_bot_ai\\data\\botfollow006-openharmony.db",
+  "wiki_url": "https://gitee.com/mazurdenis/open-harmony/wikis",
+  "ingest": {
+    "files_processed": 93,
+    "chunks_added": 768,
+    "wiki_root": "https://gitee.com/mazurdenis/open-harmony/wikis"
+  },
+  "queries": [
+    {
+      "query": "how to sync code with local mirror",
+      "top_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Documentation/How%20to%20use%20the%20ndk%20tools",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Arkoala/npm-building%20har%20in%20linux"
+      ],
+      "top_sections": [
+        "Create an executable",
+        "Копирование библиотек"
+      ],
+      "answer_preview": "Модель ответа сейчас временно недоступна. Показываю наиболее релевантные фрагменты из базы знаний. 1. How to use the ndk tools | Create an executable\n###################################################### 2. How to use the ndk tools | link the new hello_library target with the hello_binary target\nTARGET_LINK_LIBRARIES( hello_shared_binary PRIVATE hello::library ) ```\n- **Hello.h**\n``` ifndef __HELLO_H__\ndefine __HELLO_H__\nclass Hello\n{\npublic: void print();\n};\nendif ```\n- **Hello.cpp**\n``` include <iostream>\ninclude \"shared/Hello.h\"\nvoid Hello::print()\n{ std::cout << \"Hello Shared Library!\" << std::endl;\n} ```\n- **main.cpp**\n``` include \"shared/Hello.h\"... 3. npm-building har in linux | Копирование библиотек\n```\nnpm run clean\nnpm run copy\nnpm run copy:arm32\n```",
+      "answer_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Documentation/How%20to%20use%20the%20ndk%20tools",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Arkoala/npm-building%20har%20in%20linux"
+      ]
+    },
+    {
+      "query": "how to build and sync",
+      "top_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/Run%20HelloWorld%20v133",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Previewer/ArkTS%201.2",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Previewer/ArkTS%201.2%20MacOS%20Previewer"
+      ],
+      "top_sections": [
+        "Partial update rk3568 with koala_mirror artifacts",
+        "Build Panda Runtime",
+        "6. Build sdk:"
+      ],
+      "answer_preview": "Модель ответа сейчас временно недоступна. Показываю наиболее релевантные фрагменты из базы знаний. 1. Run HelloWorld v133 | Partial update rk3568 with koala_mirror artifacts\nFrom Windows CMD: ```\nhdc target mount\nhdc file send out\\rk3568\\obj\\foundation\\arkui\\ace_engine\\frameworks\\bridge\\arkts_frontend\\koala_mirror\\arkoala-arkts\\arkoala.abc /system/framework/arkoala.abc\nhdc file send out\\rk3568\\arkui\\ace_engine\\libace_compatible.z.so /system/lib/platformsdk/libace_compatible.z.so\n1. !!! Backup arkcompiler folder \n```\ncp -r arkcompiler arkcompiler.backup\n``` 2. Patch 3. ArkTS 1.2 MacOS Previewer | 6. Build sdk:\n```\n./build.sh --ccache --product-name ohos-sdk --no-prebuilt-sdk --gn-args=sdk_build_public=true --gn-args=sdk_build_arkts=true --gn-args is_use_check_deps=false --sdk_platform=mac\n```",
+      "answer_sources": [
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/C-API/Run%20HelloWorld%20v133",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Previewer/ArkTS%201.2",
+        "https://gitee.com/mazurdenis/open-harmony/wikis/Features/Previewer/ArkTS%201.2%20MacOS%20Previewer"
+      ]
+    }
+  ],
+  "failures": [
+    "how to sync code with local mirror: expected source fragment `Sync%26Build/Sync%26Build` not found in top sources",
+    "how to sync code with local mirror: answer preview missing expected fragments ['repo init', 'repo sync', 'ohos_mirror']",
+    "how to build and sync: expected source fragment `Sync%26Build/Sync%26Build` not found in top sources",
+    "how to build and sync: answer preview missing expected fragments ['repo sync', 'build/prebuilts_download.sh']"
+  ]
+}

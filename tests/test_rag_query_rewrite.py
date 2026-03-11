@@ -214,3 +214,47 @@ def test_rag_query_generalized_mode_skips_rewrite_for_explicit_long_fact_query(m
 
     assert search_calls == [payload.query]
     assert "не менее 60 млрд рублей к 2030 году" in result.answer
+
+
+def test_rag_query_generalized_mode_prefers_sync_build_doc_for_broad_build_sync_query(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_generalized_mode(monkeypatch)
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
+        return [
+            {
+                "content": "XTS-specific build flow for hvigor migration.",
+                "metadata": {
+                    "doc_title": "ArkUI XTS converting to Hvigor. The development process.",
+                    "section_title": "ArkUI XTS converting to Hvigor. The development process.",
+                    "section_path": "Features/XTS/ArkUI XTS converting to Hvigor. The development process.",
+                },
+                "source_path": "https://gitee.com/org/repo/wikis/Features/XTS/ArkUI%20XTS%20converting%20to%20Hvigor",
+                "source_type": "web",
+                "rerank_score": 0.95,
+                "distance": 0.05,
+            },
+            {
+                "content": "Initialize repository with repo init, run repo sync, then build/prebuilts_download.sh and ./build.sh.",
+                "metadata": {
+                    "doc_title": "Sync&Build",
+                    "section_title": "Initialize repository and sync code",
+                    "section_path": "Sync&Build > Initialize repository and sync code",
+                },
+                "source_path": "https://gitee.com/org/repo/wikis/Sync%26Build/Sync%26Build",
+                "source_type": "web",
+                "rerank_score": 0.70,
+                "distance": 0.15,
+            },
+        ]
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    payload = RAGQuery(query="how to build and sync", knowledge_base_id=1)
+    result = rag_query(payload, db=DummyDB())
+
+    assert result.sources
+    assert result.sources[0].source_path.endswith("/Sync%26Build/Sync%26Build")
+    assert "repo init, run repo sync" in result.answer
