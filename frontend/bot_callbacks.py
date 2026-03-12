@@ -1270,16 +1270,22 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
             )
             return
 
-        lines = ["🪵 <b>Логи сервисов</b>\n"]
+        _TG_LIMIT = 4000
+        header = "🪵 <b>Логи сервисов</b>\n"
+        log_lines: list[str] = []
         for entry in logs[:80]:
             service_name = str(entry.get("service") or "service")
             line = str(entry.get("line") or "").strip()
-            if not line:
-                continue
-            lines.append(f"[{service_name}] {line}")
+            if line:
+                log_lines.append(f"[{service_name}] {line}")
+        # Оставляем последние строки, которые умещаются в лимит
+        text = header + "\n".join(log_lines)
+        while len(text) > _TG_LIMIT and log_lines:
+            log_lines.pop(0)
+            text = header + "…(обрезано)\n" + "\n".join(log_lines)
         await safe_edit_message_text(
             query,
-            "\n".join(lines),
+            text,
             reply_markup=admin_menu(),
             parse_mode="HTML",
         )

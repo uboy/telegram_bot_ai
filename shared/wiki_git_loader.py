@@ -70,28 +70,45 @@ def _stable_chunk_title(raw_title: object, *, fallback: str) -> str:
 def _extract_repo_info_from_wiki_url(wiki_url: str) -> Optional[Dict[str, str]]:
     """
     Извлечь информацию о репозитории из URL вики Gitee.
-    
-    Пример: https://gitee.com/mazurdenis/open-harmony/wikis
-    -> {'owner': 'mazurdenis', 'repo': 'open-harmony', 'base_url': 'https://gitee.com/mazurdenis/open-harmony'}
+
+    Поддерживаемые форматы:
+      https://gitee.com/mazurdenis/open-harmony/wikis         (web URL)
+      https://gitee.com/mazurdenis/open-harmony.wiki.git      (git clone URL)
+      https://gitee.com/mazurdenis/open-harmony.wikis.git     (git clone URL alt)
+    -> {'owner': 'mazurdenis', 'repo': 'open-harmony', ...}
     """
+    import re
+
     try:
         parsed = urlparse(wiki_url)
         path_parts = [p for p in parsed.path.split('/') if p]
-        
-        # Найти индекс /wikis
-        wiki_index = -1
-        for i, part in enumerate(path_parts):
-            if part == 'wikis':
-                wiki_index = i
-                break
-        
-        if wiki_index < 2:
-            logger.warning(f"[wiki-git] Не удалось извлечь информацию о репозитории из URL: {wiki_url}")
-            return None
-        
-        owner = path_parts[0]  # mazurdenis
-        repo = path_parts[1]   # open-harmony
-        
+
+        owner: Optional[str] = None
+        repo: Optional[str] = None
+
+        # Случай 1: git clone URL — last segment ends with .wiki.git / .wikis.git
+        if len(path_parts) >= 2:
+            last = path_parts[-1]
+            m = re.match(r"^(.+?)\.wikis?\.git$", last, re.IGNORECASE)
+            if m:
+                owner = path_parts[-2]
+                repo = m.group(1)
+
+        # Случай 2: web URL — найти сегмент /wikis
+        if owner is None:
+            wiki_index = -1
+            for i, part in enumerate(path_parts):
+                if part == 'wikis':
+                    wiki_index = i
+                    break
+
+            if wiki_index < 2:
+                logger.warning(f"[wiki-git] Не удалось извлечь информацию о репозитории из URL: {wiki_url}")
+                return None
+
+            owner = path_parts[0]
+            repo = path_parts[1]
+
         base_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo}"
         git_urls = _build_candidate_git_urls(parsed.scheme, parsed.netloc, owner, repo, base_url)
         git_url = git_urls[0]
@@ -133,12 +150,12 @@ def _build_non_interactive_git_env() -> dict[str, str]:
     return env
 
 
-def _clone_wiki_repo(git_url: str, temp_dir: str, repo_dir_name: str = "wiki_repo") -> Optional[str]:
+def _clone_wiki_repo(git_url: str, temp_dir: str, repo_dir_name: str = "wiki_repo") -> tuple[Optional[str], str]:
     """
     Клонировать git-репозиторий вики во временную директорию.
-    
+
     Returns:
-        Путь к клонированному репозиторию или None при ошибке
+        (repo_path, error_detail) — repo_path=None при ошибке, error_detail содержит причину.
     """
     try:
         repo_path = os.path.join(temp_dir, repo_dir_name)
@@ -151,26 +168,33 @@ def _clone_wiki_repo(git_url: str, temp_dir: str, repo_dir_name: str = "wiki_rep
             timeout=300,  # 5 минут на клонирование
             env=_build_non_interactive_git_env(),
         )
-        
+
         if result.returncode != 0:
-            logger.error(f"[wiki-git] Ошибка клонирования: {result.stderr}")
-            return None
-        
+            stderr = (result.stderr or "").strip()
+            logger.error(f"[wiki-git] Ошибка клонирования {git_url}: {stderr}")
+            return None, stderr or f"returncode={result.returncode}"
+
         logger.info(f"[wiki-git] Репозиторий успешно клонирован: {repo_path}")
-        return repo_path
+        return repo_path, ""
     except subprocess.TimeoutExpired:
-        logger.error(f"[wiki-git] Таймаут при клонировании репозитория")
-        return None
+        msg = f"таймаут при клонировании {git_url}"
+        logger.error(f"[wiki-git] {msg}")
+        return None, msg
     except Exception as e:
-        logger.error(f"[wiki-git] Исключение при клонировании: {e}")
-        return None
+        msg = f"исключение при клонировании {git_url}: {e}"
+        logger.error(f"[wiki-git] {msg}")
+        return None, msg
 
 
 def _clone_first_available_wiki_repo(git_urls: list[str], temp_dir: str) -> Optional[str]:
+    errors: list[str] = []
     for idx, git_url in enumerate(git_urls, start=1):
-        repo_path = _clone_wiki_repo(git_url, temp_dir, repo_dir_name=f"wiki_repo_{idx}")
+        repo_path, err = _clone_wiki_repo(git_url, temp_dir, repo_dir_name=f"wiki_repo_{idx}")
         if repo_path:
             return repo_path
+        errors.append(f"{git_url}: {err}" if err else git_url)
+    if errors:
+        raise RuntimeError("Не удалось клонировать ни один из кандидатов:\n" + "\n".join(errors))
     return None
 
 
@@ -310,8 +334,6 @@ def load_wiki_from_git(
             if fallback_git_url:
                 git_urls = [fallback_git_url]
         repo_path = _clone_first_available_wiki_repo(git_urls, temp_dir)
-        if not repo_path:
-            raise Exception("Не удалось клонировать репозиторий")
         
         # Найти все markdown файлы и загрузить их
         for root, dirs, files in os.walk(repo_path):

@@ -11,12 +11,24 @@ venv/
 .venv/
 env/
 ENV/
+
 # Кэш моделей и данные бота
 data/cache/
 data/logs/
 data/n8n/
 *.log
-# config.py может содержать секреты, если используется без .env
-# config.py
+
+# SQLite WAL / SHM файлы
+data/*.db-shm
+data/*.db-wal
+*.db-shm
+*.db-wal
+
+# Локальные настройки Claude Code
+.claude/settings.local.json
+
+# Дизайн-документы фич (агентские артефакты, только локально)
+docs/design/
+
 open-harmony.zip
 open-harmony/*

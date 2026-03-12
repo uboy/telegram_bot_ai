@@ -24,6 +24,35 @@ def test_extract_repo_info_from_wiki_url_prefers_public_wiki_git_candidates():
     ]
 
 
+def test_extract_repo_info_from_git_clone_url():
+    """Передача git clone URL (.wiki.git) должна давать тот же результат, что и web URL."""
+    from shared import wiki_git_loader
+
+    for git_url in [
+        "https://gitee.com/mazurdenis/open-harmony.wiki.git",
+        "https://gitee.com/mazurdenis/open-harmony.wikis.git",
+    ]:
+        info = wiki_git_loader._extract_repo_info_from_wiki_url(git_url)
+        assert info is not None, f"Не удалось разобрать URL: {git_url}"
+        assert info["owner"] == "mazurdenis"
+        assert info["repo"] == "open-harmony"
+        assert info["wiki_root"] == "https://gitee.com/mazurdenis/open-harmony/wikis"
+        assert info["git_url"] == "https://gitee.com/mazurdenis/open-harmony.wiki.git"
+
+
+def test_normalize_base_url_converts_git_clone_url():
+    """_normalize_base_url должен конвертировать .wiki.git URL в web wiki URL."""
+    from shared.wiki_scraper import _normalize_base_url
+
+    assert _normalize_base_url("https://gitee.com/mazurdenis/open-harmony.wiki.git") == \
+        "https://gitee.com/mazurdenis/open-harmony/wikis"
+    assert _normalize_base_url("https://gitee.com/mazurdenis/open-harmony.wikis.git") == \
+        "https://gitee.com/mazurdenis/open-harmony/wikis"
+    # Обычный web URL не должен меняться
+    assert _normalize_base_url("https://gitee.com/mazurdenis/open-harmony/wikis") == \
+        "https://gitee.com/mazurdenis/open-harmony/wikis"
+
+
 def test_clone_wiki_repo_disables_interactive_prompts(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
@@ -41,9 +70,10 @@ def test_clone_wiki_repo_disables_interactive_prompts(monkeypatch, tmp_path):
 
     monkeypatch.setattr(wiki_git_loader.subprocess, "run", _fake_run)
 
-    repo_path = wiki_git_loader._clone_wiki_repo("https://gitee.com/org/repo.wiki.git", str(tmp_path))
+    repo_path, err = wiki_git_loader._clone_wiki_repo("https://gitee.com/org/repo.wiki.git", str(tmp_path))
 
     assert repo_path == str(tmp_path / "wiki_repo")
+    assert err == ""
     assert captured["args"] == ["git", "clone", "--depth", "1", "https://gitee.com/org/repo.wiki.git", str(tmp_path / "wiki_repo")]
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
     assert captured["env"]["GCM_INTERACTIVE"] == "Never"
@@ -343,7 +373,7 @@ def test_load_wiki_from_git_adds_canonical_chunk_payload(monkeypatch, tmp_path):
     monkeypatch.setattr(
         wiki_git_loader,
         "_clone_wiki_repo",
-        lambda *_args, **_kwargs: str(repo_root),
+        lambda *_args, **_kwargs: (str(repo_root), ""),
     )
     monkeypatch.setattr(
         wiki_git_loader.rag_system,
@@ -411,8 +441,8 @@ def test_load_wiki_from_git_tries_public_candidates_until_success(monkeypatch, t
     def _fake_clone(git_url, temp_dir, repo_dir_name="wiki_repo"):  # noqa: ANN001
         clone_calls.append((git_url, repo_dir_name))
         if git_url.endswith(".wikis.git"):
-            return str(repo_root)
-        return None
+            return str(repo_root), ""
+        return None, "repository not found"
 
     monkeypatch.setattr(wiki_git_loader, "_clone_wiki_repo", _fake_clone)
     monkeypatch.setattr(
