@@ -155,3 +155,42 @@ def test_callback_format_wiki_sync_mode_marks_html_after_git_fallback():
         )
         == "HTML crawl (после неудачной попытки git fallback)"
     )
+
+
+@pytest.mark.anyio
+async def test_callback_admin_logs_renders_aggregated_service_lines(monkeypatch):
+    from frontend import bot_callbacks
+
+    monkeypatch.setattr(
+        bot_callbacks.backend_client,
+        "auth_telegram",
+        lambda **kwargs: {"approved": True, "role": "admin", "username": "admin"},
+    )
+    monkeypatch.setattr(bot_callbacks, "Session", lambda: _DummySession())
+    monkeypatch.setattr(
+        bot_callbacks.backend_client,
+        "get_admin_logs",
+        lambda service="all", tail_lines=80: [
+            {"service": "bot", "line": "first line"},
+            {"service": "worker", "line": "second line"},
+        ],
+    )
+
+    edited = {}
+
+    async def _safe_edit_message_text(query, text, reply_markup=None, parse_mode=None):
+        edited["text"] = text
+        edited["reply_markup"] = reply_markup
+        edited["parse_mode"] = parse_mode
+
+    monkeypatch.setattr(bot_callbacks, "safe_edit_message_text", _safe_edit_message_text)
+
+    update = _DummyUpdate("admin_logs")
+    context = _DummyContext()
+
+    await bot_callbacks.callback_handler(update, context)
+
+    assert "Логи сервисов" in edited["text"]
+    assert "[bot] first line" in edited["text"]
+    assert "[worker] second line" in edited["text"]
+    assert edited["parse_mode"] == "HTML"

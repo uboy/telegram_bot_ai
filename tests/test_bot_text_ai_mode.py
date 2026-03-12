@@ -373,6 +373,175 @@ async def test_handle_text_waiting_wiki_root_ingests_wiki_crawl(monkeypatch):
     assert "reply_markup" in update.message.kwargs[-1]
 
 
+@pytest.mark.anyio
+async def test_handle_text_waiting_wiki_root_keeps_recovery_state_on_failed_ingest(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="admin",
+            full_name=None,
+            role="admin",
+            approved=True,
+        )
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+
+    def _ingest_wiki_crawl(*, kb_id, url, telegram_id=None, username=None):
+        return {
+            "status": "failed",
+            "stage": "validation",
+            "failure_reason": "git_auth_required",
+            "failure_message": "Need auth",
+            "recovery_options": ["provide_auth", "upload_wiki_zip"],
+            "deleted_chunks": 0,
+            "pages_processed": 1,
+            "chunks_added": 4,
+            "wiki_root": url,
+            "crawl_mode": "html",
+            "git_fallback_attempted": True,
+        }
+
+    monkeypatch.setattr(bot_handlers.backend_client, "ingest_wiki_crawl", _ingest_wiki_crawl)
+
+    class DummyMessage:
+        def __init__(self):
+            self.text = "https://gitee.com/mazurdenis/open-harmony/wikis"
+            self.date = datetime.now(timezone.utc)
+            self.sent = []
+            self.kwargs = []
+
+        async def reply_text(self, text, **kwargs):
+            self.sent.append(text)
+            self.kwargs.append(kwargs)
+
+    class DummyUser:
+        id = 1
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+
+    class DummyContext:
+        def __init__(self):
+            self.user_data = {
+                "state": "waiting_wiki_root",
+                "kb_id_for_wiki": 42,
+                "pending_documents": [{"file_name": "stale.pdf"}],
+            }
+
+    update = DummyUpdate()
+    context = DummyContext()
+
+    await bot_handlers.handle_text(update, context)
+
+    assert context.user_data["state"] == "waiting_wiki_archive"
+    assert context.user_data["wiki_zip_kb_id"] == 42
+    assert context.user_data["wiki_zip_url"] == "https://gitee.com/mazurdenis/open-harmony/wikis"
+    assert context.user_data.get("pending_documents") is None
+    assert "Сканирование wiki не завершилось успешно" in update.message.sent[-1]
+    assert "zip-архив wiki" in update.message.sent[-1].lower()
+
+
+@pytest.mark.anyio
+async def test_handle_document_waiting_wiki_archive_uses_wiki_zip_restore(monkeypatch):
+    from frontend import bot_handlers
+
+    async def _check_user(_update):
+        return UserContext(
+            telegram_id="1",
+            username="admin",
+            full_name=None,
+            role="admin",
+            approved=True,
+        )
+
+    monkeypatch.setattr(bot_handlers, "check_user", _check_user)
+    zip_calls = []
+    document_calls = []
+
+    def _ingest_wiki_zip(*, kb_id, url, zip_bytes, filename, telegram_id=None, username=None):
+        zip_calls.append(
+            {
+                "kb_id": kb_id,
+                "url": url,
+                "filename": filename,
+                "telegram_id": telegram_id,
+                "username": username,
+                "size": len(zip_bytes),
+            }
+        )
+        return {"files_processed": 3, "chunks_added": 12}
+
+    def _ingest_document(**kwargs):
+        document_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(bot_handlers.backend_client, "ingest_wiki_zip", _ingest_wiki_zip)
+    monkeypatch.setattr(bot_handlers.backend_client, "ingest_document", _ingest_document)
+
+    class DummyDoc:
+        file_name = "wiki.zip"
+        mime_type = "application/zip"
+        file_size = 100
+        file_id = "abc"
+
+    class DummyFile:
+        async def download_as_bytearray(self):
+            return bytearray(b"zip-content")
+
+    class DummyMessage:
+        def __init__(self):
+            self.document = DummyDoc()
+            self.date = datetime.now(timezone.utc)
+            self.sent = []
+            self.kwargs = []
+
+        async def reply_text(self, text, **kwargs):
+            self.sent.append(text)
+            self.kwargs.append(kwargs)
+
+    class DummyBot:
+        async def get_file(self, _file_id):
+            return DummyFile()
+
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+
+    class DummyContext:
+        def __init__(self):
+            self.bot = DummyBot()
+            self.user_data = {
+                "state": "waiting_wiki_archive",
+                "wiki_zip_kb_id": 42,
+                "wiki_zip_url": "https://gitee.com/mazurdenis/open-harmony/wikis",
+            }
+
+    update = DummyUpdate()
+    context = DummyContext()
+
+    await bot_handlers.handle_document(update, context)
+
+    assert zip_calls == [
+        {
+            "kb_id": 42,
+            "url": "https://gitee.com/mazurdenis/open-harmony/wikis",
+            "filename": "wiki.zip",
+            "telegram_id": "1",
+            "username": "admin",
+            "size": 11,
+        }
+    ]
+    assert document_calls == []
+    assert context.user_data["state"] is None
+    assert context.user_data.get("wiki_zip_kb_id") is None
+    assert context.user_data.get("wiki_zip_url") is None
+    assert "Восстановление wiki из ZIP завершено" in update.message.sent[-1]
+
+
 def test_format_wiki_sync_mode_marks_html_after_git_fallback():
     from frontend import bot_handlers
 

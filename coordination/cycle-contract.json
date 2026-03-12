@@ -1,32 +1,40 @@
 {
-  "task_id": "BOTFOLLOW-006",
+  "task_id": "WIKIRECOV-005",
   "implementation_agent": "codex",
   "review_agent": "codex-review",
   "required_commands": [
-    "python -m py_compile shared/rag_system.py backend/api/routes/rag.py tests/test_rag_metadata_field_search.py tests/test_rag_context_composer.py tests/test_openharmony_wiki_local_smoke.py",
-    "$env:MYSQL_URL=''; $env:DB_PATH='data\\botfollow006-test.db'; .venv\\Scripts\\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_metadata_field_search.py",
-    "$env:RAG_OPENHARMONY_WIKI_LOCAL_SMOKE='1'; $env:RAG_OPENHARMONY_WIKI_ZIP_PATH='C:\\Users\\devl\\proj\\open-harmony.wiki.zip'; $env:RAG_OPENHARMONY_WIKI_TOP_K='5'; .venv\\Scripts\\python.exe -m pytest -q tests/test_openharmony_wiki_local_smoke.py",
+    "python -m py_compile shared/wiki_scraper.py backend/services/ingestion_service.py backend/api/routes/ingestion.py backend/api/routes/knowledge.py backend/schemas/common.py frontend/backend_client.py frontend/bot_handlers.py frontend/bot_callbacks.py frontend/templates/buttons.py tests/test_wiki_scraper.py tests/test_ingestion_routes.py tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py",
+    ".venv\\Scripts\\python.exe -m pytest -q tests/test_wiki_scraper.py tests/test_ingestion_routes.py tests/test_bot_text_ai_mode.py tests/test_bot_wiki_callbacks.py",
     "python scripts/scan_secrets.py",
     "python scripts/ci_policy_gate.py --working-tree"
   ],
   "required_artifacts": [
-    "shared/rag_system.py",
-    "backend/api/routes/rag.py",
-    "tests/test_rag_metadata_field_search.py",
-    "tests/test_rag_context_composer.py",
-    "tests/test_openharmony_wiki_local_smoke.py",
+    "shared/wiki_scraper.py",
+    "backend/services/ingestion_service.py",
+    "backend/api/routes/ingestion.py",
+    "backend/api/routes/knowledge.py",
+    "backend/schemas/common.py",
+    "frontend/backend_client.py",
+    "frontend/bot_handlers.py",
+    "frontend/bot_callbacks.py",
+    "frontend/templates/buttons.py",
+    "tests/test_wiki_scraper.py",
+    "tests/test_ingestion_routes.py",
+    "tests/test_bot_text_ai_mode.py",
+    "tests/test_bot_wiki_callbacks.py",
     "SPEC.md",
-    "docs/design/botfollow-006-procedural-howto-retrieval-v1.md",
+    "docs/design/wiki-ingest-failfast-and-recovery-v1.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
-    "docs/TESTING.md",
-    "coordination/reviews/botfollow-006-<date>.md",
+    "docs/USAGE.md",
+    "docs/OPERATIONS.md",
+    "coordination/reviews/wikirecov-00x-<date>.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
     "coordination/cycle-contract.json"
   ],
   "size_limits": {
-    "max_files_changed": 8,
-    "max_lines_added": 420,
-    "max_lines_deleted": 120
+    "max_files_changed": 16,
+    "max_lines_added": 700,
+    "max_lines_deleted": 180
   }
 }

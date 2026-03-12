@@ -2588,3 +2588,68 @@
   - implementation and local smoke are green,
   - coordination moved to `reviewer` phase,
   - independent review artifact is still pending because no separate reviewer agent/tool is available in the current session.
+### 2026-03-11 New architect cycle: wiki ingest fail-fast + recovery + admin logs
+- Classified the new user request as non-trivial.
+- Scope confirmed from live behavior:
+  - URL-based Gitee wiki ingest can still report success after root-only HTML fallback,
+  - git-style wiki URL can report success with `0 pages / 0 chunks`,
+  - dedicated wiki archive recovery is missing from the bot UX,
+  - admin panel still lacks aggregated service-log access for debugging.
+- Architect-phase artifacts updated:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - pending design doc `docs/design/wiki-ingest-failfast-and-recovery-v1.md`
+- Next step:
+  - finish the design spec and stop for user CC before changing runtime code or backlog.
+### 2026-03-12 WIKIRECOV implementation kickoff
+- User approved `docs/design/wiki-ingest-failfast-and-recovery-v1.md` with `APPROVED:v1`.
+- Coordination artifacts switched to the new execution cycle:
+  - active task `WIKIRECOV-001`,
+  - added follow-up tasks `WIKIRECOV-002..005`,
+  - updated `coordination/cycle-contract.json` required files/verification commands for the wiki recovery scope.
+- Current implementation checklist:
+  - `WIKIRECOV-001` in progress: truthful backend wiki status contract and fail-fast classification.
+  - `WIKIRECOV-002` pending: bot recovery flow + wiki ZIP restore.
+  - `WIKIRECOV-003` pending: bounded redacted admin logs.
+  - `WIKIRECOV-004` pending: focused regressions and verification.
+  - `WIKIRECOV-005` pending: spec/docs/review sync.
+- Current inspection findings before runtime edits:
+  - `frontend/bot_handlers.py::waiting_wiki_root` still always reports success and clears state.
+  - `shared/wiki_scraper.py` silently falls back from git to HTML and currently cannot classify root-only Gitee crawl as failure.
+  - `backend_client.py` already has `ingest_wiki_zip(...)`, so bot-side recovery can reuse it.
+  - no admin log aggregation API or bot menu entry exists yet.
+### 2026-03-12 WIKIRECOV runtime progress
+- `WIKIRECOV-001` implemented:
+  - `shared/wiki_scraper.py` now classifies wiki ingest results as `success/failed` with `stage`, `failure_reason`, `failure_message`, and `recovery_options`;
+  - empty wiki results and root-only Gitee HTML fallback are fail-fast;
+  - git clone/auth errors are surfaced as structured failure reasons.
+- `WIKIRECOV-002` implemented:
+  - `frontend/bot_handlers.py::waiting_wiki_root` no longer always reports success;
+  - failed wiki ingest keeps bot state in `waiting_wiki_archive`;
+  - ZIP uploaded during this recovery flow calls `backend_client.ingest_wiki_zip(...)` with the original wiki URL and does not enter generic document upload.
+- `WIKIRECOV-003` implemented:
+  - added bounded redacted admin logs endpoint in `backend/api/routes/knowledge.py`;
+  - wired `frontend/backend_client.py`, `frontend/templates/buttons.py`, and `frontend/bot_callbacks.py` for `🪵 Логи сервисов`.
+- Focused verification:
+  - `python -m py_compile shared/wiki_scraper.py backend/services/ingestion_service.py backend/api/routes/ingestion.py backend/schemas/common.py frontend/bot_handlers.py backend/api/routes/knowledge.py frontend/backend_client.py frontend/templates/buttons.py frontend/bot_callbacks.py tests/test_wiki_scraper.py tests/test_ingestion_routes.py tests/test_bot_text_ai_mode.py tests/test_admin_logs_route.py tests/test_buttons_admin_menu.py tests/test_bot_wiki_callbacks.py` -> PASS
+  - `MYSQL_URL='' DB_PATH=data/wikirecov-test.db .venv\Scripts\python.exe -m pytest -q tests/test_wiki_scraper.py tests/test_ingestion_routes.py` -> `17 passed`
+  - `MYSQL_URL='' DB_PATH=data/wikirecov-test.db .venv\Scripts\python.exe -m pytest -q tests/test_bot_text_ai_mode.py -k "wiki_root or wiki_archive"` -> `3 passed`
+  - `MYSQL_URL='' DB_PATH=data/wikirecov-test.db .venv\Scripts\python.exe -m pytest -q tests/test_admin_logs_route.py tests/test_buttons_admin_menu.py tests/test_bot_wiki_callbacks.py -k "admin_logs or admin_menu"` -> PASS
+- Remaining cycle work:
+  - run global secret/policy gates,
+  - update task statuses / contract,
+  - independent review artifact still pending because no separate reviewer agent/tool is available in the current session.
+### 2026-03-12 WIKIRECOV checkpoint after gates
+- Completed coordination sync:
+  - `coordination/tasks.jsonl` now marks `WIKIRECOV-001..004` completed and `WIKIRECOV-005` in progress;
+  - `coordination/cycle-contract.json` now tracks `WIKIRECOV-005`.
+- Final gates:
+  - `python scripts/scan_secrets.py` -> `PASS`
+  - `python scripts/ci_policy_gate.py --working-tree` -> `PASS`
+- Functional diff status:
+  - truthful wiki ingest backend contract is implemented,
+  - bot wiki ZIP recovery path is implemented,
+  - admin aggregated log viewer is implemented,
+  - spec/traceability/usage/operations are synced.
+- Remaining blocker:
+  - independent review artifact is still missing because no separate reviewer agent/tool is available in the current session, and project policy forbids the implementation agent from writing reviewer findings/verification manually.

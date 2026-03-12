@@ -66,6 +66,20 @@ def _format_wiki_sync_mode(stats: dict | None) -> str:
     return "HTML crawl"
 
 
+def _clear_wiki_recovery_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop('kb_id_for_wiki', None)
+    context.user_data.pop('wiki_urls', None)
+    context.user_data.pop('wiki_zip_kb_id', None)
+    context.user_data.pop('wiki_zip_url', None)
+
+
+def _clear_upload_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop('pending_documents', None)
+    context.user_data.pop('pending_document', None)
+    context.user_data.pop('upload_mode', None)
+    context.user_data.pop('kb_id', None)
+
+
 def _format_bytes_short(size_bytes: int) -> str:
     if size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
@@ -1228,10 +1242,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=admin_menu(),
             )
             context.user_data['state'] = None
-            context.user_data.pop('kb_id_for_wiki', None)
-            context.user_data.pop('wiki_urls', None)
-            context.user_data.pop('wiki_zip_kb_id', None)
-            context.user_data.pop('wiki_zip_url', None)
+            _clear_wiki_recovery_state(context)
             return
 
         if not wiki_url.startswith(("http://", "https://")):
@@ -1253,36 +1264,122 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             added = stats.get("chunks_added", 0) if isinstance(stats, dict) else 0
             wiki_root = (stats.get("wiki_root", wiki_url) if isinstance(stats, dict) else wiki_url)
             sync_mode = _format_wiki_sync_mode(stats if isinstance(stats, dict) else None)
+            status = str(stats.get("status", "success") or "success") if isinstance(stats, dict) else "success"
+            failure_message = (stats.get("failure_message") if isinstance(stats, dict) else None) or "Не удалось синхронизировать wiki."
+            recovery_options = list(stats.get("recovery_options") or []) if isinstance(stats, dict) else []
 
-            await update.message.reply_text(
-                "✅ Сканирование вики завершено.\n\n"
-                f"Исходный URL: {wiki_url}\n"
-                f"Корневой wiki-URL: {wiki_root}\n"
-                f"Режим синхронизации: {sync_mode}\n"
-                f"Удалено старых фрагментов: {deleted}\n"
-                f"Обработано страниц: {pages}\n"
-                f"Добавлено фрагментов: {added}",
-                reply_markup=kb_actions_menu(kb_id),
-            )
+            if status == "failed":
+                context.user_data['state'] = 'waiting_wiki_archive'
+                context.user_data['wiki_zip_kb_id'] = kb_id
+                context.user_data['wiki_zip_url'] = wiki_root
+                context.user_data.pop('kb_id_for_wiki', None)
+                context.user_data.pop('wiki_urls', None)
+                _clear_upload_state(context)
+                recovery_hint = "Загрузите ZIP-архив wiki в этот чат, и бот восстановит страницы по исходному URL."
+                if "provide_auth" in recovery_options:
+                    recovery_hint = (
+                        "Для git-синхронизации wiki нужен доступ к репозиторию. "
+                        "Если авторизацию не дать, загрузите ZIP-архив wiki в этот чат."
+                    )
+                await update.message.reply_text(
+                    "❌ Сканирование wiki не завершилось успешно.\n\n"
+                    f"Исходный URL: {wiki_url}\n"
+                    f"Корневой wiki-URL: {wiki_root}\n"
+                    f"Режим синхронизации: {sync_mode}\n"
+                    f"Удалено старых фрагментов: {deleted}\n"
+                    f"Обработано страниц: {pages}\n"
+                    f"Добавлено фрагментов: {added}\n\n"
+                    f"Причина: {failure_message}\n"
+                    f"{recovery_hint}",
+                    reply_markup=kb_actions_menu(kb_id),
+                )
+            else:
+                await update.message.reply_text(
+                    "✅ Сканирование вики завершено.\n\n"
+                    f"Исходный URL: {wiki_url}\n"
+                    f"Корневой wiki-URL: {wiki_root}\n"
+                    f"Режим синхронизации: {sync_mode}\n"
+                    f"Удалено старых фрагментов: {deleted}\n"
+                    f"Обработано страниц: {pages}\n"
+                    f"Добавлено фрагментов: {added}",
+                    reply_markup=kb_actions_menu(kb_id),
+                )
         except Exception as e:  # noqa: BLE001
             logger.error("Ошибка при wiki-crawl через bot text state: %s", e, exc_info=True)
             await update.message.reply_text(
                 f"❌ Ошибка при сканировании вики: {str(e)}\n\n"
-                "Убедитесь, что URL корректный и доступен.",
+                "Убедитесь, что URL корректный и доступен. Затем загрузите ZIP-архив wiki для восстановления.",
                 reply_markup=kb_actions_menu(kb_id),
             )
-        finally:
-            context.user_data['state'] = None
+            context.user_data['state'] = 'waiting_wiki_archive'
+            context.user_data['wiki_zip_kb_id'] = kb_id
+            context.user_data['wiki_zip_url'] = wiki_url
             context.user_data.pop('kb_id_for_wiki', None)
             context.user_data.pop('wiki_urls', None)
-            context.user_data.pop('wiki_zip_kb_id', None)
-            context.user_data.pop('wiki_zip_url', None)
-            context.user_data.pop('pending_documents', None)
-            context.user_data.pop('pending_document', None)
-            context.user_data.pop('upload_mode', None)
-            context.user_data.pop('kb_id', None)
+            _clear_upload_state(context)
+        else:
+            if context.user_data.get('state') != 'waiting_wiki_archive':
+                context.user_data['state'] = None
+                _clear_wiki_recovery_state(context)
+                _clear_upload_state(context)
     else:
         await handle_start(update, context)
+
+
+async def _handle_wiki_archive_recovery(
+    *,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user: UserContext,
+    payload: dict,
+) -> bool:
+    if context.user_data.get('state') != 'waiting_wiki_archive':
+        return False
+
+    kb_id_raw = context.user_data.get('wiki_zip_kb_id')
+    wiki_url = context.user_data.get('wiki_zip_url')
+    kb_id = int(kb_id_raw) if kb_id_raw else None
+    file_name = str(payload.get("file_name") or "")
+
+    if not kb_id or not wiki_url:
+        await update.message.reply_text(
+            "❌ Сессия восстановления wiki потеряна. Запустите загрузку wiki заново.",
+            reply_markup=admin_menu(),
+        )
+        context.user_data['state'] = None
+        _clear_wiki_recovery_state(context)
+        return True
+
+    if not file_name.lower().endswith(".zip"):
+        await update.message.reply_text(
+            "⚠️ Для восстановления wiki нужен ZIP-архив. Для обычных документов используйте режим загрузки документов.",
+            reply_markup=kb_actions_menu(kb_id),
+        )
+        return True
+
+    file = await context.bot.get_file(str(payload.get("file_id") or ""))
+    file_bytes = await file.download_as_bytearray()
+    result = await asyncio.to_thread(
+        backend_client.ingest_wiki_zip,
+        kb_id=kb_id,
+        url=str(wiki_url),
+        zip_bytes=bytes(file_bytes),
+        filename=file_name,
+        telegram_id=str(user.telegram_id),
+        username=user.username,
+    )
+    files = int(result.get("files_processed", 0) or 0) if isinstance(result, dict) else 0
+    chunks = int(result.get("chunks_added", 0) or 0) if isinstance(result, dict) else 0
+    await update.message.reply_text(
+        "✅ Восстановление wiki из ZIP завершено.\n\n"
+        f"Корневой wiki-URL: {wiki_url}\n"
+        f"Обработано файлов: {files}\n"
+        f"Добавлено фрагментов: {chunks}",
+        reply_markup=kb_actions_menu(kb_id),
+    )
+    context.user_data['state'] = None
+    _clear_wiki_recovery_state(context)
+    return True
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1450,6 +1547,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     payload = _extract_document_payload(update.message)
+    if await _handle_wiki_archive_recovery(
+        update=update,
+        context=context,
+        user=user,
+        payload=payload,
+    ):
+        return
+
     kb_id_raw = context.user_data.get('kb_id')
     kb_id = int(kb_id_raw) if kb_id_raw else None
     if not kb_id:

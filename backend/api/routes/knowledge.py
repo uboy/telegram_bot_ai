@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import re
+from collections import deque
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 
 from backend.api.deps import get_db_dep, require_api_key
 from backend.schemas.common import (
+    AdminLogEntry,
+    AdminLogResponse,
     KnowledgeBaseInfo,
     KnowledgeSourceInfo,
     KnowledgeImportLogEntry,
@@ -19,6 +26,33 @@ from shared.rag_system import rag_system  # type: ignore
 
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge"])
+_CREDENTIAL_URL_RE = re.compile(r"([a-z][a-z0-9+\-.]*://)([^/@:\s]+):([^/@\s]+)@", flags=re.IGNORECASE)
+_AUTH_HEADER_RE = re.compile(r"(?i)\b(authorization\b\s*:\s*(?:bearer|basic|token)\s+)([^\s,;]+)")
+_BEARER_TOKEN_RE = re.compile(r"(?i)\b(bearer\s+)([^\s,;]+)")
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret)\b(\s*[:=]\s*)([^\s,;]+)"
+)
+
+
+def _redact_log_line(value: str) -> str:
+    cleaned = _CREDENTIAL_URL_RE.sub(r"\1***:***@", value)
+    cleaned = _AUTH_HEADER_RE.sub(r"\1***", cleaned)
+    cleaned = _BEARER_TOKEN_RE.sub(r"\1***", cleaned)
+    cleaned = _SECRET_VALUE_RE.sub(r"\1\2***", cleaned)
+    return cleaned
+
+
+def _iter_service_log_files(service: str) -> list[tuple[str, Path]]:
+    log_dir = Path(os.getenv("BOT_LOG_DIR", "data/logs"))
+    if not log_dir.exists():
+        return []
+    files: list[tuple[str, Path]] = []
+    for path in sorted(log_dir.glob("*.log")):
+        service_name = path.stem
+        if service != "all" and service_name != service:
+            continue
+        files.append((service_name, path))
+    return files
 
 
 @router.get(
@@ -185,4 +219,23 @@ def update_kb_settings(
     kb.settings = dump_kb_settings(merged)
     db.commit()
     return KnowledgeBaseSettings(settings=merged)
+
+
+@router.get(
+    "/admin/logs",
+    response_model=AdminLogResponse,
+    summary="Агрегированные логи сервисов для админов",
+    dependencies=[Depends(require_api_key)],
+)
+def get_admin_logs(
+    service: str = Query("all"),
+    tail_lines: int = Query(80, ge=1, le=200),
+) -> AdminLogResponse:
+    entries: list[AdminLogEntry] = []
+    for service_name, path in _iter_service_log_files(service):
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            lines = deque(handle, maxlen=tail_lines)
+        for line in lines:
+            entries.append(AdminLogEntry(service=service_name, line=_redact_log_line(line.rstrip())))
+    return AdminLogResponse(entries=entries)
 

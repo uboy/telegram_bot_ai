@@ -59,6 +59,11 @@ def test_ingest_wiki_crawl_returns_sync_mode_fields(monkeypatch):
 
         def ingest_wiki_crawl(self, *, kb_id, wiki_url, telegram_id=None, username=None):
             return {
+                "status": "failed",
+                "stage": "validation",
+                "failure_reason": "root_only_html_fallback",
+                "failure_message": "HTML crawl found only the root page",
+                "recovery_options": ["retry_git", "upload_wiki_zip"],
                 "deleted_chunks": 2,
                 "pages_processed": 9,
                 "chunks_added": 33,
@@ -77,6 +82,10 @@ def test_ingest_wiki_crawl_returns_sync_mode_fields(monkeypatch):
         db=object(),
     )
 
+    assert result.status == "failed"
+    assert result.stage == "validation"
+    assert result.failure_reason == "root_only_html_fallback"
+    assert result.recovery_options == ["retry_git", "upload_wiki_zip"]
     assert result.deleted_chunks == 2
     assert result.pages_processed == 9
     assert result.chunks_added == 33

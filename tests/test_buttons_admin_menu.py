@@ -13,4 +13,5 @@ def test_admin_menu_does_not_have_global_upload_button():
             callbacks.append(button.callback_data)
 
     assert "admin_kb" in callbacks
+    assert "admin_logs" in callbacks
     assert "admin_upload" not in callbacks

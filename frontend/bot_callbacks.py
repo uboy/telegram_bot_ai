@@ -1260,6 +1260,31 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         await safe_edit_message_text(query, "👨‍💼 Админ-панель:", reply_markup=admin_menu())
         return
 
+    if data == 'admin_logs':
+        logs = await asyncio.to_thread(backend_client.get_admin_logs, "all", 80)
+        if not logs:
+            await safe_edit_message_text(
+                query,
+                "🪵 Логи сервисов пока недоступны или пусты.",
+                reply_markup=admin_menu(),
+            )
+            return
+
+        lines = ["🪵 <b>Логи сервисов</b>\n"]
+        for entry in logs[:80]:
+            service_name = str(entry.get("service") or "service")
+            line = str(entry.get("line") or "").strip()
+            if not line:
+                continue
+            lines.append(f"[{service_name}] {line}")
+        await safe_edit_message_text(
+            query,
+            "\n".join(lines),
+            reply_markup=admin_menu(),
+            parse_mode="HTML",
+        )
+        return
+
     # Глобальные настройки ASR (вынесено в начало для гарантированного срабатывания)
     if data == 'toggle_global_asr_metadata':
         logger.info("Toggling global ASR metadata status...")

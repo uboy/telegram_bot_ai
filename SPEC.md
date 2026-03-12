@@ -213,6 +213,9 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - For public Gitee wiki URLs, the git-based loader must try wiki-specific public clone candidates non-interactively before HTML fallback so backend jobs do not block on interactive credentials and full wiki sync can succeed without manual auth.
 - Dense retrieval indices are isolated per KB by embedding dimension: mixed-dimension chunks in other KBs must not suppress dense search for the active KB, and any query/index dimension mismatch for a KB must degrade only that dense leg to keyword fallback instead of poisoning the whole runtime index.
 - Generalized ranking adds a deterministic field-aware score over `source_path` / `doc_title` / `section_title` / `section_path` so broad build+sync how-to queries prefer canonical docs such as `Sync&Build` over narrower feature pages when retrieval candidates are otherwise close.
+- Wiki URL ingest is fail-fast: `0 pages / 0 chunks` or Gitee root-only HTML fallback must be reported as failure with explicit reason/recovery hints instead of a false success message.
+- After failed wiki URL ingest, the bot remains in a wiki-specific recovery session and accepts a ZIP archive for wiki restore using the original wiki root URL; this ZIP restore path must stay separate from generic document upload.
+- Admin panel exposes a bounded, redacted service-log viewer for debugging backend/bot/wiki ingest issues without leaking secrets or credentials.
 
 ## Specification maintenance policy
 - `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.

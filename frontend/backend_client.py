@@ -598,6 +598,19 @@ class BackendClient:
             )
             return []
 
+    def get_admin_logs(self, service: str = "all", tail_lines: int = 80) -> List[Dict[str, Any]]:
+        url = self._url("/knowledge-bases/admin/logs")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+                resp = client.get(url, params={"service": service, "tail_lines": tail_lines})
+                resp.raise_for_status()
+                payload = resp.json()
+                return list(payload.get("entries") or [])
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при обращении к backend admin logs: %s", e, exc_info=True)
+            return []
+
     # === Пользователи ===
 
     def list_users(self) -> List[Dict[str, Any]]:

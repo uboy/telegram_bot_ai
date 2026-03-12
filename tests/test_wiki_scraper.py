@@ -160,15 +160,102 @@ def test_crawl_wiki_to_kb_falls_back_to_html_when_git_loader_fails(monkeypatch):
         loader_options={"chunk_size": 1000},
     )
 
-    assert result == {
-        "deleted_chunks": 2,
-        "pages_processed": 2,
-        "chunks_added": 2,
-        "wiki_root": "https://gitee.com/mazurdenis/open-harmony/wikis",
-        "crawl_mode": "html",
-        "git_fallback_attempted": True,
-    }
+    assert result["deleted_chunks"] == 2
+    assert result["pages_processed"] == 2
+    assert result["chunks_added"] == 2
+    assert result["wiki_root"] == "https://gitee.com/mazurdenis/open-harmony/wikis"
+    assert result["crawl_mode"] == "html"
+    assert result["git_fallback_attempted"] is True
+    assert result["status"] == "success"
+    assert result["stage"] == "html"
+    assert result["failure_reason"] is None
+    assert result["recovery_options"] == []
+    assert result["git_failure_reason"] == "git_clone_failed"
     assert len(added_chunks) == 2
+
+
+def test_crawl_wiki_to_kb_marks_root_only_gitee_html_fallback_as_failed(monkeypatch):
+    from shared import wiki_scraper
+    from shared import wiki_git_loader
+
+    class _DummyResponse:
+        def __init__(self, html: str):
+            self.content = html.encode("utf-8")
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        wiki_git_loader,
+        "load_wiki_from_git",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("fatal: could not read Username for 'https://gitee.com'")),
+    )
+    monkeypatch.setattr(
+        wiki_scraper.rag_system,
+        "delete_chunks_by_source_prefix",
+        lambda **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        wiki_scraper.document_loader_manager,
+        "load_document",
+        lambda *_args, **_kwargs: [{"content": "root only content", "metadata": {}}],
+    )
+    monkeypatch.setattr(
+        wiki_scraper.rag_system,
+        "add_chunk",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        wiki_scraper.requests,
+        "get",
+        lambda *_args, **_kwargs: _DummyResponse("<html><body>root</body></html>"),
+    )
+
+    result = wiki_scraper.crawl_wiki_to_kb(
+        base_url="https://gitee.com/mazurdenis/open-harmony/wikis",
+        knowledge_base_id=5,
+    )
+
+    assert result["status"] == "failed"
+    assert result["stage"] == "validation"
+    assert result["failure_reason"] == "git_auth_required"
+    assert result["recovery_options"] == ["provide_auth", "upload_wiki_zip"]
+
+
+def test_crawl_wiki_to_kb_marks_empty_result_as_failed(monkeypatch):
+    from shared import wiki_scraper
+
+    class _DummyResponse:
+        def __init__(self, html: str):
+            self.content = html.encode("utf-8")
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        wiki_scraper.rag_system,
+        "delete_chunks_by_source_prefix",
+        lambda **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        wiki_scraper.document_loader_manager,
+        "load_document",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        wiki_scraper.requests,
+        "get",
+        lambda *_args, **_kwargs: _DummyResponse("<html><body></body></html>"),
+    )
+
+    result = wiki_scraper.crawl_wiki_to_kb(
+        base_url="https://example.com/docs/wiki",
+        knowledge_base_id=8,
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "empty_wiki_result"
+    assert result["recovery_options"] == ["retry_git", "upload_wiki_zip"]
 
 
 def test_crawl_wiki_to_kb_html_adds_canonical_chunk_payload(monkeypatch):
