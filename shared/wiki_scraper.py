@@ -47,7 +47,9 @@ def _classify_git_loader_exception(exc: Exception) -> tuple[str, str]:
             "git_auth_required",
             "Не удалось получить доступ к git-репозиторию wiki без авторизации.",
         )
-    return ("git_clone_failed", "Не удалось синхронизировать wiki через git.")
+    detail = text[:300] if text else ""
+    reason = f"Не удалось синхронизировать wiki через git. {detail}".strip()
+    return ("git_clone_failed", reason)
 
 
 def _classify_wiki_result(
@@ -63,7 +65,13 @@ def _classify_wiki_result(
     failure_message: str | None = None
     recovery_options: list[str] = []
 
-    if pages_processed <= 0 or chunks_added <= 0:
+    # Git auth failure on a git-native wiki (e.g. Gitee) always means incomplete result,
+    # regardless of how many HTML pages were scraped as fallback.
+    if git_failure_reason == "git_auth_required" and _should_use_git_wiki_loader(wiki_root):
+        failure_reason = "git_auth_required"
+        failure_message = "Не удалось получить доступ к git-репозиторию wiki без авторизации."
+        recovery_options = ["provide_auth", "upload_wiki_zip"]
+    elif pages_processed <= 0 or chunks_added <= 0:
         failure_reason = "empty_wiki_result"
         failure_message = "Вики не загрузилась: не найдено ни одной страницы или фрагмента."
         recovery_options = ["retry_git", "upload_wiki_zip"]
@@ -73,12 +81,7 @@ def _classify_wiki_result(
             "HTML-обход нашел только корневую страницу вики и не восстановил полноценный corpus."
         )
         recovery_options = ["retry_git", "upload_wiki_zip"]
-
-    if failure_reason and git_failure_reason == "git_auth_required":
-        failure_reason = "git_auth_required"
-        failure_message = "Не удалось получить доступ к git-репозиторию wiki без авторизации."
-        recovery_options = ["provide_auth", "upload_wiki_zip"]
-    elif failure_reason and git_failure_reason and not failure_message:
+    elif git_failure_reason and git_failure_reason != "git_auth_required":
         failure_reason = git_failure_reason
         failure_message = git_failure_message or "Не удалось синхронизировать wiki через git."
         recovery_options = ["retry_git", "upload_wiki_zip"]
@@ -110,13 +113,26 @@ def _normalize_base_url(base_url: str) -> str:
 
     Для URL вида https://gitee.com/mazurdenis/open-harmony/wikis/Environment/...
     вернет https://gitee.com/mazurdenis/open-harmony/wikis
+
+    Также конвертирует git clone URL вида:
+      https://gitee.com/owner/repo.wiki.git  ->  https://gitee.com/owner/repo/wikis
+      https://gitee.com/owner/repo.wikis.git ->  https://gitee.com/owner/repo/wikis
     """
+    import re
+
     url = (base_url or "").strip()
     if not url:
         raise ValueError("URL вики не указан")
 
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+
+    # Конвертировать git clone URL (.wiki.git / .wikis.git) в web-URL вики
+    git_wiki_pattern = re.compile(r"^(https?://[^/]+/[^/]+/[^/]+?)\.wikis?\.git$", re.IGNORECASE)
+    m = git_wiki_pattern.match(url)
+    if m:
+        url = m.group(1) + "/wikis"
+        logger.info("[wiki] converted git clone URL to web wiki URL: %s", url)
 
     parsed = urlparse(url)
     path = parsed.path

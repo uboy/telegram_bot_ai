@@ -32,7 +32,7 @@ from shared.utils import (
 )
 from shared.asr_limits import get_asr_max_file_bytes, get_telegram_file_max_bytes
 from shared.types import UserContext
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse, urlunparse, quote
 from html import escape
 
 
@@ -1269,30 +1269,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             recovery_options = list(stats.get("recovery_options") or []) if isinstance(stats, dict) else []
 
             if status == "failed":
-                context.user_data['state'] = 'waiting_wiki_archive'
-                context.user_data['wiki_zip_kb_id'] = kb_id
-                context.user_data['wiki_zip_url'] = wiki_root
                 context.user_data.pop('kb_id_for_wiki', None)
                 context.user_data.pop('wiki_urls', None)
                 _clear_upload_state(context)
-                recovery_hint = "Загрузите ZIP-архив wiki в этот чат, и бот восстановит страницы по исходному URL."
                 if "provide_auth" in recovery_options:
-                    recovery_hint = (
-                        "Для git-синхронизации wiki нужен доступ к репозиторию. "
-                        "Если авторизацию не дать, загрузите ZIP-архив wiki в этот чат."
+                    context.user_data['state'] = 'waiting_wiki_git_token'
+                    context.user_data['wiki_git_auth_url'] = wiki_root
+                    context.user_data['wiki_git_auth_kb_id'] = kb_id
+                    await update.message.reply_text(
+                        "❌ Git-репозиторий wiki требует авторизации.\n\n"
+                        f"URL: {wiki_root}\n\n"
+                        "Введите токен доступа (personal access token) или логин:пароль "
+                        "для повторной попытки клонирования.\n\n"
+                        "Чтобы пропустить авторизацию — загрузите ZIP-архив wiki в этот чат.",
+                        reply_markup=kb_actions_menu(kb_id),
                     )
-                await update.message.reply_text(
-                    "❌ Сканирование wiki не завершилось успешно.\n\n"
-                    f"Исходный URL: {wiki_url}\n"
-                    f"Корневой wiki-URL: {wiki_root}\n"
-                    f"Режим синхронизации: {sync_mode}\n"
-                    f"Удалено старых фрагментов: {deleted}\n"
-                    f"Обработано страниц: {pages}\n"
-                    f"Добавлено фрагментов: {added}\n\n"
-                    f"Причина: {failure_message}\n"
-                    f"{recovery_hint}",
-                    reply_markup=kb_actions_menu(kb_id),
-                )
+                else:
+                    context.user_data['state'] = 'waiting_wiki_archive'
+                    context.user_data['wiki_zip_kb_id'] = kb_id
+                    context.user_data['wiki_zip_url'] = wiki_root
+                    await update.message.reply_text(
+                        "❌ Сканирование wiki не завершилось успешно.\n\n"
+                        f"Исходный URL: {wiki_url}\n"
+                        f"Корневой wiki-URL: {wiki_root}\n"
+                        f"Режим синхронизации: {sync_mode}\n"
+                        f"Удалено старых фрагментов: {deleted}\n"
+                        f"Обработано страниц: {pages}\n"
+                        f"Добавлено фрагментов: {added}\n\n"
+                        f"Причина: {failure_message}\n"
+                        "Загрузите ZIP-архив wiki в этот чат, и бот восстановит страницы по исходному URL.",
+                        reply_markup=kb_actions_menu(kb_id),
+                    )
             else:
                 await update.message.reply_text(
                     "✅ Сканирование вики завершено.\n\n"
@@ -1318,10 +1325,103 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop('wiki_urls', None)
             _clear_upload_state(context)
         else:
-            if context.user_data.get('state') != 'waiting_wiki_archive':
+            if context.user_data.get('state') not in ('waiting_wiki_archive', 'waiting_wiki_git_token'):
                 context.user_data['state'] = None
                 _clear_wiki_recovery_state(context)
                 _clear_upload_state(context)
+    elif state == 'waiting_wiki_git_token' and user.role == 'admin':
+        credentials = text_input.strip()
+        kb_id_raw = context.user_data.get('wiki_git_auth_kb_id')
+        original_url = context.user_data.get('wiki_git_auth_url', '')
+        kb_id = int(kb_id_raw) if kb_id_raw else None
+
+        if not kb_id or not original_url:
+            await update.message.reply_text(
+                "❌ Сессия авторизации wiki потеряна. Запустите загрузку wiki заново.",
+                reply_markup=admin_menu(),
+            )
+            context.user_data['state'] = None
+            return
+
+        if not credentials:
+            await update.message.reply_text("⚠️ Токен не может быть пустым. Введите токен или логин:пароль:")
+            return
+
+        # Встраиваем учётные данные в URL: https://creds@host/path
+        # URL-кодируем credentials чтобы спецсимволы не сломали URL
+        try:
+            parsed = urlparse(original_url)
+            if ":" in credentials:
+                user, _, password = credentials.partition(":")
+                encoded_creds = f"{quote(user, safe='')}:{quote(password, safe='')}"
+            else:
+                encoded_creds = quote(credentials, safe="")
+            auth_netloc = f"{encoded_creds}@{parsed.hostname}"
+            if parsed.port:
+                auth_netloc = f"{encoded_creds}@{parsed.hostname}:{parsed.port}"
+            auth_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+        except Exception:
+            auth_url = original_url
+
+        await update.message.reply_text("⏳ Повторяю загрузку wiki с авторизацией...")
+        try:
+            stats = await asyncio.to_thread(
+                backend_client.ingest_wiki_crawl,
+                kb_id=kb_id,
+                url=auth_url,
+                telegram_id=str(user.telegram_id),
+                username=user.username,
+            )
+            pages = stats.get("pages_processed", 0) if isinstance(stats, dict) else 0
+            added = stats.get("chunks_added", 0) if isinstance(stats, dict) else 0
+            deleted = stats.get("deleted_chunks", 0) if isinstance(stats, dict) else 0
+            retry_status = str(stats.get("status", "success") or "success") if isinstance(stats, dict) else "success"
+            retry_recovery = list(stats.get("recovery_options") or []) if isinstance(stats, dict) else []
+            sync_mode = _format_wiki_sync_mode(stats if isinstance(stats, dict) else None)
+
+            if retry_status == "failed":
+                failure_message = (stats.get("failure_message") if isinstance(stats, dict) else None) or "Не удалось синхронизировать wiki."
+                context.user_data['state'] = 'waiting_wiki_archive'
+                context.user_data['wiki_zip_kb_id'] = kb_id
+                context.user_data['wiki_zip_url'] = original_url
+                context.user_data.pop('wiki_git_auth_url', None)
+                context.user_data.pop('wiki_git_auth_kb_id', None)
+                _clear_upload_state(context)
+                hint = "Загрузите ZIP-архив wiki в этот чат для восстановления."
+                if "provide_auth" in retry_recovery:
+                    hint = "Авторизация не прошла. Проверьте токен или загрузите ZIP-архив wiki в этот чат."
+                await update.message.reply_text(
+                    f"❌ Загрузка wiki с авторизацией не удалась.\n\nПричина: {failure_message}\n\n{hint}",
+                    reply_markup=kb_actions_menu(kb_id),
+                )
+            else:
+                context.user_data['state'] = None
+                context.user_data.pop('wiki_git_auth_url', None)
+                context.user_data.pop('wiki_git_auth_kb_id', None)
+                _clear_wiki_recovery_state(context)
+                _clear_upload_state(context)
+                await update.message.reply_text(
+                    "✅ Сканирование вики завершено.\n\n"
+                    f"Корневой wiki-URL: {original_url}\n"
+                    f"Режим синхронизации: {sync_mode}\n"
+                    f"Удалено старых фрагментов: {deleted}\n"
+                    f"Обработано страниц: {pages}\n"
+                    f"Добавлено фрагментов: {added}",
+                    reply_markup=kb_actions_menu(kb_id),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при wiki-crawl с авторизацией: %s", e, exc_info=True)
+            context.user_data['state'] = 'waiting_wiki_archive'
+            context.user_data['wiki_zip_kb_id'] = kb_id
+            context.user_data['wiki_zip_url'] = original_url
+            context.user_data.pop('wiki_git_auth_url', None)
+            context.user_data.pop('wiki_git_auth_kb_id', None)
+            _clear_upload_state(context)
+            await update.message.reply_text(
+                f"❌ Ошибка при загрузке wiki с авторизацией: {str(e)}\n\n"
+                "Загрузите ZIP-архив wiki в этот чат для восстановления.",
+                reply_markup=kb_actions_menu(kb_id),
+            )
     else:
         await handle_start(update, context)
 
@@ -1547,6 +1647,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     payload = _extract_document_payload(update.message)
+    # Если пользователь в состоянии ожидания токена и прислал ZIP — переключаем в восстановление по архиву
+    if (
+        context.user_data.get('state') == 'waiting_wiki_git_token'
+        and str(payload.get("file_name") or "").lower().endswith(".zip")
+    ):
+        context.user_data['state'] = 'waiting_wiki_archive'
+        context.user_data['wiki_zip_kb_id'] = context.user_data.pop('wiki_git_auth_kb_id', None)
+        context.user_data['wiki_zip_url'] = context.user_data.pop('wiki_git_auth_url', '')
     if await _handle_wiki_archive_recovery(
         update=update,
         context=context,
