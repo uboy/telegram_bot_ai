@@ -891,3 +891,81 @@ The lecture metrics are necessary but not sufficient. The design needs five metr
 - Expected effect:
   - procedural/how-to pages with strong field matches should enter the fused candidate set more reliably,
   - existing generalized route-level boosts can then promote them to the top for `build/sync/mirror` style questions.
+
+## 2026-03-11 Wiki ingest fail-fast, archive recovery, and admin log aggregation
+
+### User-reported runtime failures
+1. URL-based wiki ingest still reports success when no usable wiki corpus was loaded.
+   - Example: entering `https://gitee.com/mazurdenis/open-harmony/wikis` yields only one source:
+     - `wikis (https://gitee.com/mazurdenis/open-harmony/wikis)`
+     - `Тип: web, фрагментов: 4`
+   - This means runtime fell back to HTML root-page ingest instead of a full wiki sync.
+2. Entering a git-style URL directly (`https://gitee.com/mazurdenis/open-harmony.wiki.git`) also reported success:
+   - `Режим синхронизации: HTML crawl`
+   - `Обработано страниц: 0`
+   - `Добавлено фрагментов: 0`
+   - This is a false-success UX bug.
+3. The historical product promise for wiki flow included URL + archive recovery.
+   - Current bot UX no longer preserves a correct wiki-specific archive recovery path.
+   - Users are implicitly pushed toward generic document archive upload, which loses wiki semantics.
+4. Admin debugging is weak.
+   - Current admin panel shows only KB import-log summaries.
+   - There is no aggregated service-log view spanning bot/backend/worker/runtime services.
+
+### Current implementation facts
+1. URL flow entry:
+   - `frontend/bot_callbacks.py::kb_wiki_crawl` sets `state='waiting_wiki_root'`.
+   - `frontend/bot_handlers.py::waiting_wiki_root` calls `backend_client.ingest_wiki_crawl(...)`.
+2. Backend wiki ingest:
+   - `backend/services/ingestion_service.py::ingest_wiki_crawl(...)`
+   - `shared/wiki_scraper.py::crawl_wiki_to_kb(...)`
+3. Gitee decision path:
+   - prefer `load_wiki_from_git(...)`
+   - on any exception, log warning and continue with HTML crawl
+4. HTML crawl path is generic and can legitimately be useful for arbitrary docs/wiki sites.
+   - But for Gitee `/wikis` it is not a meaningful success path if it yields:
+     - `0 pages / 0 chunks`, or
+     - effectively only the root page.
+5. Archive ingest split:
+   - generic archive/document upload goes through `ingest_document(...)`
+   - wiki-specific ZIP restore exists in backend client/service (`ingest_wiki_zip`, `load_wiki_from_zip`)
+   - but the current bot flow does not drive a clean URL -> archive-recovery interaction when URL/git/html paths fail
+6. Existing admin observability:
+   - KB import log is available via `/knowledge-bases/{kb_id}/import-log`
+   - project logging goes to `data/logs/bot.log` and console/docker logs
+   - there is no unified API/UI for reading aggregated service logs from the admin panel
+
+### Product-level gaps now confirmed
+1. False success is worse than explicit failure.
+   - current wiki ingest flow can silently create a low-quality or empty KB corpus
+   - the user then debugs retrieval while the real problem is ingestion incompleteness
+2. The wiki flow is missing recovery orchestration.
+   - if git requires auth or fails for transport reasons, the bot should explain the reason and guide the next recovery step
+   - if HTML crawl is not useful, the bot should not pretend the wiki was loaded
+   - if the user has a wiki archive, it should be accepted as `wiki archive restore`, not as a generic document archive
+3. A wiki archive restore must preserve wiki semantics.
+   - use the original user-entered wiki root
+   - restore `wiki_page_url`, `original_url`, stable `doc_title`, `section_path`
+   - keep this separate from normal document upload
+4. Admin debugging needs a first-class log view.
+   - import-log summaries are not enough for transport, auth, clone, crawl, or worker failures
+
+### Design direction
+1. Make wiki ingest outcome explicit and gate success on useful corpus creation.
+   - `git success` -> success
+   - `html success with meaningful page/chunk thresholds` -> success
+   - `0 pages / 0 chunks` or root-only Gitee fallback -> failure
+2. Preserve wiki-specific recovery context in the bot session.
+   - entered wiki URL
+   - detected host/provider class
+   - last failure reason / stage
+   - whether archive fallback is now expected
+3. Reintroduce a dedicated wiki archive recovery flow.
+   - only available inside the active wiki-ingest session
+   - sends archive to `ingest_wiki_zip(...)`
+   - uses the previously entered wiki root to restore page links
+4. Add explicit admin log access.
+   - backend API to return recent service-log slices
+   - bot/admin-panel entry to inspect aggregated logs across relevant services
+5. Prefer fail-fast for Gitee wiki.
+   - HTML fallback may stay as a generic mechanism, but for Gitee `/wikis` it must not be accepted as success when it does not produce a real wiki corpus

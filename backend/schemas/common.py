@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 
 
 class BaseResponse(BaseModel):
@@ -36,3 +36,12 @@ class KnowledgeImportLogEntry(BaseModel):
     action_type: str
     source_path: str
     total_chunks: int
+
+
+class AdminLogEntry(BaseModel):
+    service: str
+    line: str
+
+
+class AdminLogResponse(BaseModel):
+    entries: List[AdminLogEntry]

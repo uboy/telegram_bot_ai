@@ -26,6 +26,11 @@ class WebIngestionResponse(BaseModel):
 
 
 class WikiIngestionResponse(BaseModel):
+    status: str
+    stage: str | None = None
+    failure_reason: str | None = None
+    failure_message: str | None = None
+    recovery_options: list[str] = []
     deleted_chunks: int
     pages_processed: int | None = None
     files_processed: int | None = None
@@ -139,6 +144,11 @@ def ingest_wiki_crawl(
         username=username,
     )
     return WikiIngestionResponse(
+        status=str(result.get("status", "success")),
+        stage=result.get("stage"),
+        failure_reason=result.get("failure_reason"),
+        failure_message=result.get("failure_message"),
+        recovery_options=list(result.get("recovery_options") or []),
         deleted_chunks=result.get("deleted_chunks", 0),
         pages_processed=result.get("pages_processed"),
         files_processed=None,
@@ -170,6 +180,11 @@ def ingest_wiki_git(
         username=username,
     )
     return WikiIngestionResponse(
+        status=str(result.get("status", "success")),
+        stage=result.get("stage", "git"),
+        failure_reason=result.get("failure_reason"),
+        failure_message=result.get("failure_message"),
+        recovery_options=list(result.get("recovery_options") or []),
         deleted_chunks=result.get("deleted_chunks", 0),
         pages_processed=None,
         files_processed=result.get("files_processed"),
@@ -217,6 +232,11 @@ def ingest_wiki_zip(
             pass
 
     return WikiIngestionResponse(
+        status=str(result.get("status", "success")),
+        stage=result.get("stage", "zip"),
+        failure_reason=result.get("failure_reason"),
+        failure_message=result.get("failure_message"),
+        recovery_options=list(result.get("recovery_options") or []),
         deleted_chunks=result.get("deleted_chunks", 0),
         pages_processed=None,
         files_processed=result.get("files_processed"),

@@ -715,3 +715,75 @@ Supersedes:
 - [pending] Add focused regressions for metadata-field candidate rescue and procedural build/sync queries.
 - [pending] Re-run the local open-harmony smoke harness and check whether the two build/sync cases move from `XFAIL` to `PASS`.
 - [pending] Run `py_compile`, focused `pytest`, `scan_secrets`, `ci_policy_gate`, and request an independent review.
+
+## 2026-03-11 Plan: wiki ingest fail-fast, recovery flow, and admin log aggregation
+
+Date: 2026-03-11
+Status: Draft for CC approval
+
+### Scope slices
+1. Wiki ingest result contract
+- [ ] classify wiki ingest stages explicitly:
+  - git clone/fetch,
+  - html crawl,
+  - archive recovery,
+  - final corpus validation
+- [ ] define failure conditions that must not be reported as success:
+  - `0 pages / 0 chunks`,
+  - root-only Gitee HTML fallback,
+  - archive restore without recovered chunks
+- [ ] expose structured failure reason and recovery hints to bot UI
+
+2. Bot wiki recovery session
+- [ ] extend bot session state with wiki-ingest context:
+  - `wiki_root_url`,
+  - `wiki_ingest_stage`,
+  - `wiki_failure_reason`,
+  - `awaiting_wiki_archive`
+- [ ] after git/html failure, keep user inside the wiki flow instead of dropping into generic upload mode
+- [ ] allow the user to provide credentials/auth config only when the detected failure actually requires it
+- [ ] allow the user to upload a wiki ZIP as a recovery step using the original URL context
+
+3. Wiki archive restore path
+- [ ] keep generic document archive upload unchanged
+- [ ] add a separate wiki-archive ingest path in the bot UI/session
+- [ ] ensure uploaded ZIP goes through `backend_client.ingest_wiki_zip(...)`
+- [ ] ensure original wiki URL is used to restore page links and metadata
+
+4. Admin log aggregation
+- [ ] design a backend API for recent service-log slices
+- [ ] define safe scope:
+  - recent lines only,
+  - redacted secrets,
+  - bounded size
+- [ ] add admin-panel entry to inspect logs for debugging ingestion/runtime failures
+
+### Verification checklist for implementation phase
+- [ ] add bot regressions for:
+  - explicit wiki failure instead of false success
+  - archive-recovery prompt after failed wiki ingest
+  - wiki ZIP recovery path distinct from generic document upload
+- [ ] add backend/service tests for:
+  - fail-fast corpus validation thresholds
+  - structured wiki ingest error payloads
+  - log aggregation API bounds/redaction
+- [ ] run:
+  - `python -m py_compile <changed_py_files>`
+  - focused `pytest`
+  - `python scripts/scan_secrets.py`
+  - `python scripts/ci_policy_gate.py --working-tree`
+
+### Documentation checklist for implementation phase
+- [ ] update `SPEC.md`
+- [ ] update `docs/REQUIREMENTS_TRACEABILITY.md`
+- [ ] update `docs/USAGE.md`
+- [ ] update `docs/OPERATIONS.md`
+- [ ] add/refresh design docs for wiki-ingest contract and admin log viewer
+
+### Risks and controls
+- Risk: asking for credentials too early or too often will overcomplicate the flow.
+  - Control: credentials/auth prompt only after a concrete auth-classified git failure.
+- Risk: aggregated logs can leak secrets.
+  - Control: strict redaction, bounded line counts, admin-only access.
+- Risk: mixing wiki archive restore with generic document upload can regress current upload UX.
+  - Control: keep a separate bot state and explicit backend method for wiki ZIP recovery.

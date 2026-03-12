@@ -125,3 +125,8 @@
 {"id":"BOTFOLLOW-004","title":"Fix public Gitee wiki URL ingest and revalidate open-harmony relevance after full corpus sync","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-11"}
 {"id":"BOTFOLLOW-005","title":"Add local-only open-harmony wiki ingest and answer smoke test harness","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-11"}
 {"id":"BOTFOLLOW-006","title":"Improve open-harmony build/sync retrieval relevance using the local smoke corpus","status":"in_progress","assignee":"codex","phase":"reviewer","updated_at":"2026-03-11"}
+{"id":"WIKIRECOV-001","title":"Implement truthful wiki ingest status contract and fail-fast classification for git/html/wiki validation","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-12"}
+{"id":"WIKIRECOV-002","title":"Add bot wiki recovery flow with wiki ZIP restore separate from generic document upload","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-12"}
+{"id":"WIKIRECOV-003","title":"Add bounded redacted admin log aggregation API and bot/admin viewer entry","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-12"}
+{"id":"WIKIRECOV-004","title":"Add focused regressions and verification for wiki fail-fast recovery and admin logs","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-12"}
+{"id":"WIKIRECOV-005","title":"Sync spec, usage, operations, traceability, and review artifacts for wiki recovery cycle","status":"in_progress","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-12"}

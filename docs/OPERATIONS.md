@@ -277,6 +277,19 @@ For the default docker-compose stack, use wrapper script:
   - transient Telegram transport/protocol disconnects (`NetworkError`, `RemoteProtocolError`, "Server disconnected without sending a response") are now warning-only and intentionally do not notify admins as critical incidents
   - inspect runtime logs first if users report intermittent disconnects; if the exception is not classified as transient, the usual admin critical-error notification path still applies
 
+- Wiki ingest fail-fast:
+  - treat `status=failed` from `/api/v1/ingestion/wiki-crawl` as a real ingest failure, not a successful partial sync
+  - Gitee `HTML crawl` with only the root page or `0 pages / 0 chunks` is now classified as failed by design
+  - expected operator guidance:
+    - if `failure_reason=git_auth_required`, use repo access or send a wiki ZIP through the bot recovery flow
+    - if `failure_reason=root_only_html_fallback` or `empty_wiki_result`, do not trust the created KB contents until recovery succeeds
+  - bot-side recovery uses `wiki ZIP` restore, not generic archive document upload
+
+- Admin log viewer:
+  - `🪵 Логи сервисов` shows a bounded tail from `BOT_LOG_DIR` (`data/logs` by default)
+  - output is redacted for tokens, auth headers, and credential-bearing URLs before being returned to chat
+  - if viewer is empty, confirm log files exist under `BOT_LOG_DIR` and the service writes there
+
 - Analytics failures:
   - inspect digest/import status endpoints
   - check scheduler and DB availability

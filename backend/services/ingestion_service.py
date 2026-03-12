@@ -395,6 +395,37 @@ class IngestionService:
             session.add(log_obj)
             # commit выполнится автоматически при выходе из with
 
+    def _build_wiki_ingest_result(
+        self,
+        *,
+        wiki_root: str,
+        deleted_chunks: int,
+        pages_processed: int | None,
+        files_processed: int | None,
+        chunks_added: int,
+        crawl_mode: str,
+        git_fallback_attempted: bool,
+        status: str | None = None,
+        stage: str | None = None,
+        failure_reason: str | None = None,
+        failure_message: str | None = None,
+        recovery_options: List[str] | None = None,
+    ) -> Dict[str, Any]:
+        return {
+            "deleted_chunks": deleted_chunks,
+            "pages_processed": pages_processed,
+            "files_processed": files_processed,
+            "chunks_added": chunks_added,
+            "wiki_root": wiki_root,
+            "crawl_mode": crawl_mode,
+            "git_fallback_attempted": git_fallback_attempted,
+            "status": status or "success",
+            "stage": stage or crawl_mode,
+            "failure_reason": failure_reason,
+            "failure_message": failure_message,
+            "recovery_options": list(recovery_options or []),
+        }
+
     def _enqueue_index_upsert_event(
         self,
         *,
@@ -588,14 +619,20 @@ class IngestionService:
             chunks_added=added,
         )
 
-        return {
-            "deleted_chunks": deleted,
-            "pages_processed": pages,
-            "chunks_added": added,
-            "wiki_root": wiki_root,
-            "crawl_mode": crawl_mode,
-            "git_fallback_attempted": git_fallback_attempted,
-        }
+        return self._build_wiki_ingest_result(
+            wiki_root=wiki_root,
+            deleted_chunks=deleted,
+            pages_processed=pages,
+            files_processed=None,
+            chunks_added=added,
+            crawl_mode=crawl_mode,
+            git_fallback_attempted=git_fallback_attempted,
+            status=str(stats.get("status") or "success"),
+            stage=str(stats.get("stage") or crawl_mode),
+            failure_reason=stats.get("failure_reason"),
+            failure_message=stats.get("failure_message"),
+            recovery_options=list(stats.get("recovery_options") or []),
+        )
 
     def ingest_wiki_git(
         self,
@@ -631,12 +668,15 @@ class IngestionService:
             chunks_added=added,
         )
 
-        return {
-            "deleted_chunks": deleted,
-            "files_processed": files,
-            "chunks_added": added,
-            "wiki_root": wiki_root,
-        }
+        return self._build_wiki_ingest_result(
+            wiki_root=wiki_root,
+            deleted_chunks=deleted,
+            pages_processed=None,
+            files_processed=files,
+            chunks_added=added,
+            crawl_mode="git",
+            git_fallback_attempted=False,
+        )
 
     def ingest_wiki_zip(
         self,
@@ -677,13 +717,17 @@ class IngestionService:
             chunks_added=added,
         )
 
-        return {
-            "deleted_chunks": deleted,
-            "files_processed": files,
-            "chunks_added": added,
-            "wiki_root": wiki_root,
-            "processed_files": processed_files,
-        }
+        result = self._build_wiki_ingest_result(
+            wiki_root=wiki_root,
+            deleted_chunks=deleted,
+            pages_processed=None,
+            files_processed=files,
+            chunks_added=added,
+            crawl_mode="zip",
+            git_fallback_attempted=False,
+        )
+        result["processed_files"] = processed_files
+        return result
 
     # === Документы и архивы ===
 

@@ -9,7 +9,7 @@
 
 import asyncio
 from collections import deque
-from typing import Dict, Set, Tuple
+from typing import Any, Dict, Set
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -36,6 +36,59 @@ def _build_sync_mode_stats(
         "wiki_root": wiki_root,
         "crawl_mode": crawl_mode,
         "git_fallback_attempted": git_fallback_attempted,
+    }
+
+
+def _classify_git_loader_exception(exc: Exception) -> tuple[str, str]:
+    text = str(exc or "").strip()
+    lowered = text.lower()
+    if "could not read username" in lowered or "authentication failed" in lowered or "403" in lowered:
+        return (
+            "git_auth_required",
+            "Не удалось получить доступ к git-репозиторию wiki без авторизации.",
+        )
+    return ("git_clone_failed", "Не удалось синхронизировать wiki через git.")
+
+
+def _classify_wiki_result(
+    *,
+    wiki_root: str,
+    crawl_mode: str,
+    pages_processed: int,
+    chunks_added: int,
+    git_failure_reason: str | None = None,
+    git_failure_message: str | None = None,
+) -> Dict[str, Any]:
+    failure_reason: str | None = None
+    failure_message: str | None = None
+    recovery_options: list[str] = []
+
+    if pages_processed <= 0 or chunks_added <= 0:
+        failure_reason = "empty_wiki_result"
+        failure_message = "Вики не загрузилась: не найдено ни одной страницы или фрагмента."
+        recovery_options = ["retry_git", "upload_wiki_zip"]
+    elif _should_use_git_wiki_loader(wiki_root) and crawl_mode == "html" and pages_processed <= 1:
+        failure_reason = "root_only_html_fallback"
+        failure_message = (
+            "HTML-обход нашел только корневую страницу вики и не восстановил полноценный corpus."
+        )
+        recovery_options = ["retry_git", "upload_wiki_zip"]
+
+    if failure_reason and git_failure_reason == "git_auth_required":
+        failure_reason = "git_auth_required"
+        failure_message = "Не удалось получить доступ к git-репозиторию wiki без авторизации."
+        recovery_options = ["provide_auth", "upload_wiki_zip"]
+    elif failure_reason and git_failure_reason and not failure_message:
+        failure_reason = git_failure_reason
+        failure_message = git_failure_message or "Не удалось синхронизировать wiki через git."
+        recovery_options = ["retry_git", "upload_wiki_zip"]
+
+    return {
+        "status": "failed" if failure_reason else "success",
+        "stage": "validation" if failure_reason else crawl_mode,
+        "failure_reason": failure_reason,
+        "failure_message": failure_message,
+        "recovery_options": recovery_options,
     }
 
 
@@ -101,7 +154,7 @@ def crawl_wiki_to_kb(
     knowledge_base_id: int,
     max_pages: int = 200,
     loader_options: dict | None = None,
-) -> Dict[str, int | str]:
+) -> Dict[str, Any]:
     """
     Рекурсивно обойти wiki-раздел сайта и загрузить страницы в базу знаний.
 
@@ -111,6 +164,8 @@ def crawl_wiki_to_kb(
     """
     wiki_root = _normalize_base_url(base_url)
     git_fallback_attempted = False
+    git_failure_reason: str | None = None
+    git_failure_message: str | None = None
 
     if _should_use_git_wiki_loader(wiki_root):
         git_fallback_attempted = True
@@ -137,6 +192,7 @@ def crawl_wiki_to_kb(
                 git_fallback_attempted=git_fallback_attempted,
             )
         except Exception as e:
+            git_failure_reason, git_failure_message = _classify_git_loader_exception(e)
             logger.warning(
                 "[wiki] git loader fallback failed, continue with HTML-crawl: kb_id=%s wiki_root=%s error=%s",
                 knowledge_base_id,
@@ -287,7 +343,7 @@ def crawl_wiki_to_kb(
         chunks_added,
     )
 
-    return _build_sync_mode_stats(
+    result = _build_sync_mode_stats(
         deleted_chunks=deleted_chunks,
         pages_processed=pages_processed,
         chunks_added=chunks_added,
@@ -295,6 +351,21 @@ def crawl_wiki_to_kb(
         crawl_mode="html",
         git_fallback_attempted=git_fallback_attempted,
     )
+    result.update(
+        _classify_wiki_result(
+            wiki_root=wiki_root,
+            crawl_mode="html",
+            pages_processed=pages_processed,
+            chunks_added=chunks_added,
+            git_failure_reason=git_failure_reason,
+            git_failure_message=git_failure_message,
+        )
+    )
+    if git_failure_reason:
+        result["git_failure_reason"] = git_failure_reason
+    if git_failure_message:
+        result["git_failure_message"] = git_failure_message
+    return result
 
 
 async def crawl_wiki_to_kb_async(
