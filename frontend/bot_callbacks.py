@@ -2471,7 +2471,7 @@ async def handle_admin_callbacks(query, context, data: str, user: dict):
         url = backend_client._url(f"/analytics/digests?chat_id={chat_id_val}&limit=10")
         headers = {"X-API-Key": backend_client.api_key} if backend_client.api_key else {}
         try:
-            with httpx.Client(timeout=backend_client.timeout, headers=headers) as client:
+            with backend_client._client(timeout=backend_client.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 digests = resp.json()

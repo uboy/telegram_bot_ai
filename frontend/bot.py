@@ -3,6 +3,7 @@
 """
 # Инициализировать логирование ПЕРВЫМ
 from shared.logging_config import logger
+from shared.networking import build_telegram_request, log_proxy_configuration
 
 from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, CommandHandler, filters
 
@@ -22,14 +23,21 @@ except ImportError:
 from shared.database import migrate_database
 
 
+def build_application(token: str):
+    request = build_telegram_request()
+    builder = ApplicationBuilder().token(token).request(request).get_updates_request(request)
+    return builder.build()
+
+
 def main():
     """Запуск бота"""
     # Инициализировать базу данных
     logger.info("Инициализация базы данных...")
     migrate_database()
     logger.info("База данных инициализирована")
-    
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    log_proxy_configuration(logger, "telegram_bot")
+
+    app = build_application(TELEGRAM_BOT_TOKEN)
 
     # Команды
     app.add_handler(CommandHandler("start", handle_start))

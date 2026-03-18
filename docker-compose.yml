@@ -24,6 +24,10 @@ services:
       - N8N_DEFAULT_WEBHOOK=${N8N_DEFAULT_WEBHOOK:-}
       - N8N_PUBLIC_URL=${N8N_PUBLIC_URL:-http://localhost:5678}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - ALL_PROXY=${ALL_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-backend,qdrant,redis,db,n8n,localhost,127.0.0.1}
     # Раскомментируйте для использования GPU (требует nvidia-docker или Docker с поддержкой GPU)
     # Для работы GPU необходимо:
     # 1. Установить nvidia-container-toolkit (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
@@ -54,6 +58,10 @@ services:
       - BOT_DATA_DIR=/app/data
       - HF_HOME=/app/data/cache/huggingface
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - ALL_PROXY=${ALL_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-backend,qdrant,redis,db,n8n,localhost,127.0.0.1}
     deploy:
        resources:
          reservations:

@@ -113,7 +113,7 @@ def test_search_preserves_fused_field_order_without_reranker(monkeypatch):
     system.bm25_candidate_budget = 2
     system.rerank_top_n = 0
     system._qdrant_enabled = lambda: False
-    system._get_embedding = lambda query: np.ones(768, dtype="float32")
+    system._get_embedding = lambda query, is_query=False: np.ones(768, dtype="float32")  # noqa: ARG005
     system._load_index = lambda knowledge_base_id: None
     system._simple_search = lambda query, knowledge_base_id, top_k: []
     system._build_bm25_index = lambda chunks: {"dummy": 1}

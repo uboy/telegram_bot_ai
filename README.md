@@ -210,7 +210,15 @@ REDIS_PORT=6379
 # N8N_DEFAULT_WEBHOOK=bot-events       # предустановленный путь вебхука
 # N8N_PUBLIC_URL=http://localhost:5678 # URL для кнопки "Открыть n8n"
 # N8N_API_KEY=<если требуется запуск workflow по API>
+
+# Outbound proxy (optional)
+# HTTP_PROXY=http://proxy.example:8080
+# HTTPS_PROXY=http://proxy.example:8443
+# ALL_PROXY=socks5://proxy.example:1080
+# NO_PROXY=backend,qdrant,redis,db,n8n,localhost,127.0.0.1
 ```
+
+Если контейнеры должны работать через прокси/VPN, используйте стандартные переменные окружения `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`. Для внутреннего трафика Docker обязательно укажите `NO_PROXY` как минимум для `backend,qdrant,redis,db,n8n,localhost,127.0.0.1`.
 
 - **4. Запустить внешние сервисы (если используются)**
   - MySQL (создать БД `telegram_chatbot`, пользователя и задать `MYSQL_URL`).

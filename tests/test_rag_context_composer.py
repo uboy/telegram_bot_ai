@@ -1,6 +1,6 @@
 import pytest
 
-from backend.api.routes.rag import _select_evidence_pack_rows
+from backend.api.routes.rag import _order_rows_by_family_cohesion, _select_evidence_pack_rows
 
 pytest.importorskip("fastapi")
 
@@ -269,6 +269,61 @@ def test_select_evidence_pack_rows_keeps_anchor_rows_ahead_of_support_rows():
     ]
 
 
+def test_order_rows_by_family_cohesion_prefers_supported_family_when_scores_are_close():
+    rows = [
+        {
+            "id": 101,
+            "content": "Single high hit from an unrelated overview.",
+            "metadata": {
+                "doc_title": "Overview",
+                "section_title": "Overview",
+                "section_path": "Overview",
+                "section_path_norm": "overview",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://overview",
+            "source_type": "markdown",
+            "rank_score": 0.91,
+        },
+        {
+            "id": 201,
+            "content": "Deployment checklist step 1.",
+            "metadata": {
+                "doc_title": "Deployment Guide",
+                "section_title": "Checklist",
+                "section_path": "Deployment Guide > Checklist",
+                "section_path_norm": "deployment guide > checklist",
+                "chunk_no": 4,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://deploy",
+            "source_type": "markdown",
+            "rank_score": 0.88,
+        },
+        {
+            "id": 202,
+            "content": "Deployment checklist step 2.",
+            "metadata": {
+                "doc_title": "Deployment Guide",
+                "section_title": "Checklist",
+                "section_path": "Deployment Guide > Checklist",
+                "section_path_norm": "deployment guide > checklist",
+                "chunk_no": 5,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://deploy",
+            "source_type": "markdown",
+            "rank_score": 0.86,
+        },
+    ]
+
+    ordered = _order_rows_by_family_cohesion(rows)
+
+    assert [row["source_path"] for row in ordered[:2]] == ["doc://deploy", "doc://deploy"]
+    assert ordered[0]["_family_rank"] == 1
+
+
 def test_rag_query_context_excerpt_focuses_metric_sentence(monkeypatch):
     from backend.api.routes import rag as rag_module
 
@@ -310,6 +365,110 @@ def test_rag_query_context_excerpt_focuses_metric_sentence(monkeypatch):
 
     assert "60 млрд рублей" in result.answer
     assert "850 млрд рублей" not in result.answer
+
+
+def test_rag_query_context_prefers_coherent_family_for_non_howto_query(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+
+    def fake_search(query, knowledge_base_id=None, top_k=8):  # noqa: ARG001
+        return [
+            {
+                "content": "A generic overview mentioning deployment at a high level.",
+                "metadata": {
+                    "doc_title": "Overview",
+                    "section_title": "Overview",
+                    "section_path": "Overview",
+                    "section_path_norm": "overview",
+                    "chunk_no": 1,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://overview",
+                "source_type": "markdown",
+                "rerank_score": 0.92,
+                "distance": 0.08,
+            },
+            {
+                "content": "Deployment checklist step 1: prepare the manifests.",
+                "metadata": {
+                    "doc_title": "Deployment Guide",
+                    "section_title": "Checklist",
+                    "section_path": "Deployment Guide > Checklist",
+                    "section_path_norm": "deployment guide > checklist",
+                    "chunk_no": 4,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://deploy",
+                "source_type": "markdown",
+                "rerank_score": 0.88,
+                "distance": 0.12,
+            },
+            {
+                "content": "Deployment checklist step 2: run the validation gates.",
+                "metadata": {
+                    "doc_title": "Deployment Guide",
+                    "section_title": "Checklist",
+                    "section_path": "Deployment Guide > Checklist",
+                    "section_path_norm": "deployment guide > checklist",
+                    "chunk_no": 5,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://deploy",
+                "source_type": "markdown",
+                "rerank_score": 0.87,
+                "distance": 0.13,
+            },
+        ]
+
+    doc_chunks = {
+        "doc://deploy": [
+            {
+                "id": 201,
+                "content": "Deployment checklist step 1: prepare the manifests.",
+                "metadata": {
+                    "doc_title": "Deployment Guide",
+                    "section_title": "Checklist",
+                    "section_path": "Deployment Guide > Checklist",
+                    "section_path_norm": "deployment guide > checklist",
+                    "chunk_no": 4,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://deploy",
+                "source_type": "markdown",
+            },
+            {
+                "id": 202,
+                "content": "Deployment checklist step 2: run the validation gates.",
+                "metadata": {
+                    "doc_title": "Deployment Guide",
+                    "section_title": "Checklist",
+                    "section_path": "Deployment Guide > Checklist",
+                    "section_path_norm": "deployment guide > checklist",
+                    "chunk_no": 5,
+                    "chunk_kind": "text",
+                },
+                "source_path": "doc://deploy",
+                "source_type": "markdown",
+            },
+        ]
+    }
+
+    monkeypatch.setattr(rag_module, "rag_system", type("X", (), {"search": staticmethod(fake_search)})())
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+    monkeypatch.setattr(
+        rag_module,
+        "_load_doc_chunks_for_context",
+        lambda db, doc_id, kb_id=None: list(doc_chunks.get(doc_id, [])),  # noqa: ARG005
+    )
+
+    payload = RAGQuery(query="Where is the deployment checklist?", knowledge_base_id=1)
+    result = rag_query(payload, db=DummyDB())
+
+    assert "Deployment checklist step 1" in result.answer
+    assert "Deployment checklist step 2" in result.answer
+    assert "generic overview" not in result.answer.lower()
+    assert [source.source_path for source in result.sources] == ["doc://deploy"]
 
 
 def test_rag_summary_uses_query_focused_excerpt(monkeypatch):
@@ -525,7 +684,7 @@ def test_rag_query_fallback_uses_selected_rows_beyond_llm_context_budget(monkeyp
     assert "repo sync -c -j 8" in result.answer
     assert "build/prebuilts_download.sh" in result.answer
     assert "Read timed out" not in result.answer
-    assert {source.source_path for source in result.sources} == {"doc://sync-guide", "doc://build-guide"}
+    assert {source.source_path for source in result.sources} == {"doc://sync-guide"}
 
 
 def test_rag_query_howto_demotes_troubleshooting_pages(monkeypatch):

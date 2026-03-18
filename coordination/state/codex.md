@@ -2653,3 +2653,124 @@
   - spec/traceability/usage/operations are synced.
 - Remaining blocker:
   - independent review artifact is still missing because no separate reviewer agent/tool is available in the current session, and project policy forbids the implementation agent from writing reviewer findings/verification manually.
+
+### 2026-03-18 New architect cycle: proxy env support + broad HOWTO RAG hardening
+- Classified the new user request as non-trivial.
+- Startup/context resumption refreshed:
+  - re-read `coordination/tasks.jsonl`,
+  - re-read `coordination/state/codex.md`,
+  - checked current proxy/runtime code paths and the live `how to build and sync` failure evidence.
+- Key findings:
+  - there is no explicit proxy env contract in `docker-compose.yml`, `shared/config.py`, `env.template`, `frontend/bot.py`, or `frontend/backend_client.py`;
+  - the current HOWTO retrieval path already includes metadata-field rescue and procedural fallback logic, but the live answer still mixes narrow version-specific build pages instead of one coherent procedural anchor.
+  - the user also requested an explicit plan to exclude temporary agent-generated files from version control without hiding durable workflow artifacts.
+- Architect artifacts updated:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - `docs/design/proxy-env-and-rag-howto-hardening-v1.md`
+- Next step:
+  - wait for user CC on `docs/design/proxy-env-and-rag-howto-hardening-v1.md` before implementation.
+
+### 2026-03-18 PROXYRAG implementation progress
+- User approved `docs/design/proxy-env-and-rag-howto-hardening-v1.md` with `APPROVED:v1`.
+- Coordination switched to `PROXYRAG-003` verification phase.
+- Runtime implementation completed:
+  - added `shared/networking.py` for normalized proxy env handling, redacted proxy logging, shared `httpx` client construction, and Telegram `HTTPXRequest` creation;
+  - `frontend/bot.py` now builds the Telegram application through an explicit proxied request object instead of the default builder path;
+  - `frontend/backend_client.py` now uses the shared `httpx` client factory with `trust_env=True` and logs proxy status in redacted form;
+  - `frontend/bot_callbacks.py` uses the backend client factory for admin digest fetch path;
+  - `docker-compose.yml`, `env.template`, `README.md`, and `docs/CONFIGURATION.md` now document/propagate `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`;
+  - `.gitignore` no longer hides `docs/design/*` and now ignores only narrow temporary agent scratch/debug files.
+- RAG hardening completed:
+  - `backend/api/routes/rag.py` now focuses broad compound HOWTO context/fallback on one strongest procedural document family when available;
+  - added focused regression `tests/test_rag_compound_howto_focus.py` for the live `how to build and sync`-style failure shape.
+- Verification pending:
+  - `py_compile`
+  - focused pytest
+  - secret scan
+  - policy gate
+- Known policy blocker likely remains after verification:
+  - no independent reviewer agent/tool is available in-session, and project policy forbids the implementation agent from authoring `## Findings` / `## Verification` in the review report manually.
+
+### 2026-03-18 PROXYRAG verification snapshot
+- Verification results:
+  - `python -m py_compile shared/networking.py frontend/bot.py frontend/backend_client.py frontend/bot_callbacks.py backend/api/routes/rag.py tests/test_networking.py tests/test_rag_compound_howto_focus.py` -> PASS
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_context_composer.py tests/test_rag_metadata_field_search.py tests/test_rag_compound_howto_focus.py tests/test_networking.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_networking.py tests/test_rag_compound_howto_focus.py tests/test_rag_context_composer.py tests/test_rag_metadata_field_search.py` -> PASS (`19 passed`)
+  - `python scripts/scan_secrets.py` -> PASS
+  - `python scripts/ci_policy_gate.py --working-tree` -> PASS
+- Important repo hygiene note:
+  - removing the overbroad `docs/design/` ignore entry makes the historical design-doc directory visible to git again; current `git status` therefore shows the whole `docs/design/` directory as untracked backlog, not only the new `proxy-env-and-rag-howto-hardening-v1.md`.
+- Current blocker remains:
+  - independent review artifact is still missing because no separate reviewer agent/tool is available in the current session.
+
+### 2026-03-18 New architect cycle: generalized procedural retrieval + multi-corpus validation
+- Classified the new user request as non-trivial.
+- Scope confirmed from user follow-up:
+  - remove remaining literal/query-specific procedural boosts and make the approach more universal,
+  - explain/design a realistic language-agnostic strategy,
+  - add validation beyond one wiki corpus,
+  - support faster tuning through local corpora and optional live backend/provider checks.
+- Current repo assets audited:
+  - local-only smoke harness already exists in `scripts/openharmony_wiki_local_smoke.py` with temp SQLite and extractive/LLM modes,
+  - generalized eval service already exists in `backend/services/rag_eval_service.py`,
+  - source-manifest contract already exists in `tests/data/rag_eval_source_manifest_v1.yaml`,
+  - API smoke path already exists in `scripts/rag_api_smoke_test.py`.
+- Architectural conclusion:
+  - the next generalized fix should move from surface-token boosts toward family-level procedural evidence scoring and family-bounded context/fallback assembly,
+  - validation should expand to local-only OpenHarmony + ArkUI corpora and optional live-backend smoke using current `ollama` / `open_webui` runtime settings.
+- Architect artifacts updated:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - `docs/design/generalized-procedural-retrieval-and-multi-corpus-validation-v1.md`
+  - `coordination/tasks.jsonl`
+  - `coordination/cycle-contract.json`
+- Next step:
+  - wait for user CC on `docs/design/generalized-procedural-retrieval-and-multi-corpus-validation-v1.md` before implementation.
+
+### 2026-03-18 New architect cycle: unified RAG service architecture
+- Classified the new user request as non-trivial.
+- User clarified the actual target:
+  - not fixing one query,
+  - but designing the whole RAG service so arbitrary uploaded documents, wikis, instructions, and mixed corpora retrieve reliably.
+- Existing architecture assets reviewed:
+  - `docs/design/rag-generalized-architecture-v2.md`
+  - `docs/design/rag-near-ideal-task-breakdown-v1.md`
+  - current runtime paths in `backend/services/ingestion_service.py`, `shared/rag_system.py`, and `backend/api/routes/rag.py`
+- Architectural conclusion:
+  - the right planning unit is the full service pipeline,
+  - with explicit stage contracts from source acquisition through diagnostics/eval,
+  - and future implementation should proceed by stage-hardening slices rather than query-specific fixes.
+- Architect artifacts updated:
+  - `docs/design/rag-service-architecture-and-pipeline-v1.md`
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - `coordination/tasks.jsonl`
+  - `coordination/cycle-contract.json`
+- Next step:
+  - wait for user CC on `docs/design/rag-service-architecture-and-pipeline-v1.md` before implementation.
+
+### 2026-03-18 RAGSVC slice 1 implementation snapshot
+- User approved `docs/design/rag-service-architecture-and-pipeline-v1.md` with `APPROVED:v1`.
+- First implementation slice chosen conservatively from the master plan:
+  - generic family-first ordering for route-level context and provider fallback selection,
+  - no retrieval backend change,
+  - no new dependencies,
+  - no API contract change.
+- Current code-to-pipeline mapping for this slice:
+  - Stage 6 candidate generation remains in `shared/rag_system.py`,
+  - Stage 7/8 hardening landed in `backend/api/routes/rag.py`,
+  - verification is focused on route-level context/fallback behavior through existing regression suites.
+- Runtime changes completed:
+  - added `_order_rows_by_family_cohesion(...)` in `backend/api/routes/rag.py`,
+  - `rag_query(...)` now applies generic family-first ordering before the narrower compound-HOWTO refinement,
+  - `rag_summary(...)` now applies the same generic family-first ordering,
+  - provider fallback anchor selection now also starts from family-first ordered rows.
+- Regression coverage added:
+  - `tests/test_rag_context_composer.py::test_order_rows_by_family_cohesion_prefers_supported_family_when_scores_are_close`
+  - `tests/test_rag_context_composer.py::test_rag_query_context_prefers_coherent_family_for_non_howto_query`
+- Focused verification passed with hermetic local DB env:
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_context_composer.py` -> PASS
+  - `MYSQL_URL='' DB_PATH=data/ragsvc-slice1-test.db .venv\Scripts\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_compound_howto_focus.py tests/test_rag_metadata_field_search.py` -> `17 passed`
+- Next step:
+  - run secret/policy gates and finish spec/traceability/review-state synchronization for this slice.

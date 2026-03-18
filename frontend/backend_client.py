@@ -17,6 +17,7 @@ import httpx
 import time
 
 from shared.logging_config import logger
+from shared.networking import build_httpx_client, log_proxy_configuration
 
 
 class BackendClient:
@@ -32,16 +33,20 @@ class BackendClient:
         self.ingestion_timeout = float(os.getenv("BACKEND_INGESTION_TIMEOUT", "300.0"))
         # API-ключ для авторизации запросов к backend (опционально)
         self.api_key = os.getenv("BACKEND_API_KEY", "")
+        log_proxy_configuration(logger, "backend_client")
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{self.api_prefix}{path}"
+
+    def _client(self, *, timeout: float, headers: Optional[Dict[str, str]] = None) -> httpx.Client:
+        return build_httpx_client(timeout=timeout, headers=headers)
 
     def _request_with_retry(self, method: str, url: str, max_retries: int = 10, **kwargs) -> httpx.Response:
         """Выполнить запрос с повторными попытками при ошибках соединения."""
         last_exception = None
         for attempt in range(max_retries):
             try:
-                with httpx.Client(**kwargs) as client:
+                with build_httpx_client(**kwargs) as client:
                     resp = client.request(method, url)
                     resp.raise_for_status()
                     return resp
@@ -113,7 +118,7 @@ class BackendClient:
         logger.debug("Backend RAG query: url=%s, payload=%r", url, payload)
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.rag_timeout, headers=headers) as client:
+            with self._client(timeout=self.rag_timeout, headers=headers) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -146,7 +151,7 @@ class BackendClient:
         url = self._url("/rag/summary")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.rag_timeout, headers=headers) as client:
+            with self._client(timeout=self.rag_timeout, headers=headers) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -174,7 +179,7 @@ class BackendClient:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
             # Используем увеличенный таймаут для ingestion операций
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -190,7 +195,7 @@ class BackendClient:
         payload: Dict[str, Any] = {"name": name, "description": description}
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -218,7 +223,7 @@ class BackendClient:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
             # Используем увеличенный таймаут для ingestion операций
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, params=params)
                 resp.raise_for_status()
                 return resp.json()
@@ -244,7 +249,7 @@ class BackendClient:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
             # Используем увеличенный таймаут для ingestion операций
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, params=params)
                 resp.raise_for_status()
                 return resp.json()
@@ -275,7 +280,7 @@ class BackendClient:
         }
         try:
             # Используем увеличенный таймаут для ingestion операций
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
@@ -310,7 +315,7 @@ class BackendClient:
             data["username"] = username
         try:
             # Используем увеличенный таймаут для ingestion операций (загрузка документов может занимать много времени)
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
@@ -345,7 +350,7 @@ class BackendClient:
             data["model"] = model
         try:
             # Используем увеличенный таймаут для ingestion операций (обработка изображений может занимать время)
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
@@ -357,7 +362,7 @@ class BackendClient:
         url = self._url(f"/jobs/{job_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -391,7 +396,7 @@ class BackendClient:
         if message_date:
             data["message_date"] = message_date
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.post(url_api, data=data, files=files)
                 resp.raise_for_status()
                 return resp.json()
@@ -415,7 +420,7 @@ class BackendClient:
         url = self._url(f"/asr/jobs/{job_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -427,7 +432,7 @@ class BackendClient:
         url = self._url("/asr/settings")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -439,7 +444,7 @@ class BackendClient:
         url = self._url("/asr/settings")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.put(url, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -466,7 +471,7 @@ class BackendClient:
             "username": username,
         }
         try:
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -491,7 +496,7 @@ class BackendClient:
             "username": username,
         }
         try:
-            with httpx.Client(timeout=self.ingestion_timeout, headers=headers) as client:
+            with self._client(timeout=self.ingestion_timeout, headers=headers) as client:
                 resp = client.post(url_api, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -506,7 +511,7 @@ class BackendClient:
         url_api = self._url("/rag/reload-models")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.post(url_api)
                 resp.raise_for_status()
                 return resp.json()
@@ -530,7 +535,7 @@ class BackendClient:
         url = self._url(f"/knowledge-bases/{kb_id}/sources")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -548,7 +553,7 @@ class BackendClient:
         url = self._url(f"/knowledge-bases/{kb_id}/settings")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -567,7 +572,7 @@ class BackendClient:
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         payload = {"settings": settings}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.put(url, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -585,7 +590,7 @@ class BackendClient:
         url = self._url(f"/knowledge-bases/{kb_id}/import-log")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -602,7 +607,7 @@ class BackendClient:
         url = self._url("/knowledge-bases/admin/logs")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url, params={"service": service, "tail_lines": tail_lines})
                 resp.raise_for_status()
                 payload = resp.json()
@@ -618,7 +623,7 @@ class BackendClient:
         url = self._url("/users/")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -631,7 +636,7 @@ class BackendClient:
         url = self._url(f"/users/{user_id}/toggle-role")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.post(url)
                 resp.raise_for_status()
                 return True
@@ -644,7 +649,7 @@ class BackendClient:
         url = self._url(f"/users/{user_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.delete(url)
                 resp.raise_for_status()
                 return True
@@ -657,7 +662,7 @@ class BackendClient:
         url = self._url(f"/users/{telegram_id}/settings")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.put(url, json=settings)
                 resp.raise_for_status()
                 return resp.json()
@@ -670,7 +675,7 @@ class BackendClient:
         url = self._url(f"/knowledge-bases/{kb_id}/clear")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.post(url)
                 resp.raise_for_status()
                 return True
@@ -683,7 +688,7 @@ class BackendClient:
         url = self._url(f"/knowledge-bases/{kb_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.delete(url)
                 resp.raise_for_status()
                 return True
@@ -698,7 +703,7 @@ class BackendClient:
         url = self._url("/analytics/messages")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=5.0, headers=headers) as client:
+            with self._client(timeout=5.0, headers=headers) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -711,7 +716,7 @@ class BackendClient:
         url = self._url("/analytics/configs")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -724,7 +729,7 @@ class BackendClient:
         url = self._url(f"/analytics/configs/{chat_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -737,7 +742,7 @@ class BackendClient:
         url = self._url(f"/analytics/configs/{chat_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.put(url, json=config)
                 resp.raise_for_status()
                 return resp.json()
@@ -750,7 +755,7 @@ class BackendClient:
         url = self._url("/analytics/digests/generate")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=30.0, headers=headers) as client:
+            with self._client(timeout=30.0, headers=headers) as client:
                 resp = client.post(url, json=request)
                 resp.raise_for_status()
                 return resp.json()
@@ -763,7 +768,7 @@ class BackendClient:
         url = self._url(f"/analytics/digests/{digest_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -776,7 +781,7 @@ class BackendClient:
         url = self._url("/analytics/search")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=30.0, headers=headers) as client:
+            with self._client(timeout=30.0, headers=headers) as client:
                 resp = client.post(url, json=request)
                 resp.raise_for_status()
                 return resp.json()
@@ -789,7 +794,7 @@ class BackendClient:
         url = self._url("/analytics/qa")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=60.0, headers=headers) as client:
+            with self._client(timeout=60.0, headers=headers) as client:
                 resp = client.post(url, json=request)
                 resp.raise_for_status()
                 return resp.json()
@@ -808,7 +813,7 @@ class BackendClient:
         if format_hint:
             data["format_hint"] = format_hint
         try:
-            with httpx.Client(timeout=120.0, headers=headers) as client:
+            with self._client(timeout=120.0, headers=headers) as client:
                 resp = client.post(url, files=files, data=data)
                 resp.raise_for_status()
                 return resp.json()
@@ -821,7 +826,7 @@ class BackendClient:
         url = self._url(f"/analytics/import/{import_id}")
         headers = {"X-API-Key": self.api_key} if self.api_key else {}
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.json()
@@ -840,7 +845,7 @@ class BackendClient:
         if period_end:
             params["period_end"] = period_end
         try:
-            with httpx.Client(timeout=self.timeout, headers=headers) as client:
+            with self._client(timeout=self.timeout, headers=headers) as client:
                 resp = client.get(url, params=params)
                 resp.raise_for_status()
                 return resp.json()

@@ -100,13 +100,15 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Integration:
   - n8n webhook events for ingestion actions.
   - Multi-provider AI access with configurable defaults and model selection.
-  - Stack startup checks DB configuration and enables MySQL service only when `MYSQL_URL` is configured.
+- Stack startup checks DB configuration and enables MySQL service only when `MYSQL_URL` is configured.
+- Bot/backend containers support standard outbound proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) for Telegram/API/provider traffic; proxy status logging must redact credential-bearing URLs.
 
 ## Non-functional requirements
 - Reliability: bot and backend recover gracefully from ingestion or model errors.
 - Latency: interactive responses for typical KB sizes (seconds, not minutes).
 - Configurability: all operational settings via `.env` and DB-stored KB settings.
 - Security: API key for bot → backend, admin ID allowlist, no secrets in code.
+- Repo hygiene: temporary agent scratch/debug files are excluded narrowly; required design/review/spec artifacts remain tracked.
 - Operational resilience: startup should not fail due SQLAlchemy 2.x raw SQL execution API incompatibilities in SQLite WAL checks.
 - Governance: feature/bugfix changes must keep specs and traceability docs up to date.
 - Portability: run via Docker Compose or locally with minimal setup.
@@ -213,9 +215,12 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - For public Gitee wiki URLs, the git-based loader must try wiki-specific public clone candidates non-interactively before HTML fallback so backend jobs do not block on interactive credentials and full wiki sync can succeed without manual auth.
 - Dense retrieval indices are isolated per KB by embedding dimension: mixed-dimension chunks in other KBs must not suppress dense search for the active KB, and any query/index dimension mismatch for a KB must degrade only that dense leg to keyword fallback instead of poisoning the whole runtime index.
 - Generalized ranking adds a deterministic field-aware score over `source_path` / `doc_title` / `section_title` / `section_path` so broad build+sync how-to queries prefer canonical docs such as `Sync&Build` over narrower feature pages when retrieval candidates are otherwise close.
+- Generic RAG context/fallback selection is family-first: when several candidate rows are close in score, the service should prefer a coherent document/section family with structural support over an isolated singleton hit from another family.
+- Broad compound HOWTO queries must focus final context/fallback on one strongest procedural document family when available, instead of stitching multiple version-specific feature/build pages into one answer.
 - Wiki URL ingest is fail-fast: `0 pages / 0 chunks` or Gitee root-only HTML fallback must be reported as failure with explicit reason/recovery hints instead of a false success message.
 - After failed wiki URL ingest, the bot remains in a wiki-specific recovery session and accepts a ZIP archive for wiki restore using the original wiki root URL; this ZIP restore path must stay separate from generic document upload.
 - Admin panel exposes a bounded, redacted service-log viewer for debugging backend/bot/wiki ingest issues without leaking secrets or credentials.
+- Repo ignore rules exclude temporary agent-generated files only (`.scratchpad/tmp`, temp/debug dumps, local scratch variants) and must not hide durable workflow artifacts such as `docs/design/*`, `coordination/reviews/*`, or traceability/spec updates.
 
 ## Specification maintenance policy
 - `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.

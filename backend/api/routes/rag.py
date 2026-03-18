@@ -923,6 +923,84 @@ def _expand_anchor_evidence_rows(anchor: dict, doc_chunks: List[dict]) -> List[d
     return expanded_rows
 
 
+def _context_family_key(row: dict) -> str:
+    info = describe_context_chunk(row)
+    doc_key = str(info.get("doc_key") or info.get("source_path") or "").strip().lower()
+    scope_key = str(info.get("scope_key") or "").strip().lower()
+    identity = str(info.get("identity") or "").strip().lower()
+    if doc_key and scope_key.startswith(("section:", "page:")):
+        return f"{doc_key}::{scope_key}"
+    if doc_key:
+        return doc_key
+    return identity
+
+
+def _order_rows_by_family_cohesion(ranked_results: List[dict]) -> List[dict]:
+    if len(ranked_results or []) <= 2:
+        return list(ranked_results or [])
+
+    family_buckets: Dict[str, List[tuple[int, dict]]] = {}
+    family_best: Dict[str, float] = {}
+    family_total: Dict[str, float] = {}
+    family_first_index: Dict[str, int] = {}
+    family_contiguous: Dict[str, bool] = {}
+
+    for index, row in enumerate(ranked_results or []):
+        family_key = _context_family_key(row)
+        if not family_key:
+            family_key = f"row:{index}"
+        family_buckets.setdefault(family_key, []).append((index, row))
+        score = float(row.get("rank_score") or row.get("rerank_score") or 0.0)
+        family_best[family_key] = max(family_best.get(family_key, float("-inf")), score)
+        family_total[family_key] = family_total.get(family_key, 0.0) + max(0.0, score)
+        family_first_index.setdefault(family_key, index)
+
+    for family_key, entries in family_buckets.items():
+        chunk_numbers = []
+        for _index, row in entries:
+            chunk_no = describe_context_chunk(row).get("chunk_no")
+            if isinstance(chunk_no, int):
+                chunk_numbers.append(chunk_no)
+        contiguous = False
+        if len(chunk_numbers) >= 2:
+            chunk_numbers = sorted(set(chunk_numbers))
+            contiguous = any((right - left) <= 1 for left, right in zip(chunk_numbers, chunk_numbers[1:]))
+        family_contiguous[family_key] = contiguous
+
+    top_best = max(family_best.values(), default=float("-inf"))
+    ordered_family_keys = sorted(
+        family_buckets.keys(),
+        key=lambda key: (
+            1 if family_best.get(key, float("-inf")) >= (top_best - 0.12) else 0,
+            family_best.get(key, float("-inf"))
+            + min(0.12, 0.04 * max(0, len(family_buckets.get(key, [])) - 1))
+            + (0.05 if family_contiguous.get(key, False) else 0.0)
+            + min(0.08, max(0.0, family_total.get(key, 0.0) - family_best.get(key, 0.0)) * 0.05),
+            family_best.get(key, float("-inf")),
+            family_total.get(key, float("-inf")),
+            -family_first_index.get(key, 0),
+        ),
+        reverse=True,
+    )
+
+    ordered_rows: List[dict] = []
+    for family_rank, family_key in enumerate(ordered_family_keys, start=1):
+        family_entries = sorted(
+            family_buckets.get(family_key, []),
+            key=lambda item: (
+                float(item[1].get("rank_score") or item[1].get("rerank_score") or 0.0),
+                -item[0],
+            ),
+            reverse=True,
+        )
+        for _index, row in family_entries:
+            decorated = dict(row)
+            decorated["_family_rank"] = family_rank
+            decorated["_family_key"] = family_key
+            ordered_rows.append(decorated)
+    return ordered_rows
+
+
 def _select_evidence_pack_rows(
     *,
     ranked_results: List[dict],
@@ -1072,6 +1150,7 @@ def _select_provider_fallback_rows(
         return (score, float(row.get("rank_score") or row.get("rerank_score") or 0.0))
 
     ordered_results = sorted(ranked_results, key=fallback_priority, reverse=True)
+    family_ordered_results = _order_rows_by_family_cohesion(ordered_results)
 
     pack_rows: List[dict] = []
     seen_identities: set[str] = set()
@@ -1085,7 +1164,7 @@ def _select_provider_fallback_rows(
         pack_rows.append(dict(candidate))
         return True
 
-    for anchor in ordered_results:
+    for anchor in family_ordered_results:
         anchor_info = describe_context_chunk(anchor)
         anchor_scope = (str(anchor_info.get("doc_key") or ""), str(anchor_info.get("scope_key") or ""))
         if anchor_scope in seen_anchor_scopes:
@@ -1105,7 +1184,135 @@ def _select_provider_fallback_rows(
         append_row(candidate)
         if len(pack_rows) >= max(5, context_limit * 2):
             break
-    return pack_rows or ordered_results[: max(5, context_limit * 2)]
+    return pack_rows or family_ordered_results[: max(5, context_limit * 2)]
+
+
+def _is_compound_howto_query(query: str) -> bool:
+    query_lower = _normalize_query_text(query).lower()
+    if not query_lower:
+        return False
+    markers = ("sync", "build", "install", "setup", "configure", "initialize", "init", "run")
+    hits = {marker for marker in markers if marker in query_lower}
+    return len(hits) >= 2 and any(token in query_lower for token in ("how to", "как ", "steps", "guide"))
+
+
+def _compute_procedural_family_score(query: str, row: dict) -> float:
+    query_lower = _normalize_query_text(query).lower()
+    query_tokens = set(re.findall(r"[a-zа-яё0-9]{3,}", query_lower))
+    info = describe_context_chunk(row)
+    meta = row.get("metadata") or {}
+    doc_title = _normalize_query_text(meta.get("doc_title") or meta.get("title") or "").lower()
+    section_title = _normalize_query_text(meta.get("section_title") or "").lower()
+    section_path = _normalize_query_text(meta.get("section_path") or "").lower()
+    source_path = _normalize_query_text(row.get("source_path") or "").lower()
+    text = _normalize_query_text(row.get("content") or "").lower()
+    procedural_markers = ("how to", "guide", "steps", "initialize", "setup", "install", "configure", "prepare", "sync", "build", "run")
+    troubleshooting_markers = (
+        "issue",
+        "issues",
+        "error",
+        "errors",
+        "fix",
+        "fixes",
+        "patch",
+        "workaround",
+        "debug",
+        "troubleshoot",
+        "regeneration",
+        "failed",
+        "failure",
+    )
+    procedural_hits = 0
+    score = float(row.get("rank_score") or row.get("rerank_score") or 0.0)
+    for field_value, weight in (
+        (doc_title, 1.0),
+        (section_title, 1.3),
+        (section_path, 0.9),
+        (source_path, 0.8),
+    ):
+        if any(marker in field_value for marker in procedural_markers):
+            score += weight
+        if "sync" in field_value and "build" in field_value:
+            score += 1.8
+            procedural_hits += 2
+        else:
+            if "sync" in field_value:
+                score += 0.7
+                procedural_hits += 1
+            if "build" in field_value:
+                score += 0.7
+                procedural_hits += 1
+        if any(marker in field_value for marker in troubleshooting_markers):
+            score -= weight * 1.4
+    if any(marker in text for marker in ("repo init", "repo sync", "./build.sh", "build/prebuilts_download.sh")):
+        score += 2.0
+        procedural_hits += 2
+    overlap = sum(1 for token in query_tokens if token in doc_title or token in section_title or token in section_path or token in source_path)
+    score += min(1.6, overlap * 0.3)
+    if re.search(r"\bv\d{2,4}\b", " ".join((doc_title, section_title, section_path, source_path))) and procedural_hits < 3:
+        score -= 1.0
+    if "feature" in source_path and procedural_hits < 3:
+        score -= 0.6
+    score += 0.2 if "doc:" in str(info.get("scope_key") or "") else 0.0
+    return score
+
+
+def _focus_compound_howto_rows(query: str, ranked_results: List[dict]) -> List[dict]:
+    if not ranked_results or not _is_compound_howto_query(query):
+        return ranked_results
+
+    family_buckets: Dict[str, List[dict]] = {}
+    family_scores: Dict[str, float] = {}
+    family_best: Dict[str, float] = {}
+    family_compound_hits: Dict[str, int] = {}
+    for row in ranked_results:
+        info = describe_context_chunk(row)
+        family_key = str(info.get("doc_key") or info.get("source_path") or info.get("identity") or "")
+        if not family_key:
+            continue
+        score = _compute_procedural_family_score(query, row)
+        family_buckets.setdefault(family_key, []).append(row)
+        family_scores[family_key] = family_scores.get(family_key, 0.0) + score
+        family_best[family_key] = max(family_best.get(family_key, float("-inf")), score)
+        combined_text = " ".join(
+            [
+                _normalize_query_text(row.get("source_path") or "").lower(),
+                _normalize_query_text((row.get("metadata") or {}).get("doc_title") or (row.get("metadata") or {}).get("title") or "").lower(),
+                _normalize_query_text((row.get("metadata") or {}).get("section_title") or "").lower(),
+                _normalize_query_text((row.get("metadata") or {}).get("section_path") or "").lower(),
+                _normalize_query_text(row.get("content") or "").lower(),
+            ]
+        )
+        hit_count = int("sync" in combined_text) + int("build" in combined_text)
+        if "repo init" in combined_text or "repo sync" in combined_text or "build/prebuilts_download.sh" in combined_text:
+            hit_count += 1
+        family_compound_hits[family_key] = max(family_compound_hits.get(family_key, 0), hit_count)
+
+    if not family_buckets:
+        return ranked_results
+
+    ordered_families = sorted(
+        family_buckets.keys(),
+        key=lambda key: (family_best.get(key, float("-inf")), family_scores.get(key, float("-inf")), len(family_buckets.get(key, []))),
+        reverse=True,
+    )
+    best_family = ordered_families[0]
+    best_score = family_best.get(best_family, float("-inf"))
+    best_total = family_scores.get(best_family, float("-inf"))
+    second_score = family_best.get(ordered_families[1], float("-inf")) if len(ordered_families) > 1 else float("-inf")
+    second_total = family_scores.get(ordered_families[1], float("-inf")) if len(ordered_families) > 1 else float("-inf")
+    family_rows = family_buckets.get(best_family) or []
+    if best_score < 1.5:
+        return ranked_results
+    if family_compound_hits.get(best_family, 0) >= 3:
+        return list(family_rows)
+    if len(family_rows) < 2 and (best_score - second_score) < 0.4 and (best_total - second_total) < 0.6:
+        return ranked_results
+
+    focused = list(family_rows)
+    if len(focused) >= 2:
+        return focused
+    return ranked_results
 
 
 def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict[str, Any]]) -> dict:
@@ -1986,21 +2193,26 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         selected_docs = select_docs(intent if use_legacy_query_heuristics else "GENERAL", ranked_results)
         filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
+        context_candidate_rows = _order_rows_by_family_cohesion(filtered_results)
+        context_candidate_rows = _focus_compound_howto_rows(payload.query, context_candidate_rows)
+        if context_candidate_rows:
+            filtered_results = context_candidate_rows
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("RAG intent=%s selected_docs=%s", intent, selected_docs)
             logger.debug("RAG filtered_results=%d", len(filtered_results))
+            logger.debug("RAG context_candidate_rows=%d", len(context_candidate_rows))
 
         # Формируем контекст для LLM
         context_parts: list[str] = []
         token_limit_chars = max(3000, context_length * max(3, full_page_multiplier))
         selected_context_rows = _select_evidence_pack_rows(
-            ranked_results=filtered_results,
+            ranked_results=context_candidate_rows,
             load_doc_chunks=load_doc_chunks,
             anchor_limit=max(1, top_k_for_context),
             context_limit=max(3, top_k_for_context),
         )
         if not selected_context_rows:
-            selected_context_rows = filtered_results[: max(3, top_k_for_context)]
+            selected_context_rows = context_candidate_rows[: max(3, top_k_for_context)]
 
         used_chars = 0
         included_context_rows: List[dict] = []
@@ -2068,7 +2280,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     preview_blocks.append(block[:500])
                 logger.debug("RAG context preview: %s", preview_blocks)
 
-        grounded_url_allowlist = _collect_grounded_url_allowlist(filtered_results)
+        grounded_url_allowlist = _collect_grounded_url_allowlist(context_candidate_rows)
         security_decision = assess_query_security(payload.query)
         poisoned_rows = find_poisoned_context_rows(included_context_rows)
         security_flags = list(security_decision.get("flags") or [])
@@ -2130,7 +2342,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
         if provider_error:
             fallback_rows = _select_provider_fallback_rows(
                 query=payload.query,
-                ranked_results=filtered_results,
+                ranked_results=context_candidate_rows,
                 load_doc_chunks=load_doc_chunks,
                 anchor_limit=max(1, top_k_for_context),
                 context_limit=max(3, top_k_for_context),
@@ -2423,14 +2635,17 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
     def load_doc_chunks(doc_id: str) -> List[dict]:
         return _load_doc_chunks_for_context(db, doc_id, kb_id=kb_id)
 
+    context_candidate_rows = _order_rows_by_family_cohesion(results)
+    context_candidate_rows = _focus_compound_howto_rows(payload.query, context_candidate_rows)
+
     selected_context_rows = _select_evidence_pack_rows(
-        ranked_results=results,
+        ranked_results=context_candidate_rows,
         load_doc_chunks=load_doc_chunks,
         anchor_limit=max(1, top_k),
         context_limit=max(2, top_k),
     )
     if not selected_context_rows:
-        selected_context_rows = results[: max(2, top_k)]
+        selected_context_rows = context_candidate_rows[: max(2, top_k)]
 
     context_parts = []
     sources: List[RAGSource] = []
@@ -2468,7 +2683,7 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
             ))
 
     context_text = "\n\n".join(context_parts)
-    grounded_url_allowlist = _collect_grounded_url_allowlist(selected_context_rows)
+    grounded_url_allowlist = _collect_grounded_url_allowlist(context_candidate_rows)
     security_decision = assess_query_security(payload.query)
     poisoned_rows = find_poisoned_context_rows(selected_context_rows)
     if bool(security_decision.get("should_refuse")) or poisoned_rows:
@@ -2500,7 +2715,7 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
     if provider_error:
         fallback_rows = _select_provider_fallback_rows(
             query=payload.query,
-            ranked_results=results,
+            ranked_results=context_candidate_rows,
             load_doc_chunks=load_doc_chunks,
             anchor_limit=max(1, top_k),
             context_limit=max(2, top_k),
