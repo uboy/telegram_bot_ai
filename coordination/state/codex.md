@@ -218,6 +218,21 @@
 - security extension:
   - promoted RAG security to first-class design scope:
     - direct and indirect prompt injection,
+
+## 2026-03-18 Multi-Corpus Validation Follow-up
+- role: developer
+- task:
+  - validate generalized retrieval on local OpenHarmony and ArkUI wiki corpora
+- progress:
+  - fixed `scripts/wiki_corpus_local_smoke.py` Windows console UTF-8 output path and added regression coverage in `tests/test_wiki_corpus_local_smoke.py`
+  - re-ran ArkUI smoke on local corpus from `C:\Users\devl\proj\wiki_refactoring\arkuiwiki.wiki` via `data/arkuiwiki-local-smoke.zip`
+  - ingest is healthy: `files_processed=108`, `chunks_added=856`, `100%` embedding coverage
+  - observed real retrieval miss, not tooling failure:
+    - `how to build and run xts` returns generic e2e build page
+    - `how to build previewer for master branch` returns generic platform/previewer pages
+  - raw diagnostics show field channel already surfaces exact docs, but fused generalized ranking lets generic procedural consensus outrank distinctive field hits
+- current_step:
+  - implementing generalized query-field-specificity ordering in `shared/rag_system.py` with regression tests in `tests/test_rag_system_budgets.py`
     - confidential data leakage,
     - system-prompt leakage,
     - ingestion-time document screening,

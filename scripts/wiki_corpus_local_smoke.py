@@ -319,6 +319,20 @@ def _run_smoke(args: argparse.Namespace, db_path: str) -> dict[str, Any]:
     }
 
 
+def _emit_payload(payload: str) -> None:
+    text = f"{payload}\n"
+    stdout = sys.stdout
+    try:
+        stdout.write(text)
+    except UnicodeEncodeError:
+        buffer = getattr(stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write(text.encode("utf-8", errors="replace"))
+        else:
+            escaped = text.encode("ascii", errors="backslashreplace").decode("ascii")
+            stdout.write(escaped)
+
+
 def main(default_profile: Optional[str] = None) -> int:
     args = _parse_args(default_profile=default_profile)
     temp_dir_obj: tempfile.TemporaryDirectory[str] | None = None
@@ -333,7 +347,7 @@ def main(default_profile: Optional[str] = None) -> int:
         payload = json.dumps(result, ensure_ascii=False, indent=2)
         if args.json_out:
             Path(args.json_out).write_text(payload, encoding="utf-8")
-        print(payload)
+        _emit_payload(payload)
         return 0 if result.get("ok") else 1
     finally:
         if temp_dir_obj is not None:

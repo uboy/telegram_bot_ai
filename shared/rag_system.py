@@ -11,6 +11,7 @@ import re
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 from collections import defaultdict
+from urllib.parse import unquote
 import numpy as np
 from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog, engine, get_session
 from sqlalchemy import text, or_
@@ -77,6 +78,11 @@ _SECRET_VALUE_RE = re.compile(
     r"(?i)\b(password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret)\b(\s*[:=]\s*)([^\s,;]+)"
 )
 _CONTEXT_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?")
+_EN_QUERY_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
+    "in", "into", "is", "it", "of", "on", "or", "that", "the", "this",
+    "to", "use", "using", "what", "when", "where", "which", "with", "your",
+})
 
 
 def _coerce_non_negative_int(value: Any) -> Optional[int]:
@@ -259,6 +265,122 @@ def _candidate_family_key(candidate: Dict[str, Any]) -> str:
     if doc_key:
         return f"{doc_key}::doc"
     return str(info.get("identity") or "").strip()
+
+
+def _normalize_field_text_value(text: str) -> str:
+    decoded = unquote(str(text or ""))
+    lowered = decoded.lower().replace("\\", " ").replace("/", " ").replace("_", " ")
+    normalized = re.sub(r"[^a-zа-яё0-9]+", " ", lowered, flags=re.IGNORECASE)
+    return _SPACE_RE.sub(" ", normalized).strip()
+
+
+def _extract_query_specificity_terms(query: str) -> List[str]:
+    terms: List[str] = []
+    seen = set()
+    for token in _WORD_RE.findall((query or "").lower()):
+        if len(token) < 3:
+            continue
+        if token in _RU_STOP_WORDS or token in _EN_QUERY_STOP_WORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+    return terms
+
+
+def _candidate_field_text(candidate: Dict[str, Any]) -> str:
+    info = describe_context_chunk(candidate)
+    parts = [
+        info.get("source_path") or "",
+        info.get("doc_title") or "",
+        info.get("section_title") or "",
+        info.get("section_path") or "",
+    ]
+    return _normalize_field_text_value(" ".join(str(part or "") for part in parts if part))
+
+
+def _annotate_candidates_with_query_field_specificity(
+    candidates: List[Dict[str, Any]],
+    *,
+    query: str,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    query_terms = _extract_query_specificity_terms(query)
+    if not query_terms:
+        return [dict(candidate) for candidate in candidates]
+
+    normalized_query = _normalize_field_text_value(query)
+    candidate_field_texts = [_candidate_field_text(candidate) for candidate in candidates]
+    total_candidates = max(1, len(candidate_field_texts))
+    term_doc_freq: Dict[str, int] = {}
+    for term in query_terms:
+        term_doc_freq[term] = sum(1 for text in candidate_field_texts if term in text)
+
+    distinctive_df_threshold = min(2, total_candidates)
+    annotated: List[Dict[str, Any]] = []
+    for row, field_text in zip(candidates, candidate_field_texts):
+        candidate = dict(row)
+        matched_terms = [term for term in query_terms if term in field_text]
+        distinctive_matches = [term for term in matched_terms if term_doc_freq.get(term, 0) <= distinctive_df_threshold]
+        specificity_score = 0.0
+        for term in matched_terms:
+            doc_freq = max(1, int(term_doc_freq.get(term, 0)))
+            specificity_score += float(np.log((total_candidates + 1.0) / (doc_freq + 1.0)) + 1.0)
+        exact_match = bool(normalized_query and normalized_query in field_text)
+        candidate["_query_field_term_hits"] = int(len(matched_terms))
+        candidate["_query_field_coverage_ratio"] = float(len(matched_terms) / float(len(query_terms)))
+        candidate["_query_field_distinctive_hits"] = int(len(distinctive_matches))
+        candidate["_query_field_exact_match"] = exact_match
+        candidate["_query_field_specificity_score"] = float(
+            specificity_score
+            + (0.75 * len(matched_terms))
+            + (1.5 * len(distinctive_matches))
+            + (3.0 if exact_match else 0.0)
+        )
+        annotated.append(candidate)
+    return annotated
+
+
+def _order_candidates_by_query_field_specificity(
+    candidates: List[Dict[str, Any]],
+    *,
+    query: str,
+) -> List[Dict[str, Any]]:
+    annotated = _annotate_candidates_with_query_field_specificity(candidates, query=query)
+    has_specific_signal = any(
+        bool(candidate.get("_query_field_exact_match"))
+        or (
+            int(candidate.get("_query_field_distinctive_hits", 0)) >= 1
+            and int(candidate.get("_query_field_term_hits", 0)) >= 2
+        )
+        or (
+            float(candidate.get("_query_field_coverage_ratio", 0.0)) >= 0.8
+            and int(candidate.get("_query_field_term_hits", 0)) >= 3
+        )
+        for candidate in annotated
+    )
+    if not has_specific_signal:
+        return annotated
+
+    indexed = list(enumerate(annotated))
+    indexed.sort(
+        key=lambda item: (
+            -int(bool(item[1].get("_query_field_exact_match"))),
+            -float(item[1].get("_query_field_coverage_ratio", 0.0)),
+            -int(item[1].get("_query_field_distinctive_hits", 0)),
+            -float(item[1].get("_query_field_specificity_score", 0.0)),
+            int(item[1].get("_family_rank", 999999)),
+            -int(item[1].get("_family_channel_count", 0)),
+            -int(item[1].get("_family_candidate_count", 0)),
+            -float(item[1].get("_family_support_rrf", 0.0)),
+            -_candidate_rank_score(item[1]),
+            item[0],
+        )
+    )
+    return [item[1] for item in indexed]
 
 
 def _annotate_candidates_with_family_support(
@@ -2116,6 +2238,8 @@ class RAGSystem:
                     "field": field_candidates,
                 },
             )
+            if not (self.enable_rerank and HAS_RERANKER and self.reranker is not None):
+                merged = _order_candidates_by_query_field_specificity(merged, query=query)
 
         # Если есть reranker – пересчитываем релевантность и берём top_k по score
         if self.enable_rerank and HAS_RERANKER and self.reranker is not None:
