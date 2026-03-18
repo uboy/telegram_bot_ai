@@ -1,7 +1,11 @@
 import json
+import os
 from types import SimpleNamespace
 
 import numpy as np
+
+os.environ["MYSQL_URL"] = ""
+os.environ.setdefault("DB_PATH", "data/test-rag-system-budgets.db")
 
 from shared import rag_system as rag_module
 
@@ -16,10 +20,10 @@ class DummyReranker:
         return self._scores[: len(pairs)]
 
 
-def _chunk(content: str, source_path: str) -> SimpleNamespace:
+def _chunk(content: str, source_path: str, *, metadata: dict | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         content=content,
-        chunk_metadata=json.dumps({"doc_title": source_path}, ensure_ascii=False),
+        chunk_metadata=json.dumps(metadata or {"doc_title": source_path}, ensure_ascii=False),
         source_type="markdown",
         source_path=source_path,
     )
@@ -73,6 +77,7 @@ def _build_test_system(
     dense_candidates=None,
     bm25_chunks=None,
     bm25_ranked=None,
+    field_candidates=None,
     enable_rerank: bool = True,
 ):
     rag = object.__new__(rag_module.RAGSystem)
@@ -106,7 +111,7 @@ def _build_test_system(
     rag.bm25_candidate_budget = bm25_budget
     rag.rerank_top_n = rerank_top_n
     rag._load_index = lambda _knowledge_base_id: None
-    rag._get_embedding = lambda _query: np.array([0.1, 0.2], dtype="float32")
+    rag._get_embedding = lambda _query, is_query=False: np.array([0.1, 0.2], dtype="float32")  # noqa: ARG005
     rag._is_howto_query = lambda _query: is_howto
     rag._qdrant_enabled = lambda: True
     rag._rrf_fuse = _flatten_unique
@@ -151,6 +156,7 @@ def _build_test_system(
 
     rag._qdrant_dense_search = dense_search
     rag._bm25_search = bm25_search
+    rag._metadata_field_search = lambda _query, _chunks, top_k: list(field_candidates or [])[:top_k]
     return rag, calls
 
 
@@ -316,3 +322,118 @@ def test_search_legacy_mode_reenables_howto_fallback_sorting(monkeypatch):
     results = rag_module.RAGSystem.search(rag, "how to build", knowledge_base_id=1, top_k=1)
 
     assert results[0]["content"] == "bm25-code"
+
+
+def test_search_generalized_mode_uses_family_support_for_rerank_window(monkeypatch):
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+    monkeypatch.setattr(rag_module, "HAS_EMBEDDINGS", True, raising=False)
+    monkeypatch.setattr(rag_module, "HAS_RERANKER", True, raising=False)
+    rag, calls = _build_test_system(
+        dense_budget=2,
+        bm25_budget=2,
+        rerank_top_n=1,
+        rerank_scores=[0.61],
+        is_howto=False,
+        dense_candidates=[
+            _candidate(
+                "singleton-dense",
+                "doc://singleton",
+                distance=0.10,
+                metadata={"doc_title": "Singleton Guide", "section_path": "Singleton Guide > Start"},
+                origin="dense",
+            ),
+            _candidate(
+                "supported-family-primary",
+                "doc://supported",
+                distance=0.20,
+                metadata={"doc_title": "Supported Guide", "section_path": "Supported Guide > Setup"},
+                origin="dense",
+            ),
+        ],
+        bm25_chunks=[
+            _chunk(
+                "supported-family-primary",
+                "doc://supported",
+                metadata={"doc_title": "Supported Guide", "section_path": "Supported Guide > Setup"},
+            ),
+            _chunk(
+                "singleton-dense",
+                "doc://singleton",
+                metadata={"doc_title": "Singleton Guide", "section_path": "Singleton Guide > Start"},
+            ),
+        ],
+        bm25_ranked=[0, 1],
+        field_candidates=[
+            _candidate(
+                "supported-family-primary",
+                "doc://supported",
+                distance=0.05,
+                metadata={"doc_title": "Supported Guide", "section_path": "Supported Guide > Setup"},
+                origin="field",
+            )
+        ],
+    )
+
+    results = rag_module.RAGSystem.search(rag, "alpha setup", knowledge_base_id=1, top_k=1)
+
+    assert len(calls["rerank_pairs"]) == 1
+    assert calls["rerank_pairs"][0][1] == "supported-family-primary"
+    assert results[0]["content"] == "supported-family-primary"
+    assert results[0]["source_path"] == "doc://supported"
+
+
+def test_search_generalized_mode_orders_by_family_support_without_reranker(monkeypatch):
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+    monkeypatch.setattr(rag_module, "HAS_EMBEDDINGS", True, raising=False)
+    monkeypatch.setattr(rag_module, "HAS_RERANKER", False, raising=False)
+    rag, _calls = _build_test_system(
+        dense_budget=2,
+        bm25_budget=2,
+        rerank_top_n=0,
+        rerank_scores=[],
+        is_howto=False,
+        enable_rerank=False,
+        dense_candidates=[
+            _candidate(
+                "singleton-dense",
+                "doc://singleton",
+                distance=0.10,
+                metadata={"doc_title": "Singleton Guide", "section_path": "Singleton Guide > Start"},
+                origin="dense",
+            ),
+            _candidate(
+                "supported-family-primary",
+                "doc://supported",
+                distance=0.20,
+                metadata={"doc_title": "Supported Guide", "section_path": "Supported Guide > Setup"},
+                origin="dense",
+            ),
+        ],
+        bm25_chunks=[
+            _chunk(
+                "supported-family-primary",
+                "doc://supported",
+                metadata={"doc_title": "Supported Guide", "section_path": "Supported Guide > Setup"},
+            ),
+            _chunk(
+                "singleton-dense",
+                "doc://singleton",
+                metadata={"doc_title": "Singleton Guide", "section_path": "Singleton Guide > Start"},
+            ),
+        ],
+        bm25_ranked=[0, 1],
+        field_candidates=[
+            _candidate(
+                "supported-family-primary",
+                "doc://supported",
+                distance=0.05,
+                metadata={"doc_title": "Supported Guide", "section_path": "Supported Guide > Setup"},
+                origin="field",
+            )
+        ],
+    )
+
+    results = rag_module.RAGSystem.search(rag, "alpha setup", knowledge_base_id=1, top_k=2)
+
+    assert [row["content"] for row in results] == ["supported-family-primary", "singleton-dense"]
+    assert results[0]["source_path"] == "doc://supported"

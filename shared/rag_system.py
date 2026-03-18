@@ -242,6 +242,131 @@ def _candidate_rank_score(candidate: Dict[str, Any]) -> float:
     return -distance
 
 
+def _candidate_stable_key(candidate: Dict[str, Any]) -> str:
+    info = describe_context_chunk(candidate)
+    identity = str(info.get("identity") or "").strip()
+    if identity:
+        return identity
+    return f"{candidate.get('source_path') or ''}::{str(candidate.get('content') or '')[:200]}"
+
+
+def _candidate_family_key(candidate: Dict[str, Any]) -> str:
+    info = describe_context_chunk(candidate)
+    doc_key = str(info.get("doc_key") or "").strip()
+    scope_key = str(info.get("scope_key") or "").strip()
+    if doc_key and scope_key:
+        return f"{doc_key}::{scope_key}"
+    if doc_key:
+        return f"{doc_key}::doc"
+    return str(info.get("identity") or "").strip()
+
+
+def _annotate_candidates_with_family_support(
+    candidates: List[Dict[str, Any]],
+    *,
+    channel_candidates: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    rrf_k: int = 20,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    k = max(1, int(rrf_k))
+    family_stats: Dict[str, Dict[str, Any]] = {}
+
+    for channel_name, rows in (channel_candidates or {}).items():
+        channel = str(channel_name or "unknown").strip().lower() or "unknown"
+        for rank, row in enumerate(rows or [], start=1):
+            if not isinstance(row, dict):
+                continue
+            family_key = _candidate_family_key(row)
+            if not family_key:
+                continue
+            stats = family_stats.setdefault(
+                family_key,
+                {
+                    "channels": set(),
+                    "candidate_keys": set(),
+                    "support_rrf": 0.0,
+                    "best_rank": rank,
+                },
+            )
+            stats["channels"].add(channel)
+            stats["candidate_keys"].add(_candidate_stable_key(row))
+            stats["support_rrf"] = float(stats.get("support_rrf", 0.0)) + (1.0 / float(k + rank))
+            stats["best_rank"] = min(int(stats.get("best_rank", rank)), rank)
+
+    if not family_stats:
+        for row in candidates:
+            family_key = _candidate_family_key(row)
+            if not family_key:
+                continue
+            family_stats.setdefault(
+                family_key,
+                {
+                    "channels": {str(row.get("origin") or "unknown").strip().lower() or "unknown"},
+                    "candidate_keys": {_candidate_stable_key(row)},
+                    "support_rrf": 1.0 / float(k + 1),
+                    "best_rank": 1,
+                },
+            )
+
+    ordered_family_keys = sorted(
+        family_stats.keys(),
+        key=lambda key: (
+            len(family_stats[key].get("channels", set())),
+            len(family_stats[key].get("candidate_keys", set())),
+            float(family_stats[key].get("support_rrf", 0.0)),
+            -int(family_stats[key].get("best_rank", 999999)),
+        ),
+        reverse=True,
+    )
+    family_rank = {key: rank for rank, key in enumerate(ordered_family_keys, start=1)}
+
+    annotated: List[Dict[str, Any]] = []
+    for row in candidates:
+        candidate = dict(row)
+        family_key = _candidate_family_key(candidate)
+        stats = family_stats.get(family_key, {})
+        candidate["_family_key"] = family_key
+        candidate["_family_rank"] = int(family_rank.get(family_key, len(ordered_family_keys) + 1))
+        candidate["_family_channel_count"] = int(len(stats.get("channels", set())))
+        candidate["_family_candidate_count"] = int(len(stats.get("candidate_keys", set())))
+        candidate["_family_support_rrf"] = float(stats.get("support_rrf", 0.0))
+        annotated.append(candidate)
+    return annotated
+
+
+def _order_candidates_by_family_support(
+    candidates: List[Dict[str, Any]],
+    *,
+    channel_candidates: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    rrf_k: int = 20,
+) -> List[Dict[str, Any]]:
+    annotated = _annotate_candidates_with_family_support(
+        candidates,
+        channel_candidates=channel_candidates,
+        rrf_k=rrf_k,
+    )
+    has_supported_family = any(
+        int(candidate.get("_family_channel_count", 0)) >= 2 or int(candidate.get("_family_candidate_count", 0)) >= 2
+        for candidate in annotated
+    )
+    if not has_supported_family:
+        return annotated
+    indexed = list(enumerate(annotated))
+    indexed.sort(
+        key=lambda item: (
+            int(item[1].get("_family_rank", 999999)),
+            -_candidate_rank_score(item[1]),
+            -int(item[1].get("_family_channel_count", 0)),
+            -int(item[1].get("_family_candidate_count", 0)),
+            -float(item[1].get("_family_support_rrf", 0.0)),
+            item[0],
+        )
+    )
+    return [item[1] for item in indexed]
+
+
 def _group_chunk_embeddings_by_kb(chunks: List[Any]) -> Dict[str, Any]:
     chunks_by_kb = defaultdict(list)
     all_chunks_by_kb = defaultdict(list)
@@ -1961,9 +2086,6 @@ class RAGSystem:
         if field_ranked_keys:
             ranked_lists.append(field_ranked_keys)
         fused_keys = self._rrf_fuse(ranked_lists) if ranked_lists else []
-        if is_howto_query and field_ranked_keys:
-            preferred_field_keys = list(field_ranked_keys[: max(1, min(3, top_k))])
-            fused_keys = preferred_field_keys + [key for key in fused_keys if key not in preferred_field_keys]
 
         # Объединяем кандидатов и убираем дубли по (source_path, content)
         merged: List[Dict] = []
@@ -1985,6 +2107,16 @@ class RAGSystem:
         if not merged:
             return []
 
+        if not use_legacy_howto_ranking:
+            merged = _order_candidates_by_family_support(
+                merged,
+                channel_candidates={
+                    "dense": dense_candidates,
+                    "bm25": bm25_candidates,
+                    "field": field_candidates,
+                },
+            )
+
         # Если есть reranker – пересчитываем релевантность и берём top_k по score
         if self.enable_rerank and HAS_RERANKER and self.reranker is not None:
             try:
@@ -1997,7 +2129,16 @@ class RAGSystem:
                 for cand, score in zip(rerank_candidates, scores):
                     boost = compute_source_boost(cand)
                     scored.append((cand, float(score), boost, float(score) + boost))
-                scored.sort(key=lambda x: x[3], reverse=True)
+                scored.sort(
+                    key=lambda item: (
+                        item[3],
+                        -(int(item[0].get("_family_rank", 999999))),
+                        int(item[0].get("_family_channel_count", 0)),
+                        int(item[0].get("_family_candidate_count", 0)),
+                        float(item[0].get("_family_support_rrf", 0.0)),
+                    ),
+                    reverse=True,
+                )
                 top = scored[: top_k]
 
                 logger.debug(

@@ -2790,3 +2790,20 @@
 - Current status:
   - family-first routing is now both implemented and observable,
   - next logical slice would be deeper family aggregation / live multi-corpus validation rather than more local route heuristics.
+
+## 2026-03-18 RAGSVC slice 3 implementation snapshot
+- Follow-up slice selected after slice 2:
+  - move the next generalized improvement from route-level selection into retrieval-core fusion/rerank.
+- Runtime changes completed:
+  - `shared/rag_system.py` now derives family support from dense, BM25, and metadata-field channels using `describe_context_chunk(...)`,
+  - added `_candidate_stable_key(...)`, `_candidate_family_key(...)`, `_annotate_candidates_with_family_support(...)`, and `_order_candidates_by_family_support(...)`,
+  - generalized retrieval path now reorders fused candidates by corroborated family support before rerank/output selection,
+  - family-aware ordering activates only when a family has real support across channels or multiple candidate hits; singleton-only candidate sets keep the original fusion order.
+- Regression coverage added/extended:
+  - `tests/test_rag_system_budgets.py` now forces local SQLite env and adds regressions for family-supported rerank window selection and generalized ordering without reranker.
+- Focused verification passed with hermetic local DB env:
+  - `python -m py_compile shared/rag_system.py tests/test_rag_system_budgets.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/test-rag-system-budgets.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_system_budgets.py` -> PASS (`8 passed`)
+  - `python -m py_compile tests/test_rag_metadata_field_search.py tests/test_rag_context_composer.py tests/test_rag_diagnostics.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/ragsvc-slice3-test.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_metadata_field_search.py tests/test_rag_context_composer.py tests/test_rag_diagnostics.py` -> PASS (`22 passed`)
+  - `python scripts/scan_secrets.py` -> PASS

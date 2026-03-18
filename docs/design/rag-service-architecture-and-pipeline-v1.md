@@ -437,6 +437,15 @@ Architectural choices should be validated through diagnostics and eval, not only
   - context-support rows retaining family identity,
   - OpenAPI schema exposure for the additive fields.
 
+#### Phase B, slice 3 implemented on 2026-03-18
+- generalized retrieval-core fusion in `shared/rag_system.py` now computes structural family support from dense, BM25, and metadata-field channels using existing `doc_key` / `scope_key` contracts instead of corpus-specific query words;
+- family-aware ordering activates only when there is actual corroboration across channels or multiple candidate hits, so singleton-only candidate sets preserve the original fusion order;
+- rerank window selection now sees the same family-aware order, preventing supported families from being dropped before reranking;
+- focused regressions cover:
+  - rerank-window promotion of a structurally supported family,
+  - generalized no-rerank ordering by supported family,
+  - singleton-only candidate sets preserving the previous fusion order.
+
 ### Phase C. Context and fallback hardening
 - make context/fallback family-bounded
 - improve deterministic evidence-pack coverage
