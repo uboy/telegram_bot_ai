@@ -969,3 +969,260 @@ The lecture metrics are necessary but not sufficient. The design needs five metr
    - bot/admin-panel entry to inspect aggregated logs across relevant services
 5. Prefer fail-fast for Gitee wiki.
    - HTML fallback may stay as a generic mechanism, but for Gitee `/wikis` it must not be accepted as success when it does not produce a real wiki corpus
+
+## 2026-03-18 Research: container proxy env support + broad HOWTO RAG hardening
+
+Date: 2026-03-18
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User request
+- Add proxy support by reading proxy-related environment variables inside the runtime containers.
+- Fix the remaining RAG failure where the query `how to build and sync` returns a stitched answer from narrow version-specific pages instead of the canonical build/sync procedure.
+- Plan exclusion of temporary agent-generated files from the repository.
+
+### Current proxy/runtime findings
+1. There is no explicit project-level proxy contract today.
+   - `frontend/bot.py` builds Telegram polling with a plain `ApplicationBuilder().token(...).build()`.
+   - `frontend/backend_client.py` creates plain `httpx.Client(...)` instances without explicit proxy wiring.
+   - `docker-compose.yml`, `shared/config.py`, and `env.template` do not declare or document proxy variables.
+2. The repo already contains operational signals that proxy/network path issues are real.
+   - Existing tests and state notes mention `proxy handshake failed` and a previous `NO_PROXY` fix for provider access.
+3. Relying only on implicit library behavior is not enough.
+   - `httpx` / `requests` may honor standard env variables depending on `trust_env`, but the current repo does not define one project-wide contract, does not document which vars are expected, and does not wire the Telegram client explicitly.
+
+### Current RAG/how-to findings
+1. The repo already contains a generalized fix for broad procedural retrieval:
+   - metadata-field retrieval channel in `shared/rag_system.py`,
+   - generalized field-aware HOWTO scoring in `backend/api/routes/rag.py`,
+   - provider fallback expansion over neighboring procedural chunks,
+   - local smoke assertions in `tests/test_openharmony_wiki_local_smoke.py`.
+2. The live answer supplied by the user shows the remaining failure is now in answer assembly / fallback quality, not raw corpus absence.
+   - The answer mixes content from multiple narrow pages (`Stable Build v136`, `Stable Build & Regeneration v135`, previewer pages).
+   - The answer includes irrelevant fragments and the postprocessed marker `Команда отсутствует в базе знаний`.
+   - This means canonical `Sync&Build` guidance is either not winning the final evidence pack strongly enough, or provider fallback is still allowed to compose from an over-broad candidate set when procedural pages are present.
+3. Existing tests cover the target behavior, but the live runtime disproves that the current heuristics are sufficient under the real KB contents.
+
+### Current repo hygiene findings
+1. The project uses several agent/workflow directories for coordination and scratch work.
+   - `.scratchpad/`
+   - `coordination/state/`
+   - other coordination artifacts depending on the cycle
+2. Some coordination artifacts are intentional project records and should remain versioned.
+   - `coordination/tasks.jsonl`
+   - approved design docs
+   - review reports
+3. Temporary agent byproducts need an explicit contract.
+   - per-run scratch files, ephemeral notes, local debug dumps, and agent temp outputs should not be committed accidentally.
+   - the policy should distinguish between durable workflow artifacts and throwaway runtime debris.
+
+### Design direction
+1. Make proxy support explicit and documented.
+   - Use standard outbound proxy variables:
+     - `HTTP_PROXY`
+     - `HTTPS_PROXY`
+     - `ALL_PROXY`
+     - `NO_PROXY`
+   - Propagate them into `bot` and `backend` containers.
+   - Read them in config and wire them explicitly into:
+     - Telegram HTTP transport,
+     - bot -> backend `httpx` client,
+     - selected outbound runtime clients that currently use `requests`.
+2. Harden broad HOWTO answer selection around coherent procedural anchors.
+   - Strengthen the ranking/fallback path so compound procedural queries prefer one canonical procedural document/section family before version-specific feature pages.
+   - Keep the fix generic:
+     - no hardcoded `Sync&Build`,
+     - no corpus-specific page IDs,
+     - no special-casing open-harmony.
+   - Add deterministic regressions for the exact live symptom:
+     - broad `how to build and sync` must surface canonical sync/build steps,
+   - final answer/fallback must not stitch together unrelated versioned feature pages when a stronger procedural anchor exists.
+3. Add repo hygiene rules for agent-generated temporary files.
+   - define which agent/workflow artifacts are durable and must stay tracked;
+   - define which scratch/temp/debug artifacts must be gitignored;
+   - update repo ignore rules and docs accordingly.
+
+## 2026-03-18 Research: generalized procedural retrieval + multi-corpus validation
+
+Date: 2026-03-18
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User request
+- Remove remaining literal/query-specific procedural boosts such as explicit `Sync&Build` preference and make the retrieval path more universal.
+- Explain how a realistic generalized solution should work when:
+  - the language changes,
+  - wording changes,
+  - section naming differs across corpora.
+- Extend verification beyond one wiki and add other corpora, specifically:
+  - `https://gitee.com/rri_opensource/arkuiwiki.wiki.git`
+  - `https://gitee.com/mazurdenis/open-harmony.wiki.git`
+- Add tests that can use temporary local-only setup and the existing Ollama/Open WebUI/runtime API paths already present in the repo.
+
+### Current local validation assets already in repo
+1. There is already a developer-local corpus smoke harness:
+   - `scripts/openharmony_wiki_local_smoke.py`
+   - `tests/test_openharmony_wiki_local_smoke.py`
+   - current mode: local ZIP/git corpus -> temporary SQLite KB -> `/rag/query` path -> deterministic extractive fallback or optional live LLM answer lane.
+2. There is already a generalized evaluation service:
+   - `backend/services/rag_eval_service.py`
+   - supports retrieval metrics, source-family slices, optional answer/judge metrics, and provider selection through existing `ollama` / `open_webui` config.
+3. There is already a committed source-manifest concept:
+   - `tests/data/rag_eval_source_manifest_v1.yaml`
+   - supports repo-safe fixtures and local-only env-resolved fixtures.
+4. There is already an API smoke path:
+   - `scripts/rag_api_smoke_test.py`
+   - can be extended for optional live-backend validation against a running local/server backend.
+
+### Why the current broad-HOWTO fix is still not general enough
+1. It is generic relative to one corpus, but it still lives in the "procedural query heuristics" layer.
+2. It still depends too much on surface tokens such as:
+   - `how to`
+   - `build`
+   - `sync`
+   - `guide`
+3. That means it will drift again when:
+   - a corpus uses different wording (`prepare`, `assemble`, `deploy`, `bootstrap`, `initialize`),
+   - a corpus is in another language,
+   - a corpus uses structure without explicit imperative titles.
+
+### Realistic generalized retrieval direction
+1. The ranking target should shift from "match these words" to "retrieve one coherent procedural evidence family".
+2. A procedural evidence family should be inferred from mostly language-agnostic signals:
+   - same document / section-path cohesion,
+   - ordered neighbor chunks that look like a procedure sequence,
+   - chunk transitions that preserve a step-by-step narrative,
+   - high density of commands, numbered steps, shell/code blocks, or action-result pairs,
+   - low entropy of topic drift across the selected evidence pack.
+3. Query understanding should remain lightweight and broad:
+   - classify whether the user likely wants a procedure vs definition vs factoid,
+   - but avoid relying on one literal title or one corpus-specific path.
+4. Final context assembly should optimize for:
+   - family coherence,
+   - coverage of required steps,
+   - low contamination from troubleshooting or adjacent version-specific pages.
+
+### Concrete architecture implication
+1. Retrieval should produce candidate chunks plus family-level aggregates.
+2. Reranking should score both:
+   - row relevance,
+   - family coherence / step coverage.
+3. Context packing should select the best family first, then expand within that family, instead of mixing top rows from many documents.
+4. Fallback answering should inherit the same family boundary.
+   - If the provider is unavailable, extractive fallback must summarize one family rather than stitching across arbitrary top hits.
+
+### Multi-corpus validation direction
+1. We should stop validating generalized behavior only on one `open-harmony` wiki.
+2. Add at least two local-only wiki corpora to the manifest:
+   - `open-harmony.wiki.git`
+   - `arkuiwiki.wiki.git`
+3. Keep them local-only / env-driven:
+   - no cloning or network during fast tests,
+   - no committed raw corpus dump,
+   - tests use temp DBs and optional local cache/zip/git mirrors.
+4. Split verification into three lanes:
+   - deterministic fast unit/integration lane with synthetic fixtures and family-selection assertions,
+   - local slow smoke lane against env-provided corpora using temp SQLite,
+   - optional live runtime lane against a running backend and current provider config (`ollama` / `open_webui`).
+
+### Source acquisition contract
+1. The repo should not fetch these corpora inside normal committed tests.
+2. Instead, add manifest entries and env vars for local preparation:
+   - `RAG_EVAL_LOCAL_OPENHARMONY_WIKI_PATH`
+   - `RAG_EVAL_LOCAL_ARKUIWIKI_PATH`
+   - optionally `RAG_LIVE_SMOKE_BASE_URL`, `RAG_LIVE_SMOKE_KB_ID`, `RAG_LIVE_SMOKE_API_KEY`
+3. The user can prepare corpora by local clone / zip outside CI; tests then consume only the local prepared paths.
+
+### Answer-lane realism
+1. For fast regressions, deterministic extractive fallback remains the stable baseline.
+2. For realistic end-to-end checks, optional answer mode should call the already wired provider layer:
+   - `ollama`
+   - `open_webui`
+3. This should reuse current project config instead of introducing a separate ad-hoc client contract.
+
+### Key design constraint
+The generalized solution must not become "keyword soup in more languages". It must prefer structural evidence-family selection, with language/term cues used only as weak hints rather than the dominant ranking rule.
+
+## 2026-03-18 Research: service-level RAG architecture plan
+
+Date: 2026-03-18
+Agent: codex (team-lead-orchestrator / architect phase)
+
+### User request
+- Stop tuning RAG around one query.
+- Define the correct architecture for the whole service so arbitrary uploaded documents, wikis, instructions, and mixed corpora are handled reliably.
+- Produce:
+  - an architectural plan for the full RAG service,
+  - a staged design for each pipeline phase,
+  - then proceed to implementation after planning.
+
+### What already exists in the repo
+1. Ingestion coverage is broad:
+   - document/web/wiki/code/chat/image paths already exist in `backend/services/ingestion_service.py`.
+2. Canonical chunk metadata has already been introduced:
+   - chunk hashes,
+   - chunk numbers,
+   - block type,
+   - section normalization,
+   - parser profile,
+   - source-path normalization.
+3. Retrieval is already hybrid, but still partially fragmented:
+   - dense + BM25 + metadata-field rescue,
+   - route-level logic in `backend/api/routes/rag.py`,
+   - retrieval-core logic in `shared/rag_system.py`,
+   - diagnostics/eval infrastructure already exists but is not yet the main driver of architecture decisions.
+4. There are already several good design docs:
+   - `docs/design/rag-generalized-architecture-v2.md`
+   - `docs/design/rag-near-ideal-task-breakdown-v1.md`
+   - `docs/design/rag-embedded-quality-eval-system-v1.md`
+   - but they are focused on specific cycles and not presented as one unified service architecture + pipeline-stage design package.
+
+### Core architectural problem
+The service still behaves too much like:
+- ingest chunks,
+- rank chunks,
+- try to save answer quality with route-level heuristics.
+
+That is not sufficient for "arbitrary documents always find the right material".
+
+The more correct service-level problem statement is:
+1. ingest arbitrary source types into a canonical document model,
+2. preserve structure and relationships,
+3. maximize recall of relevant material,
+4. aggregate/rank at document/section family level,
+5. compose bounded evidence packs,
+6. generate grounded answers with refusal/safety behavior,
+7. measure all of the above continuously.
+
+### Realistic architecture direction
+The RAG service should be modeled as an explicit pipeline with stable contracts between stages:
+1. Source acquisition and ingest orchestration
+2. Parse and canonicalize
+3. Chunk and structure graph build
+4. Index write and consistency
+5. Query understanding
+6. Candidate generation
+7. Candidate fusion and rerank
+8. Document/section family aggregation
+9. Context/evidence-pack composition
+10. Answer generation and safety/grounding
+11. Diagnostics and evaluation
+
+### Why this is the right abstraction
+1. It generalizes across corpora because it reasons in pipeline responsibilities, not one query symptom.
+2. It separates "find everything relevant" from "compose one answer".
+3. It makes it possible to improve recall, precision, context quality, and answer quality independently.
+4. It gives a clean roadmap for implementation slices and rollback boundaries.
+
+### Important design principle
+For general-purpose document retrieval, the service should optimize for:
+- high recall first,
+- then coherent aggregation,
+- then answer synthesis.
+
+If retrieval misses the right document family, no answer prompt can fix it reliably.
+
+### Design implication for next cycle
+The next design artifact should not be another procedural-query document. It should be a master service architecture for RAG with:
+- stage-by-stage contracts,
+- stage-specific failure modes,
+- stage-specific tests,
+- staged implementation slices.

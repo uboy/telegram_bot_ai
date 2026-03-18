@@ -27,8 +27,19 @@ data/*.db-wal
 # Локальные настройки Claude Code
 .claude/settings.local.json
 
-# Дизайн-документы фич (агентские артефакты, только локально)
-docs/design/
+# Agent temporary files only; durable design/review artifacts stay tracked.
+.scratchpad/tmp/
+.scratchpad/*.tmp
+.scratchpad/*.bak
+.scratchpad/*.local.md
+coordination/tmp/
+coordination/state/*.tmp
+coordination/state/*.bak
+coordination/state/*.local.md
+.codex/tmp/
+data/debug/
+data/*-smoke.json
+data/*openharmony*.json
 
 open-harmony.zip
 open-harmony/*

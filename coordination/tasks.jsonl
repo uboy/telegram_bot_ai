@@ -130,3 +130,15 @@
 {"id":"WIKIRECOV-003","title":"Add bounded redacted admin log aggregation API and bot/admin viewer entry","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-12"}
 {"id":"WIKIRECOV-004","title":"Add focused regressions and verification for wiki fail-fast recovery and admin logs","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-12"}
 {"id":"WIKIRECOV-005","title":"Sync spec, usage, operations, traceability, and review artifacts for wiki recovery cycle","status":"in_progress","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-12"}
+{"id":"PROXYRAG-001","title":"Implement explicit proxy env wiring for Telegram and bot runtime clients","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-18"}
+{"id":"PROXYRAG-002","title":"Harden broad HOWTO context/fallback selection to one procedural family","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-18"}
+{"id":"PROXYRAG-003","title":"Add focused regressions and verification for proxy env support and broad HOWTO answer quality","status":"in_progress","assignee":"codex","phase":"reviewer","updated_at":"2026-03-18"}
+{"id":"PROXYRAG-004","title":"Sync spec/config/ops/traceability and repo hygiene rules for proxy+HOWTO cycle","status":"completed","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-18"}
+{"id":"RAGMULTI-001","title":"Research and design generalized procedural retrieval plus multi-corpus validation workflow","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-18"}
+{"id":"RAGMULTI-002","title":"Implement family-level procedural retrieval and generalized local/live smoke harness extensions","status":"pending","assignee":"codex","phase":"developer","updated_at":"2026-03-18"}
+{"id":"RAGMULTI-003","title":"Run focused regressions and multi-corpus smoke verification for generalized procedural retrieval","status":"pending","assignee":"codex","phase":"reviewer","updated_at":"2026-03-18"}
+{"id":"RAGMULTI-004","title":"Sync SPEC, traceability, testing/config docs, and review artifacts for generalized procedural retrieval cycle","status":"pending","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-18"}
+{"id":"RAGSVC-001","title":"Produce unified service-level RAG architecture and stage-by-stage pipeline design","status":"completed","assignee":"codex","phase":"architect","updated_at":"2026-03-18"}
+{"id":"RAGSVC-002","title":"Map current code to pipeline stages and implement the first approved hardening slice","status":"completed","assignee":"codex","phase":"developer","updated_at":"2026-03-18"}
+{"id":"RAGSVC-003","title":"Run focused verification and quality checks for the first approved RAG service hardening slice","status":"completed","assignee":"codex","phase":"reviewer","updated_at":"2026-03-18"}
+{"id":"RAGSVC-004","title":"Sync SPEC, traceability, testing/ops docs, and review artifacts for the RAG service architecture cycle","status":"in_progress","assignee":"codex","phase":"spec-maintainer","updated_at":"2026-03-18"}

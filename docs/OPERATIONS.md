@@ -39,6 +39,8 @@ python scripts/start_stack.py
 
 - `MYSQL_URL` set -> launcher enables `mysql` compose profile and starts `db`.
 - `MYSQL_URL` missing/empty -> launcher starts stack without `db`.
+- If outbound proxy is required, set `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` and keep Docker-internal services in `NO_PROXY`:
+  - `backend,qdrant,redis,db,n8n,localhost,127.0.0.1`
 - Dry-run mode:
 ```bash
 python scripts/start_stack.py --dry-run
@@ -55,6 +57,16 @@ python scripts/start_stack.py --dry-run
 - ASR jobs: `GET /api/v1/asr/jobs/{job_id}`
 - Analytics digest status: `GET /api/v1/analytics/digests/{digest_id}`
 - RAG diagnostics: `GET /api/v1/rag/diagnostics/{request_id}`
+
+## Proxy Notes
+
+- Bot and backend now use the standard proxy env contract:
+  - `HTTP_PROXY`
+  - `HTTPS_PROXY`
+  - `ALL_PROXY`
+  - `NO_PROXY`
+- Telegram polling uses the configured outbound proxy explicitly; internal bot -> backend HTTP traffic still depends on `NO_PROXY` to bypass the proxy for Docker-network service names.
+- Runtime logs report only whether proxy is enabled and whether `NO_PROXY` is set; they must not expose credential-bearing proxy URLs verbatim.
 
 ## RAG Backend Mode
 
@@ -254,7 +266,8 @@ For the default docker-compose stack, use wrapper script:
   - use `included_in_context=true` plus `context_reason/context_anchor_rank` to distinguish retrieved anchors from support rows that entered the final prompt
   - if Qdrant errors spike, switch `RAG_BACKEND=legacy` and restart services
   - check `degraded_mode`/`degraded_reason` in diagnostics for dense-channel degradation markers
-  - if the answer model times out or returns a provider transport/status error after retrieval succeeds, the user-facing response should degrade to a retrieval-only extractive fallback built from the selected evidence pack instead of showing the raw provider error; if raw transport text reaches the user, treat it as a regression in the fallback path
+- if the answer model times out or returns a provider transport/status error after retrieval succeeds, the user-facing response should degrade to a retrieval-only extractive fallback built from the selected evidence pack instead of showing the raw provider error; if raw transport text reaches the user, treat it as a regression in the fallback path
+  - for broad compound HOWTO incidents (`how to build and sync` style), verify that diagnostics/context stay within one coherent procedural document family before tuning embeddings or loaders
 
 - Outbox backlog/drift incident:
   - inspect outbox statuses in `index_outbox_events` (`pending`, `processing`, `dead`)

@@ -787,3 +787,149 @@ Status: Draft for CC approval
   - Control: strict redaction, bounded line counts, admin-only access.
 - Risk: mixing wiki archive restore with generic document upload can regress current upload UX.
   - Control: keep a separate bot state and explicit backend method for wiki ZIP recovery.
+
+## 2026-03-18 Plan: explicit proxy env support + broad HOWTO RAG hardening
+
+Date: 2026-03-18
+Status: Draft for CC approval
+
+### Goal
+- Add an explicit, documented outbound proxy contract for containerized runtime traffic.
+- Fix the remaining broad procedural RAG failure where `how to build and sync` returns stitched narrow feature/build pages instead of one coherent build/sync procedure.
+- Exclude temporary agent-generated files from the repository while preserving durable coordination artifacts.
+
+### Implementation checklist
+- [ ] Add config helpers for standard proxy envs and normalize empty values.
+- [ ] Propagate `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` through `docker-compose.yml` and `env.template`.
+- [ ] Wire explicit proxy/trust-env handling into:
+  - [ ] Telegram bot HTTP transport in `frontend/bot.py`
+  - [ ] bot -> backend client in `frontend/backend_client.py`
+  - [ ] selected `requests`-based outbound clients used by runtime retrieval/provider flows
+- [ ] Harden procedural candidate selection in `backend/api/routes/rag.py`:
+  - [ ] prefer coherent procedural anchors for compound HOWTO queries,
+  - [ ] narrow provider fallback/evidence expansion around the best procedural document/section family,
+  - [ ] reduce mixing of version-specific feature pages when a stronger canonical procedure exists.
+- [ ] Add or extend regressions for:
+  - [ ] proxy config normalization / client wiring,
+  - [ ] `how to build and sync` source ordering and fallback answer content,
+  - [ ] local open-harmony smoke remains green for the broad build/sync case.
+- [ ] Define agent-artifact hygiene rules and update repo ignore patterns for temporary files only.
+
+### Verification checklist
+- [ ] `python -m py_compile` for changed Python modules.
+- [ ] Focused `pytest` for proxy wiring and RAG/how-to regressions.
+- [ ] Local open-harmony smoke wrapper re-run for `how to build and sync`.
+- [ ] `python scripts/scan_secrets.py`
+- [ ] `python scripts/ci_policy_gate.py --working-tree`
+
+### Documentation checklist
+- [ ] Add design doc `docs/design/proxy-env-and-rag-howto-hardening-v1.md`.
+- [ ] Update `SPEC.md`.
+- [ ] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [ ] Update `docs/CONFIGURATION.md` and `README.md` for proxy env usage.
+- [ ] Update `docs/OPERATIONS.md` with proxy/runtime troubleshooting notes.
+- [ ] Update repo/docs guidance for tracked coordination artifacts vs ignored temporary agent files.
+
+### Security and rollback
+- [ ] No new dependencies.
+- [ ] Proxy config must not log credential-bearing proxy URLs in plaintext.
+- [ ] Keep rollback simple:
+  - [ ] proxy wiring removable by unsetting proxy env vars,
+  - [ ] RAG ranking/fallback changes guarded by deterministic tests and reversible code-only diff.
+- [ ] Ignore changes must not hide durable review/spec/traceability artifacts that project policy requires to be committed.
+
+## 2026-03-18 Plan: generalized procedural retrieval + multi-corpus validation
+
+Date: 2026-03-18
+Status: Draft for CC approval
+
+### Goal
+- Replace remaining literal/query-specific procedural boosts with a more realistic generalized retrieval policy.
+- Validate generalized behavior across more than one wiki corpus.
+- Add a repeatable local/runtime validation workflow that reuses existing project provider and API paths.
+
+### Implementation checklist
+- [ ] Remove corpus-specific or literal procedural boosts from `backend/api/routes/rag.py`.
+- [ ] Introduce family-level procedural scoring based primarily on structure/cohesion signals:
+  - [ ] same-document / same-section family aggregation
+  - [ ] neighboring-step continuity
+  - [ ] command/step density
+  - [ ] contamination penalty for troubleshooting/version drift
+- [ ] Update context packing and provider fallback to respect the winning evidence family boundary.
+- [ ] Extend local source manifest and smoke tooling for additional corpora:
+  - [ ] local OpenHarmony wiki fixture
+  - [ ] local ArkUI wiki fixture
+- [ ] Generalize the local smoke helper so one harness can run against multiple corpora via env/CLI.
+- [ ] Add optional live-backend smoke mode using existing `/rag/query` API and current provider settings.
+- [ ] Add focused tests for:
+  - [ ] family-selection logic on synthetic mixed-language / mixed-section fixtures
+  - [ ] local multi-corpus smoke harness contract
+  - [ ] optional live smoke contract serialization and failure reporting
+
+### Verification checklist
+- [ ] `python -m py_compile` for changed Python modules and test helpers.
+- [ ] Focused `pytest` for deterministic family-selection and manifest/smoke contract tests.
+- [ ] Local opt-in smoke against env-prepared corpora with temp SQLite DBs.
+- [ ] Optional live-backend smoke against a running backend instance.
+- [ ] `python scripts/scan_secrets.py`
+- [ ] `python scripts/ci_policy_gate.py --working-tree`
+
+### Documentation checklist
+- [ ] Add design doc `docs/design/generalized-procedural-retrieval-and-multi-corpus-validation-v1.md`.
+- [ ] Update `SPEC.md`.
+- [ ] Update `docs/REQUIREMENTS_TRACEABILITY.md`.
+- [ ] Update `docs/TESTING.md` with local corpus preparation and live smoke workflow.
+- [ ] Update `docs/CONFIGURATION.md` for new local/live smoke env vars if approved in implementation.
+
+### Security and data-safety checklist
+- [ ] Keep external corpora local-only and env-resolved; do not commit raw clones/archives.
+- [ ] Keep fast tests network-free.
+- [ ] Redact credentials from live smoke target URLs and provider config.
+- [ ] Ensure optional live smoke is explicitly opt-in and cannot silently hit production endpoints.
+
+## 2026-03-18 Plan: full RAG service architecture and staged pipeline design
+
+Date: 2026-03-18
+Status: Draft for CC approval
+
+### Goal
+- Define one unified architecture plan for the entire RAG service.
+- Decompose the service into explicit pipeline stages with stable contracts.
+- Use that design as the implementation source of truth instead of request-specific tuning.
+
+### Design deliverables
+- [ ] Produce one master architecture spec for the full RAG service.
+- [ ] Define each pipeline stage:
+  - [ ] responsibilities
+  - [ ] inputs/outputs
+  - [ ] failure modes
+  - [ ] observability
+  - [ ] test strategy
+- [ ] Define implementation order by stages/slices with rollback boundaries.
+- [ ] Align the new design with existing RAG docs and mark the new source of truth.
+
+### Proposed pipeline stages
+- [ ] Stage 1: source acquisition and ingest orchestration
+- [ ] Stage 2: parse and canonical document normalization
+- [ ] Stage 3: chunking and structural graph
+- [ ] Stage 4: index write, outbox, and consistency
+- [ ] Stage 5: query understanding
+- [ ] Stage 6: candidate generation
+- [ ] Stage 7: fusion, rerank, and family aggregation
+- [ ] Stage 8: evidence-pack context composition
+- [ ] Stage 9: answer generation, grounding, and safety
+- [ ] Stage 10: diagnostics, eval, and quality gates
+
+### Implementation planning checklist
+- [ ] Define which stages are already partially implemented and can be hardened incrementally.
+- [ ] Define which stages still rely on heuristics that should be retired.
+- [ ] Define acceptance criteria and tests per stage.
+- [ ] Define the first implementation slice after approval.
+
+### Verification checklist
+- [ ] Architect-only cycle: no code changes.
+- [ ] Confirm design artifact presence and coordination state consistency.
+
+### Documentation checklist
+- [ ] Add design doc `docs/design/rag-service-architecture-and-pipeline-v1.md`.
+- [ ] Update coordination tasks/cycle/state for the new design cycle.

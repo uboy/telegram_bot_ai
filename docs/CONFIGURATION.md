@@ -23,6 +23,13 @@ Copy-Item env.template .env
 - `BACKEND_API_PREFIX` (обычно `/api/v1`)
 - `BACKEND_API_KEY`
 - `AI_DEFAULT_PROVIDER`
+- `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` (опционально, для исходящего трафика bot/backend контейнеров)
+
+Прокси-заметки:
+- используйте стандартные env vars, без отдельных project-specific proxy keys;
+- для Telegram обычно используется `HTTPS_PROXY` (или `ALL_PROXY` как fallback);
+- для внутренних docker-сервисов обязательно задавайте `NO_PROXY`, например:
+  - `backend,qdrant,redis,db,n8n,localhost,127.0.0.1`
 
 ### RAG
 - `RAG_ENABLE`
@@ -155,3 +162,4 @@ Copy-Item env.template .env
 - Не коммитьте реальные токены/пароли.
 - Для production всегда задавайте `BACKEND_API_KEY`.
 - Перед завершением задач запускайте `python scripts/scan_secrets.py`.
+- Если proxy URL содержит credentials, не логируйте и не коммитьте его в открытый репозиторий.
