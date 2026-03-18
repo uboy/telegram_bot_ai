@@ -159,6 +159,7 @@ $env:RAG_OPENHARMONY_WIKI_TOP_K="5"
 ```
 
 - Optional live modes:
+  - `RAG_OPENHARMONY_WIKI_MODE=dir` with `RAG_OPENHARMONY_WIKI_DIR_PATH=<local_unpacked_wiki_root>` to reuse an already unpacked local mirror instead of creating a ZIP first.
   - `RAG_OPENHARMONY_WIKI_MODE=git` to exercise the public Gitee clone path against `RAG_OPENHARMONY_WIKI_URL`.
   - `RAG_OPENHARMONY_WIKI_ANSWER_MODE=llm` to let the current provider generate full answers instead of forcing the extractive fallback.
   - `RAG_ENABLE_RERANK=true` if you explicitly want the smoke run to include the CPU-heavy reranker. By default the helper disables reranking to keep the local ZIP ingest + answer check practical on developer machines.
@@ -200,6 +201,7 @@ $env:RAG_ARKUI_WIKI_CASES_JSON='[{"query":"how to create custom component","expe
 ```
 
 - Optional live/backend modes:
+  - `RAG_ARKUI_WIKI_MODE=dir` with `RAG_ARKUI_WIKI_DIR_PATH=<local_unpacked_wiki_root>` to run directly from an unpacked wiki checkout.
   - `RAG_ARKUI_WIKI_MODE=git` to exercise the public clone path against `RAG_ARKUI_WIKI_URL`.
   - `RAG_ARKUI_WIKI_ANSWER_MODE=llm` to let the current provider answer normally.
   - `RAG_ARKUI_WIKI_BACKEND_URL=http://localhost:8000` to run the same cases against a live backend API; set `RAG_ARKUI_WIKI_API_KEY` when needed.

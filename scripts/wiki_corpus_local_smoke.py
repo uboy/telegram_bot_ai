@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -114,9 +115,10 @@ def _parse_args(default_profile: Optional[str] = None) -> argparse.Namespace:
     config = _profile_config(profile)
     env_prefix = str(config["env_prefix"])
 
-    parser.add_argument("--mode", choices=("zip", "git"), default=os.getenv(f"{env_prefix}MODE", str(config["default_mode"])))
+    parser.add_argument("--mode", choices=("zip", "dir", "git"), default=os.getenv(f"{env_prefix}MODE", str(config["default_mode"])))
     parser.add_argument("--wiki-url", default=os.getenv(f"{env_prefix}URL", str(config["wiki_url"])))
     parser.add_argument("--zip-path", default=os.getenv(f"{env_prefix}ZIP_PATH", ""))
+    parser.add_argument("--dir-path", default=os.getenv(f"{env_prefix}DIR_PATH", ""))
     parser.add_argument("--db-path", default=os.getenv(f"{env_prefix}DB_PATH", ""))
     parser.add_argument("--json-out", default="")
     parser.add_argument(
@@ -141,6 +143,26 @@ def _prepare_env(db_path: str) -> None:
     os.environ.setdefault("RAG_ORCHESTRATOR_V4", "true")
     os.environ.setdefault("RAG_LEGACY_QUERY_HEURISTICS", "false")
     os.environ.setdefault("RAG_ENABLE_RERANK", "false")
+
+
+def _materialize_zip_input(args: argparse.Namespace) -> tuple[str, tempfile.TemporaryDirectory[str] | None]:
+    if args.mode == "zip":
+        zip_path = Path(args.zip_path).expanduser().resolve()
+        if not zip_path.exists():
+            raise FileNotFoundError(f"ZIP corpus not found: {zip_path}")
+        return str(zip_path), None
+    if args.mode != "dir":
+        return "", None
+    dir_path = Path(args.dir_path).expanduser().resolve()
+    if not dir_path.exists() or not dir_path.is_dir():
+        raise FileNotFoundError(f"Directory corpus not found: {dir_path}")
+    temp_dir = tempfile.TemporaryDirectory(prefix=f"{args.profile}_dir_smoke_")
+    archive_path = Path(temp_dir.name) / "wiki.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in sorted(dir_path.rglob("*")):
+            if file_path.is_file():
+                archive.write(file_path, file_path.relative_to(dir_path).as_posix())
+    return str(archive_path), temp_dir
 
 
 def _source_path_list(sources: list[Any]) -> list[str]:
@@ -253,22 +275,25 @@ def _run_smoke(args: argparse.Namespace, db_path: str) -> dict[str, Any]:
     kb = rag_system.add_knowledge_base(kb_name, "local-only smoke")
     kb_id = int(kb.id)
 
-    if args.mode == "zip":
-        zip_path = Path(args.zip_path).expanduser().resolve()
-        if not zip_path.exists():
-            raise FileNotFoundError(f"ZIP corpus not found: {zip_path}")
-        ingest_stats = load_wiki_from_zip(
-            zip_path=str(zip_path),
-            wiki_url=args.wiki_url,
-            knowledge_base_id=kb_id,
-            loader_options={"chunk_size": 1200, "overlap": 150},
-        )
-    else:
-        ingest_stats = load_wiki_from_git(
-            wiki_url=args.wiki_url,
-            knowledge_base_id=kb_id,
-            loader_options={"chunk_size": 1200, "overlap": 150},
-        )
+    temp_zip_dir: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        if args.mode in {"zip", "dir"}:
+            zip_path, temp_zip_dir = _materialize_zip_input(args)
+            ingest_stats = load_wiki_from_zip(
+                zip_path=zip_path,
+                wiki_url=args.wiki_url,
+                knowledge_base_id=kb_id,
+                loader_options={"chunk_size": 1200, "overlap": 150},
+            )
+        else:
+            ingest_stats = load_wiki_from_git(
+                wiki_url=args.wiki_url,
+                knowledge_base_id=kb_id,
+                loader_options={"chunk_size": 1200, "overlap": 150},
+            )
+    finally:
+        if temp_zip_dir is not None:
+            temp_zip_dir.cleanup()
 
     rag_system._load_index(kb_id)
 
