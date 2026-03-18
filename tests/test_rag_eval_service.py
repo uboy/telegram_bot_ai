@@ -216,6 +216,31 @@ def test_case_slices_include_source_family_and_security_scenario():
     } <= slices
 
 
+def test_case_slices_include_navigation_and_troubleshooting_signals():
+    navigation_case = {
+        "query": "where can i find official openharmony documentation",
+        "source_family": "arkuiwiki_docs",
+        "tags": ["navigation"],
+        "expected_answer_mode": "grounded_answer",
+        "security_expectation": "normal",
+        "attack_type": "none",
+    }
+    troubleshooting_case = {
+        "query": "how to fix previewer white screen",
+        "source_family": "arkuiwiki_docs",
+        "tags": ["troubleshooting"],
+        "expected_answer_mode": "grounded_answer",
+        "security_expectation": "normal",
+        "attack_type": "none",
+    }
+
+    navigation_slices = eval_module._case_slices(navigation_case)
+    troubleshooting_slices = eval_module._case_slices(troubleshooting_case)
+
+    assert {"navigation", "arkuiwiki_docs"} <= navigation_slices
+    assert {"troubleshooting", "howto", "arkuiwiki_docs"} <= troubleshooting_slices
+
+
 def test_suite_path_supports_named_multicorpus_suite():
     suite_path = eval_module._suite_path("rag-multicorpus-v1")
 

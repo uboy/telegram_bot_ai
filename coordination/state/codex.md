@@ -2875,3 +2875,13 @@
 - Focused verification passed:
   - `python -m py_compile scripts/wiki_corpus_local_smoke.py tests/test_wiki_corpus_local_smoke.py` -> PASS
   - `.venv\Scripts\python.exe -m pytest -q tests/test_wiki_corpus_local_smoke.py` -> PASS (`6 passed`)
+
+## 2026-03-18 RAGSVC slice 8 implementation snapshot
+- Follow-up slice selected after local-dir smoke support:
+  - broaden the public multicorpus eval contract beyond HOWTO-only cases.
+- Runtime/test changes completed:
+  - `backend/services/rag_eval_service.py` now exposes `navigation` and `troubleshooting` in the default slice taxonomy and infers those slices from query text,
+  - `tests/data/rag_eval_multicorpus_public_v1.yaml` now includes public-safe definition, navigation, and troubleshooting cases from OpenHarmony and ArkUI docs,
+  - eval-service tests now assert slice inference for navigation/troubleshooting and the expanded multicorpus suite contract.
+- Verification pending:
+  - run focused `py_compile`, `pytest`, and `scan_secrets` for the eval-service/files touched in this slice.

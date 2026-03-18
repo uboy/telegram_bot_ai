@@ -19,6 +19,12 @@ REQUIRED_QUERY_SLICES = {
     "numeric",
     "long-context",
 }
+REQUIRED_MULTICORPUS_QUERY_SLICES = {
+    "howto",
+    "definition",
+    "navigation",
+    "troubleshooting",
+}
 REQUIRED_SOURCE_FAMILIES = {
     "pdf",
     "open_harmony_docs",
@@ -118,13 +124,20 @@ def test_multicorpus_public_eval_suite_contract():
     assert isinstance(raw, dict)
     assert str(raw.get("dataset_version") or "").strip() == "rag_eval_multicorpus_public_v1"
     cases = raw.get("test_cases")
-    assert isinstance(cases, list) and len(cases) >= 4
+    assert isinstance(cases, list) and len(cases) >= 7
 
     source_families = {str(case.get("source_family") or "").strip() for case in cases if isinstance(case, dict)}
     assert {"open_harmony_docs", "arkuiwiki_docs"} <= source_families
 
     ids = [str(case.get("id") or "").strip() for case in cases if isinstance(case, dict)]
     assert len(ids) == len(set(ids))
+
+    query_slices = set()
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        query_slices.update(REQUIRED_MULTICORPUS_QUERY_SLICES.intersection(eval_module._case_slices(case)))
+    assert REQUIRED_MULTICORPUS_QUERY_SLICES.issubset(query_slices)
 
     raw_text = path.read_text(encoding="utf-8")
     forbidden_patterns = [

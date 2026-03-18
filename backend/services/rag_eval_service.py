@@ -66,6 +66,8 @@ def _default_slices() -> List[str]:
         "factoid",
         "howto",
         "definition",
+        "navigation",
+        "troubleshooting",
         "legal",
         "numeric",
         "long-context",
@@ -339,6 +341,12 @@ def _case_slices(case: Dict[str, Any]) -> set[str]:
         slices.add("howto")
     if any(term in q for term in ("кто", "какой", "какие", "сколько", "when", "who", "what", "how often")):
         slices.add("factoid")
+    if any(term in q for term in ("what is", "что такое", "overview", "обзор", "defined", "определ")):
+        slices.add("definition")
+    if any(term in q for term in ("where is", "where can i find", "find", "locate", "где", "где найти", "documentation")):
+        slices.add("navigation")
+    if any(term in q for term in ("fix", "issue", "issues", "error", "errors", "debug", "white screen", "problem", "troubleshoot", "patch")):
+        slices.add("troubleshooting")
     if any(term in q for term in ("закон", "стратег", "policy", "regulation", "legal", "прав")):
         slices.add("legal")
     return slices
