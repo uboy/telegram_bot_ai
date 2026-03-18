@@ -427,6 +427,16 @@ Architectural choices should be validated through diagnostics and eval, not only
   - route-level context selection for a non-HOWTO query,
   - existing procedural/fallback regressions remaining green.
 
+#### Phase B, slice 2 implemented on 2026-03-18
+- retrieval diagnostics now surface family annotations for candidate rows:
+  - `family_key`
+  - `family_rank`
+- this keeps family-aware routing observable without changing the public query contract;
+- focused diagnostics regressions cover:
+  - persistence of family annotations,
+  - context-support rows retaining family identity,
+  - OpenAPI schema exposure for the additive fields.
+
 ### Phase C. Context and fallback hardening
 - make context/fallback family-bounded
 - improve deterministic evidence-pack coverage

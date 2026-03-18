@@ -59,6 +59,8 @@ _CONTEXT_TRACE_SELECTED_KEY = "_diag_context_selected"
 _CONTEXT_TRACE_RANK_KEY = "_diag_context_rank"
 _CONTEXT_TRACE_REASON_KEY = "_diag_context_reason"
 _CONTEXT_TRACE_ANCHOR_RANK_KEY = "_diag_context_anchor_rank"
+_FAMILY_TRACE_KEY = "_diag_family_key"
+_FAMILY_TRACE_RANK_KEY = "_diag_family_rank"
 _PROVIDER_ERROR_PREFIXES = (
     "Ошибка подключения к ",
     "Ошибка при обращении к ",
@@ -862,6 +864,8 @@ def _expand_anchor_evidence_rows(anchor: dict, doc_chunks: List[dict]) -> List[d
     if not doc_chunks:
         return [anchor]
     anchor_info = describe_context_chunk(anchor)
+    anchor_family_key = str(anchor.get("_family_key") or "").strip()
+    anchor_family_rank = _coerce_positive_int(anchor.get("_family_rank"))
     if anchor_info.get("chunk_kind") in {"code_file", "full_doc"}:
         return [anchor]
     anchor_index = _resolve_doc_chunk_anchor_index(anchor, doc_chunks)
@@ -919,6 +923,10 @@ def _expand_anchor_evidence_rows(anchor: dict, doc_chunks: List[dict]) -> List[d
     for _index, candidate, reason in selected:
         row = dict(candidate)
         row["_context_reason"] = reason
+        if anchor_family_key:
+            row["_family_key"] = anchor_family_key
+        if anchor_family_rank is not None:
+            row["_family_rank"] = anchor_family_rank
         expanded_rows.append(row)
     return expanded_rows
 
@@ -936,8 +944,8 @@ def _context_family_key(row: dict) -> str:
 
 
 def _order_rows_by_family_cohesion(ranked_results: List[dict]) -> List[dict]:
-    if len(ranked_results or []) <= 2:
-        return list(ranked_results or [])
+    if not ranked_results:
+        return []
 
     family_buckets: Dict[str, List[tuple[int, dict]]] = {}
     family_best: Dict[str, float] = {}
@@ -1324,6 +1332,8 @@ def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict
         _CONTEXT_TRACE_RANK_KEY,
         _CONTEXT_TRACE_REASON_KEY,
         _CONTEXT_TRACE_ANCHOR_RANK_KEY,
+        _FAMILY_TRACE_KEY,
+        _FAMILY_TRACE_RANK_KEY,
     ):
         metadata_obj.pop(key, None)
 
@@ -1333,21 +1343,32 @@ def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict
         metadata_obj[_CONTEXT_TRACE_REASON_KEY] = trace.get("context_reason")
         if trace.get("context_anchor_rank") is not None:
             metadata_obj[_CONTEXT_TRACE_ANCHOR_RANK_KEY] = trace.get("context_anchor_rank")
+    family_key = str(row.get("_family_key") or "").strip()
+    family_rank = _coerce_positive_int(row.get("_family_rank"))
+    if family_key:
+        metadata_obj[_FAMILY_TRACE_KEY] = family_key[:200]
+        row["_family_key"] = family_key[:200]
+    if family_rank is not None:
+        metadata_obj[_FAMILY_TRACE_RANK_KEY] = family_rank
+        row["_family_rank"] = family_rank
 
     row["metadata"] = metadata_obj
     return row
 
 
-def _extract_context_trace_from_metadata(metadata_obj: Optional[Dict[str, Any]]) -> tuple[bool, Optional[int], Optional[str], Optional[int], Optional[Dict[str, Any]]]:
+def _extract_context_trace_from_metadata(metadata_obj: Optional[Dict[str, Any]]) -> tuple[bool, Optional[int], Optional[str], Optional[int], Optional[str], Optional[int], Optional[Dict[str, Any]]]:
     if not isinstance(metadata_obj, dict):
-        return False, None, None, None, metadata_obj
+        return False, None, None, None, None, None, metadata_obj
     clean_metadata = dict(metadata_obj)
     included_in_context = _coerce_bool(clean_metadata.pop(_CONTEXT_TRACE_SELECTED_KEY, None))
     context_rank = _coerce_positive_int(clean_metadata.pop(_CONTEXT_TRACE_RANK_KEY, None))
     context_reason_raw = clean_metadata.pop(_CONTEXT_TRACE_REASON_KEY, None)
     context_reason = str(context_reason_raw).strip()[:64] if context_reason_raw is not None else None
     context_anchor_rank = _coerce_positive_int(clean_metadata.pop(_CONTEXT_TRACE_ANCHOR_RANK_KEY, None))
-    return bool(included_in_context), context_rank, context_reason, context_anchor_rank, clean_metadata
+    family_key_raw = clean_metadata.pop(_FAMILY_TRACE_KEY, None)
+    family_key = str(family_key_raw).strip()[:200] if family_key_raw is not None else None
+    family_rank = _coerce_positive_int(clean_metadata.pop(_FAMILY_TRACE_RANK_KEY, None))
+    return bool(included_in_context), context_rank, context_reason, context_anchor_rank, family_key, family_rank, clean_metadata
 
 
 def _merge_context_diagnostics_candidates(
@@ -1397,7 +1418,12 @@ def _merge_context_diagnostics_candidates(
                 if token in trace_by_token:
                     trace = trace_by_token[token]
                     break
-            merged_candidates.append(_decorate_candidate_with_context_trace(candidate, trace))
+            merged_candidate = _decorate_candidate_with_context_trace(candidate, trace)
+            if not merged_candidate.get("_family_key") and decorated.get("_family_key"):
+                merged_candidate["_family_key"] = decorated.get("_family_key")
+            if not merged_candidate.get("_family_rank") and decorated.get("_family_rank"):
+                merged_candidate["_family_rank"] = decorated.get("_family_rank")
+            merged_candidates.append(merged_candidate)
             emitted_token_sets.append(candidate_tokens or tokens)
             continue
 
@@ -1466,6 +1492,15 @@ def _persist_retrieval_logs(
         for rank, candidate in enumerate((candidates or [])[:20], start=1):
             candidate_trace = dict(candidate) if isinstance(candidate, dict) else {}
             metadata_obj = candidate_trace.get("metadata") if isinstance(candidate_trace, dict) else {}
+            if not isinstance(metadata_obj, dict):
+                metadata_obj = {}
+            metadata_obj = dict(metadata_obj)
+            family_key = str(candidate_trace.get("_family_key") or "").strip()
+            family_rank = _coerce_positive_int(candidate_trace.get("_family_rank"))
+            if family_key:
+                metadata_obj[_FAMILY_TRACE_KEY] = family_key[:200]
+            if family_rank is not None:
+                metadata_obj[_FAMILY_TRACE_RANK_KEY] = family_rank
             metadata_json = _safe_json_dumps(metadata_obj if isinstance(metadata_obj, dict) else {})
             content_preview = ""
             if isinstance(candidate_trace, dict):
@@ -2465,7 +2500,7 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
     candidates: List[RAGDiagnosticsCandidate] = []
     for fallback_rank, row in enumerate(candidate_rows, start=1):
         meta_obj = _safe_json_loads(getattr(row, "metadata_json", None))
-        included_in_context, context_rank, context_reason, context_anchor_rank, meta_obj = _extract_context_trace_from_metadata(meta_obj)
+        included_in_context, context_rank, context_reason, context_anchor_rank, family_key, family_rank, meta_obj = _extract_context_trace_from_metadata(meta_obj)
         trace = {
             "fusion_score": getattr(row, "fusion_score", None),
             "rerank_score": getattr(row, "rerank_score", None),
@@ -2494,6 +2529,8 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
                 context_rank=context_rank,
                 context_reason=context_reason,
                 context_anchor_rank=context_anchor_rank,
+                family_key=family_key,
+                family_rank=family_rank,
                 metadata=meta_obj,
                 content_preview=getattr(row, "content_preview", None),
             )

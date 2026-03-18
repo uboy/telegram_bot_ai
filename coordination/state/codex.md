@@ -2774,3 +2774,19 @@
   - `MYSQL_URL='' DB_PATH=data/ragsvc-slice1-test.db .venv\Scripts\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_compound_howto_focus.py tests/test_rag_metadata_field_search.py` -> `17 passed`
 - Next step:
   - run secret/policy gates and finish spec/traceability/review-state synchronization for this slice.
+
+### 2026-03-18 RAGSVC slice 2 implementation snapshot
+- Follow-up slice selected after slice 1:
+  - make family-aware routing observable in diagnostics instead of keeping it implicit.
+- Runtime changes completed:
+  - `backend/schemas/rag.py` now exposes additive diagnostics fields `family_key` and `family_rank`,
+  - `backend/api/routes/rag.py` now persists family metadata through ranked rows, expanded context rows, synthetic context-support rows, and diagnostics serialization.
+- Regression coverage added/extended:
+  - `tests/test_rag_diagnostics.py`
+  - `tests/test_rag_diagnostics_contract.py`
+- Focused verification passed with hermetic local DB env:
+  - `python -m py_compile backend/api/routes/rag.py backend/schemas/rag.py tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py` -> PASS
+  - `MYSQL_URL='' DB_PATH=data/ragsvc-slice2-test.db .venv\Scripts\python.exe -m pytest -q tests/test_rag_diagnostics.py tests/test_rag_diagnostics_contract.py` -> `12 passed`
+- Current status:
+  - family-first routing is now both implemented and observable,
+  - next logical slice would be deeper family aggregation / live multi-corpus validation rather than more local route heuristics.
