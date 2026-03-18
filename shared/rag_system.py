@@ -852,11 +852,23 @@ class RAGSystem:
         except Exception:
             return False
     
-    def _get_embedding(self, text: str) -> Optional[np.ndarray]:
-        """Получить эмбеддинг текста"""
+    def _is_e5_model(self) -> bool:
+        """Проверить, требует ли модель E5-style prefixes (query:/passage:)."""
+        return "e5" in (self.model_name or "").lower()
+
+    def _get_embedding(self, text: str, is_query: bool = False) -> Optional[np.ndarray]:
+        """Получить эмбеддинг текста.
+
+        Для E5-семейства моделей (multilingual-e5-*, e5-large-v2, etc.) автоматически
+        добавляет обязательные префиксы: 'query: ' для запросов, 'passage: ' для документов.
+        Без префиксов E5-модели работают значительно хуже.
+        """
         if not HAS_EMBEDDINGS or not self.encoder:
             return None
         try:
+            if self._is_e5_model():
+                prefix = "query: " if is_query else "passage: "
+                text = prefix + text
             if pipeline_embed_texts:
                 vectors = pipeline_embed_texts([text], encoder=self.encoder)
                 if not vectors or vectors[0] is None:
@@ -1815,7 +1827,7 @@ class RAGSystem:
                 self._load_index(None)
         
         # Векторный поиск
-        query_embedding = self._get_embedding(query)
+        query_embedding = self._get_embedding(query, is_query=True)
         if query_embedding is None:
             return self._simple_search(query, knowledge_base_id, top_k)
 

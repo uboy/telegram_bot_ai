@@ -201,6 +201,14 @@ class MarkdownLoader(DocumentLoader):
                     return text_out
 
                 for idx, part in enumerate(sec_chunks, start=1):
+                    # Prepend section path as context so BM25 and dense embeddings
+                    # capture the section topic (e.g. "Build > SDK") even when the
+                    # raw chunk text is just a list of commands without that heading.
+                    # Only inject when the section path adds information beyond the
+                    # document title itself.
+                    if sec_path and sec_path not in (doc_title, "ROOT", ""):
+                        part = f"[{sec_path}]\n\n{part}"
+
                     # title = doc_title (для поиска по документу, а не по секции)
                     # section_title = заголовок секции (для навигации)
                     title = doc_title
