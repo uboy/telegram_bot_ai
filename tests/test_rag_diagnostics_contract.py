@@ -234,6 +234,8 @@ def test_rag_diagnostics_returns_strict_trace_fields_for_legacy_rows():
     assert result.candidates[0].context_rank is None
     assert result.candidates[0].context_reason is None
     assert result.candidates[0].context_anchor_rank is None
+    assert result.candidates[0].family_key is None
+    assert result.candidates[0].family_rank is None
 
 
 def test_rag_diagnostics_openapi_schema_exposes_required_trace_fields():
@@ -247,4 +249,39 @@ def test_rag_diagnostics_openapi_schema_exposes_required_trace_fields():
     assert {"origin", "channel", "channel_rank", "fusion_rank", "fusion_score", "included_in_context"} <= set(
         candidate_schema.get("required") or []
     )
-    assert {"context_rank", "context_reason", "context_anchor_rank"} <= set(candidate_schema["properties"])
+    assert {"context_rank", "context_reason", "context_anchor_rank", "family_key", "family_rank"} <= set(candidate_schema["properties"])
+
+
+def test_persist_retrieval_logs_keeps_family_trace_in_diagnostics_metadata():
+    db = DummyDB()
+
+    _persist_retrieval_logs(
+        db=db,
+        request_id="req-family",
+        query="Where is the deployment checklist?",
+        knowledge_base_id=9,
+        intent="GENERAL",
+        hints={"retrieval_core_mode": "generalized"},
+        filters={},
+        total_candidates=2,
+        total_selected=2,
+        latency_ms=44,
+        backend_name="qdrant",
+        candidates=[
+            {
+                "source_path": "doc://deploy",
+                "source_type": "md",
+                "origin": "qdrant",
+                "channel": "qdrant",
+                "distance": -0.31,
+                "content": "Deployment checklist step 1",
+                "_family_key": "doc://deploy::section:deployment guide > checklist",
+                "_family_rank": 1,
+            }
+        ],
+    )
+
+    result = rag_diagnostics("req-family", db=db)
+
+    assert result.candidates[0].family_key == "doc://deploy::section:deployment guide > checklist"
+    assert result.candidates[0].family_rank == 1

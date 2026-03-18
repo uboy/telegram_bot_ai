@@ -252,6 +252,8 @@ def test_rag_diagnostics_returns_candidates():
     assert result.candidates[0].context_rank == 1
     assert result.candidates[0].context_reason == "primary"
     assert result.candidates[0].context_anchor_rank == 1
+    assert result.candidates[0].family_key is None
+    assert result.candidates[0].family_rank is None
 
 
 def test_rag_query_diagnostics_include_context_support_rows(monkeypatch):
@@ -336,12 +338,16 @@ def test_rag_query_diagnostics_include_context_support_rows(monkeypatch):
     assert diagnostics.candidates[0].context_rank == 1
     assert diagnostics.candidates[0].context_reason == "primary"
     assert diagnostics.candidates[0].context_anchor_rank == 1
+    assert diagnostics.candidates[0].family_key == "doc://guide::section:sync guide > sync and build"
+    assert diagnostics.candidates[0].family_rank == 1
     assert diagnostics.candidates[1].origin == "context_support"
     assert diagnostics.candidates[1].channel == "context_support"
     assert diagnostics.candidates[1].included_in_context is True
     assert diagnostics.candidates[1].context_rank == 2
     assert diagnostics.candidates[1].context_reason == "adjacent_prev"
     assert diagnostics.candidates[1].context_anchor_rank == 1
+    assert diagnostics.candidates[1].family_key == "doc://guide::section:sync guide > sync and build"
+    assert diagnostics.candidates[1].family_rank == 1
     assert diagnostics.candidates[1].metadata.get("section_path") == "Sync Guide > Sync and Build"
     assert "_diag_context_selected" not in (diagnostics.candidates[1].metadata or {})
 
