@@ -87,6 +87,43 @@ def test_focus_compound_howto_rows_prefers_syncbuild_family():
     assert [row["source_path"] for row in focused] == ["doc://sync-build"]
 
 
+def test_focus_compound_howto_rows_prefers_distinctive_previewer_family():
+    rows = [
+        {
+            "content": "./build.sh --product-name previewer",
+            "metadata": {
+                "doc_title": "Build Guide",
+                "section_title": "Build steps",
+                "section_path": "Build Guide > Build steps",
+                "section_path_norm": "build guide > build steps",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://generic-build",
+            "source_type": "markdown",
+            "rank_score": 0.91,
+        },
+        {
+            "content": "wget -c https://example.test/spreviewer_arkts12_master.patch\npatch -p1 < spreviewer_arkts12_master.patch",
+            "metadata": {
+                "doc_title": "Linux Previewer Guide",
+                "section_title": "MASTER branch patch",
+                "section_path": "Linux Previewer Guide > MASTER branch patch",
+                "section_path_norm": "linux previewer guide > master branch patch",
+                "chunk_no": 2,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://previewer-master",
+            "source_type": "markdown",
+            "rank_score": 0.86,
+        },
+    ]
+
+    focused = _focus_compound_howto_rows("how to build previewer for master branch", rows)
+
+    assert [row["source_path"] for row in focused] == ["doc://previewer-master"]
+
+
 def test_rag_query_compound_howto_focuses_one_procedural_family(monkeypatch):
     from backend.api.routes import rag as rag_module
 

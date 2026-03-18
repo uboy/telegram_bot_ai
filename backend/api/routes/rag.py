@@ -1195,18 +1195,84 @@ def _select_provider_fallback_rows(
     return pack_rows or family_ordered_results[: max(5, context_limit * 2)]
 
 
+def _extract_procedural_focus_terms(query: str) -> List[str]:
+    query_lower = _normalize_query_text(query).lower()
+    if not query_lower:
+        return []
+    stop_terms = {
+        "how",
+        "howto",
+        "как",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "this",
+        "that",
+        "what",
+        "when",
+        "where",
+        "which",
+        "guide",
+        "steps",
+        "step",
+        "instruction",
+        "instructions",
+        "setup",
+        "install",
+        "configure",
+        "initialize",
+        "init",
+        "build",
+        "run",
+        "sync",
+        "prepare",
+        "code",
+        "local",
+        "branch",
+    }
+    terms: List[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[a-zа-яё0-9][a-zа-яё0-9._/-]{2,}", query_lower):
+        if token in stop_terms or token.isdigit():
+            continue
+        if token not in seen:
+            terms.append(token)
+            seen.add(token)
+    return terms[:8]
+
+
+def _extract_procedural_match_terms(query: str) -> List[str]:
+    focus_terms = _extract_procedural_focus_terms(query)
+    if focus_terms:
+        return focus_terms
+    query_lower = _normalize_query_text(query).lower()
+    fallback_terms: List[str] = []
+    for marker in ("sync", "build", "install", "setup", "configure", "initialize", "init", "run", "prepare"):
+        if marker in query_lower and marker not in fallback_terms:
+            fallback_terms.append(marker)
+    return fallback_terms
+
+
 def _is_compound_howto_query(query: str) -> bool:
     query_lower = _normalize_query_text(query).lower()
     if not query_lower:
         return False
-    markers = ("sync", "build", "install", "setup", "configure", "initialize", "init", "run")
-    hits = {marker for marker in markers if marker in query_lower}
-    return len(hits) >= 2 and any(token in query_lower for token in ("how to", "как ", "steps", "guide"))
+    focus_terms = _extract_procedural_focus_terms(query_lower)
+    has_explicit_howto_cue = any(token in query_lower for token in ("how to", "как ", "steps", "guide"))
+    procedural_action_markers = ("sync", "build", "install", "setup", "configure", "initialize", "init", "run", "prepare")
+    action_hits = {marker for marker in procedural_action_markers if marker in query_lower}
+    if has_explicit_howto_cue and len(action_hits) >= 2:
+        return True
+    return len(focus_terms) >= 2 and (has_explicit_howto_cue or len(action_hits) >= 2)
 
 
 def _compute_procedural_family_score(query: str, row: dict) -> float:
     query_lower = _normalize_query_text(query).lower()
     query_tokens = set(re.findall(r"[a-zа-яё0-9]{3,}", query_lower))
+    focus_terms = _extract_procedural_match_terms(query_lower)
     info = describe_context_chunk(row)
     meta = row.get("metadata") or {}
     doc_title = _normalize_query_text(meta.get("doc_title") or meta.get("title") or "").lower()
@@ -1240,21 +1306,23 @@ def _compute_procedural_family_score(query: str, row: dict) -> float:
     ):
         if any(marker in field_value for marker in procedural_markers):
             score += weight
-        if "sync" in field_value and "build" in field_value:
-            score += 1.8
-            procedural_hits += 2
-        else:
-            if "sync" in field_value:
-                score += 0.7
-                procedural_hits += 1
-            if "build" in field_value:
-                score += 0.7
-                procedural_hits += 1
+        field_term_hits = sum(1 for term in focus_terms if term in field_value)
+        if field_term_hits:
+            score += min(weight * 1.8, field_term_hits * (0.45 + weight * 0.2))
+            procedural_hits += field_term_hits
+            if field_term_hits >= 2:
+                score += 0.35 * weight
         if any(marker in field_value for marker in troubleshooting_markers):
             score -= weight * 1.4
-    if any(marker in text for marker in ("repo init", "repo sync", "./build.sh", "build/prebuilts_download.sh")):
-        score += 2.0
-        procedural_hits += 2
+    text_term_hits = sum(1 for term in focus_terms if term in text)
+    if text_term_hits:
+        score += min(1.6, text_term_hits * 0.35)
+        procedural_hits += min(text_term_hits, 2)
+    if re.search(r"(^|[\n`\s])(\./|repo\s|patch -p|export\s|hb\s|gn\s|ninja\s|pip\s|npm\s)", text):
+        score += 0.8
+        if text_term_hits:
+            score += 0.6
+            procedural_hits += 1
     overlap = sum(1 for token in query_tokens if token in doc_title or token in section_title or token in section_path or token in source_path)
     score += min(1.6, overlap * 0.3)
     if re.search(r"\bv\d{2,4}\b", " ".join((doc_title, section_title, section_path, source_path))) and procedural_hits < 3:
@@ -1291,8 +1359,9 @@ def _focus_compound_howto_rows(query: str, ranked_results: List[dict]) -> List[d
                 _normalize_query_text(row.get("content") or "").lower(),
             ]
         )
-        hit_count = int("sync" in combined_text) + int("build" in combined_text)
-        if "repo init" in combined_text or "repo sync" in combined_text or "build/prebuilts_download.sh" in combined_text:
+        focus_terms = _extract_procedural_match_terms(query)
+        hit_count = sum(1 for term in focus_terms if term in combined_text)
+        if re.search(r"(^|[\n`\s])(\./|repo\s|patch -p|export\s|hb\s|gn\s|ninja\s|pip\s|npm\s)", combined_text):
             hit_count += 1
         family_compound_hits[family_key] = max(family_compound_hits.get(family_key, 0), hit_count)
 
@@ -1814,6 +1883,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     "failed",
                     "failure",
                 )
+                focus_terms = _extract_procedural_match_terms(query)
                 if any(t in section_title for t in ("how to", "build", "run", "steps")):
                     score += 1.0
                 if any(t in doc_title for t in procedural_markers):
@@ -1830,17 +1900,20 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     score -= 1.8
                 if any(t in section_path for t in troubleshooting_markers):
                     score -= 1.5
-                if "sync" in q and "build" in q:
-                    if ("sync" in section_title or "sync" in section_path) and ("build" in section_title or "build" in section_path):
-                        score += 1.6
-                    if ("sync" in doc_title or "sync" in source_path) and ("build" in doc_title or "build" in source_path):
-                        score += 1.2
-                if "sync" in q:
-                    if "sync" in source_path or "sync" in doc_title or "sync" in section_title:
-                        score += 1.5
-                if "build" in q:
-                    if "build" in source_path or "build" in doc_title or "build" in section_title:
+                title_path_hits = sum(
+                    1
+                    for term in focus_terms
+                    if term in source_path or term in doc_title or term in section_title or term in section_path
+                )
+                if title_path_hits:
+                    score += min(2.0, title_path_hits * 0.55)
+                    if title_path_hits >= 2:
                         score += 0.5
+                text_hits = sum(1 for term in focus_terms if term in text)
+                if text_hits:
+                    score += min(1.2, text_hits * 0.25)
+                if focus_terms and re.search(r"(^|[\n`\s])(\./|repo\s|patch -p|export\s|hb\s|gn\s|ninja\s|pip\s|npm\s)", text):
+                    score += 0.8
 
             if intent == "DEFINITION":
                 definition_markers = (
