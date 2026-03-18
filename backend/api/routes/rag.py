@@ -1830,10 +1830,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     score -= 1.8
                 if any(t in section_path for t in troubleshooting_markers):
                     score -= 1.5
-                # Prefer explicit Sync&Build docs for sync/build queries.
                 if "sync" in q and "build" in q:
-                    if "sync&build" in source_path or "sync&build" in doc_title or "sync&build" in section_title:
-                        score += 4.0
                     if ("sync" in section_title or "sync" in section_path) and ("build" in section_title or "build" in section_path):
                         score += 1.6
                     if ("sync" in doc_title or "sync" in source_path) and ("build" in doc_title or "build" in source_path):

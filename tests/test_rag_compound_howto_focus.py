@@ -183,3 +183,57 @@ def test_rag_query_compound_howto_focuses_one_procedural_family(monkeypatch):
     assert "Previewer patch" not in result.answer
     assert "Possible build issues" not in result.answer
     assert [source.source_path for source in result.sources] == ["doc://sync-build"]
+
+
+def test_rag_query_legacy_howto_does_not_hardcode_syncbuild_title(monkeypatch):
+    from backend.api.routes import rag as rag_module
+    import shared.config as shared_config
+
+    monkeypatch.setattr(shared_config, "RAG_ORCHESTRATOR_V4", False, raising=False)
+    monkeypatch.setattr(shared_config, "RAG_LEGACY_QUERY_HEURISTICS", True, raising=False)
+
+    search_results = [
+        {
+            "content": "Previewer patch notes for a legacy mirror build.",
+            "metadata": {
+                "doc_title": "Sync&Build",
+                "section_title": "Overview",
+                "section_path": "Sync&Build > Overview",
+                "section_path_norm": "sync&build > overview",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://syncbuild-overview",
+            "source_type": "markdown",
+            "distance": 0.10,
+            "rerank_score": 0.90,
+        },
+        {
+            "content": "repo init -u https://gitcode.com/openharmony/manifest.git -b master --no-repo-verify\nrepo sync -c -j 8\nbuild/prebuilts_download.sh",
+            "metadata": {
+                "doc_title": "Platform Build",
+                "section_title": "Initialize repository and sync code",
+                "section_path": "Platform Build > Initialize repository and sync code",
+                "section_path_norm": "platform build > initialize repository and sync code",
+                "chunk_no": 2,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://platform-build",
+            "source_type": "markdown",
+            "distance": 0.20,
+            "rerank_score": 0.80,
+        },
+    ]
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("FakeRag", (), {"search": staticmethod(lambda query, knowledge_base_id=None, top_k=8: list(search_results))})(),
+    )
+    monkeypatch.setattr(rag_module, "ai_manager", type("EchoAi", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    result = rag_query(RAGQuery(query="how to build and sync", knowledge_base_id=1), db=DummyDB())
+
+    assert "repo init" in result.answer
+    assert "Previewer patch notes" not in result.answer
+    assert [source.source_path for source in result.sources] == ["doc://platform-build"]

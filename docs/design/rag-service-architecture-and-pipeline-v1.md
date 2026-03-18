@@ -446,6 +446,13 @@ Architectural choices should be validated through diagnostics and eval, not only
   - generalized no-rerank ordering by supported family,
   - singleton-only candidate sets preserving the previous fusion order.
 
+#### Phase B, slice 4 implemented on 2026-03-18
+- route-level HOWTO boosts no longer hardcode the literal `Sync&Build` page name;
+- broad procedural ranking now relies on generic field coverage and family support, so a misleading title match cannot outrank a stronger procedural family on name alone;
+- focused regressions cover:
+  - misleading title match losing to stronger procedural evidence,
+  - existing compound-HOWTO family-focus behavior remaining green.
+
 ### Phase C. Context and fallback hardening
 - make context/fallback family-bounded
 - improve deterministic evidence-pack coverage
@@ -454,6 +461,15 @@ Architectural choices should be validated through diagnostics and eval, not only
 - generalize local smoke harnesses
 - add additional local corpus fixtures
 - add optional live backend smoke
+
+#### Phase D, slice 1 implemented on 2026-03-18
+- eval-service suite loading now supports named public-safe datasets instead of one implicit fixture path;
+- the committed `rag-multicorpus-v1` suite validates both `open_harmony_docs` and `arkuiwiki_docs` without embedding local absolute paths;
+- the source manifest now exposes developer-local corpus roots only through env overrides, including `RAG_EVAL_LOCAL_ARKUIWIKI_PATH`;
+- focused regressions cover:
+  - named suite-path resolution,
+  - suite-name propagation into YAML loading,
+  - public-safe multicorpus dataset contract.
 
 ### Phase E. Quality-gated iteration
 - compare candidate strategies on metrics and failure analysis

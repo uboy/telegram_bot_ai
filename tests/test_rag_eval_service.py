@@ -30,7 +30,7 @@ def test_eval_service_sync_run_completes(monkeypatch):
         },
     ]
 
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: cases)
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": cases)
 
     def fake_search(query, knowledge_base_id=None, top_k=10):  # noqa: ARG001
         if "build" in query:
@@ -88,7 +88,7 @@ def test_eval_service_sync_run_uses_eval_kb_id_when_configured(monkeypatch):
             "attack_type": "none",
         }
     ]
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: cases)
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": cases)
     monkeypatch.setenv("RAG_EVAL_KB_ID", "42")
 
     def fake_search(query, knowledge_base_id=None, top_k=10):  # noqa: ARG001
@@ -142,7 +142,7 @@ def test_eval_service_sync_run_persists_slice_specific_thresholds_and_failure_mo
         },
     ]
 
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: cases)
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": cases)
 
     def fake_search(query, knowledge_base_id=None, top_k=10):  # noqa: ARG001
         if "password" in query:
@@ -177,7 +177,7 @@ def test_eval_service_sync_run_persists_slice_specific_thresholds_and_failure_mo
 
 def test_eval_service_sync_run_fails_without_cases(monkeypatch):
     service = eval_module.RAGEvalService()
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: [])
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": [])
 
     run_id = service.start_run(
         suite_name="rag-general-v1",
@@ -214,6 +214,27 @@ def test_case_slices_include_source_family_and_security_scenario():
         "refuse_prompt_leak",
         "direct_injection",
     } <= slices
+
+
+def test_suite_path_supports_named_multicorpus_suite():
+    suite_path = eval_module._suite_path("rag-multicorpus-v1")
+
+    assert suite_path.name == "rag_eval_multicorpus_public_v1.yaml"
+
+
+def test_load_yaml_suite_uses_requested_suite_name(monkeypatch):
+    observed = {}
+
+    def fake_load_eval_dataset(suite_name=""):
+        observed["suite_name"] = suite_name
+        return {"test_cases": [{"id": "c1", "query": "q"}]}
+
+    monkeypatch.setattr(eval_module, "_load_eval_dataset", fake_load_eval_dataset)
+
+    cases = eval_module._load_yaml_suite("rag-multicorpus-v1")
+
+    assert observed["suite_name"] == "rag-multicorpus-v1"
+    assert cases == [{"id": "c1", "query": "q"}]
 
 
 def test_resolve_run_slices_auto_filters_to_actual_coverage():
@@ -286,7 +307,7 @@ def test_eval_service_sync_run_auto_mode_uses_only_covered_slices(monkeypatch):
         },
     ]
 
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: cases)
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": cases)
 
     def fake_search(query, knowledge_base_id=None, top_k=10):  # noqa: ARG001
         if "password" in query:
@@ -393,7 +414,7 @@ def test_eval_service_sync_run_persists_answer_metric_rows_when_enabled(monkeypa
         }
     ]
 
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: cases)
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": cases)
     monkeypatch.setenv("AI_DEFAULT_PROVIDER", "ollama")
     monkeypatch.setenv("RAG_EVAL_ENABLE_ANSWER_METRICS", "true")
     monkeypatch.setenv("RAG_EVAL_ENABLE_JUDGE_METRICS", "true")
@@ -472,7 +493,7 @@ def test_eval_service_sync_run_persists_local_case_analysis_for_answer_failures(
         }
     ]
 
-    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda: cases)
+    monkeypatch.setattr(eval_module, "_load_yaml_suite", lambda suite_name="": cases)
     monkeypatch.setenv("AI_DEFAULT_PROVIDER", "openai")
     monkeypatch.setenv("RAG_EVAL_ENABLE_ANSWER_METRICS", "true")
 

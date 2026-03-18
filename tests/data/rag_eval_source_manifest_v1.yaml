@@ -35,6 +35,17 @@ fixtures:
     screening_profile: default
     ingest_kind: code_path
 
+  - fixture_id: local_arkuiwiki_docs
+    source_family: arkuiwiki_docs
+    path_mode: env_override
+    default_path: ${RAG_EVAL_LOCAL_ARKUIWIKI_PATH}
+    required: false
+    sanitized: false
+    commit_allowed: false
+    sensitivity: internal
+    screening_profile: default
+    ingest_kind: code_path
+
   - fixture_id: local_telegram_export
     source_family: telegram_chat
     path_mode: env_override
