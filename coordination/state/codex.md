@@ -2807,3 +2807,16 @@
   - `python -m py_compile tests/test_rag_metadata_field_search.py tests/test_rag_context_composer.py tests/test_rag_diagnostics.py` -> PASS
   - `$env:MYSQL_URL=''; $env:DB_PATH='data/ragsvc-slice3-test.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_metadata_field_search.py tests/test_rag_context_composer.py tests/test_rag_diagnostics.py` -> PASS (`22 passed`)
   - `python scripts/scan_secrets.py` -> PASS
+
+## 2026-03-18 RAGSVC slice 4 implementation snapshot
+- Follow-up slice selected after retrieval-core family ordering:
+  - build a reusable local multi-corpus wiki smoke harness instead of adding more corpus-specific scripts.
+- Tooling changes:
+  - added `scripts/wiki_corpus_local_smoke.py` with reusable `openharmony` and `arkuiwiki` profiles,
+  - kept profile wrappers `scripts/openharmony_wiki_local_smoke.py` and `scripts/arkuiwiki_local_smoke.py`,
+  - added optional `backend_url` / `api_key` path so the same cases can run against an already running backend API,
+  - added `cases_json` / `cases_file` overrides so new corpora can be exercised without editing the script.
+- Test/docs changes:
+  - added `tests/test_wiki_corpus_local_smoke.py` for profile, cases, and remote-backend request behavior,
+  - added opt-in `tests/test_arkuiwiki_local_smoke.py`,
+  - updated `docs/TESTING.md` with both profile workflows and the generic runner form.

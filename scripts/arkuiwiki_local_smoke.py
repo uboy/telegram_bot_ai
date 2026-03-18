@@ -5,4 +5,4 @@ from scripts.wiki_corpus_local_smoke import main
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(default_profile="openharmony"))
+    raise SystemExit(main(default_profile="arkuiwiki"))

@@ -118,7 +118,7 @@ Note: with `--prepare-test-kb`, wrapper auto-generates cases from the uploaded P
 ## Local OpenHarmony Wiki Smoke
 
 - This smoke stays local-only and opt-in; it is not part of CI.
-- It ingests the real open-harmony wiki corpus into a temporary SQLite DB and validates retrieval plus deterministic extractive answers for key build/sync queries.
+- It uses the generic `scripts/wiki_corpus_local_smoke.py` runner via the `openharmony` profile, ingests the real open-harmony wiki corpus into a temporary SQLite DB, and validates retrieval plus deterministic extractive answers for key build/sync queries.
 - Required env:
 
 ```powershell
@@ -139,12 +139,54 @@ $env:RAG_OPENHARMONY_WIKI_TOP_K="5"
 .venv\Scripts\python.exe scripts/openharmony_wiki_local_smoke.py --mode zip --zip-path $env:RAG_OPENHARMONY_WIKI_ZIP_PATH --answer-mode extractive --top-k $env:RAG_OPENHARMONY_WIKI_TOP_K
 ```
 
+- Equivalent generic runner form:
+
+```powershell
+.venv\Scripts\python.exe scripts/wiki_corpus_local_smoke.py --profile openharmony --mode zip --zip-path $env:RAG_OPENHARMONY_WIKI_ZIP_PATH --answer-mode extractive --top-k $env:RAG_OPENHARMONY_WIKI_TOP_K
+```
+
 - Optional live modes:
   - `RAG_OPENHARMONY_WIKI_MODE=git` to exercise the public Gitee clone path against `RAG_OPENHARMONY_WIKI_URL`.
   - `RAG_OPENHARMONY_WIKI_ANSWER_MODE=llm` to let the current provider generate full answers instead of forcing the extractive fallback.
   - `RAG_ENABLE_RERANK=true` if you explicitly want the smoke run to include the CPU-heavy reranker. By default the helper disables reranking to keep the local ZIP ingest + answer check practical on developer machines.
+  - `RAG_OPENHARMONY_WIKI_BACKEND_URL=http://localhost:8000` to reuse the same cases against an already running backend API instead of the in-process route path; set `RAG_OPENHARMONY_WIKI_API_KEY` if that backend requires `X-API-Key`.
 
 - Notes:
   - The helper now uses a single `rag_query()` pass per query and derives `top_sources` from the final answer sources.
 - The local smoke is allowed to fail when the real corpus exposes a regression, but the current BOTFOLLOW-006 target state is green on the reference open-harmony ZIP when the generic procedural retrieval/fallback path is healthy.
 - For compound procedural queries, the smoke validates both source choice and extractive fallback content, so a regression may come from retrieval ordering, route-level HOWTO ranking, or fallback evidence-pack expansion.
+
+## Local ArkUI Wiki Smoke
+
+- This smoke also stays local-only and opt-in; it is not part of CI.
+- It uses the same generic runner through the `arkuiwiki` profile, so the workflow matches OpenHarmony but the query cases are supplied by the developer via env/CLI because this corpus can vary more between local mirrors.
+- Required env:
+
+```powershell
+$env:RAG_ARKUI_WIKI_LOCAL_SMOKE="1"
+$env:RAG_ARKUI_WIKI_ZIP_PATH="C:\Users\devl\proj\arkuiwiki.wiki.zip"
+$env:RAG_ARKUI_WIKI_CASES_JSON='[{"query":"how to create custom component","expected_source_fragment":"CustomComponent","expected_answer_fragments":["@Component"]}]'
+```
+
+- Run the pytest wrapper:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q tests/test_arkuiwiki_local_smoke.py
+```
+
+- Run the helper directly:
+
+```powershell
+.venv\Scripts\python.exe scripts/arkuiwiki_local_smoke.py --mode zip --zip-path $env:RAG_ARKUI_WIKI_ZIP_PATH --cases-json $env:RAG_ARKUI_WIKI_CASES_JSON --answer-mode extractive --top-k 5
+```
+
+- Equivalent generic runner form:
+
+```powershell
+.venv\Scripts\python.exe scripts/wiki_corpus_local_smoke.py --profile arkuiwiki --mode zip --zip-path $env:RAG_ARKUI_WIKI_ZIP_PATH --cases-json $env:RAG_ARKUI_WIKI_CASES_JSON --answer-mode extractive --top-k 5
+```
+
+- Optional live/backend modes:
+  - `RAG_ARKUI_WIKI_MODE=git` to exercise the public clone path against `RAG_ARKUI_WIKI_URL`.
+  - `RAG_ARKUI_WIKI_ANSWER_MODE=llm` to let the current provider answer normally.
+  - `RAG_ARKUI_WIKI_BACKEND_URL=http://localhost:8000` to run the same cases against a live backend API; set `RAG_ARKUI_WIKI_API_KEY` when needed.
