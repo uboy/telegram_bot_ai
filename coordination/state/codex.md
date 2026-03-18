@@ -2851,3 +2851,15 @@
 - Focused verification passed with hermetic local DB env:
   - `python -m py_compile backend/services/rag_eval_service.py backend/api/routes/rag.py tests/test_rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_compound_howto_focus.py` -> PASS
   - `$env:MYSQL_URL=''; $env:DB_PATH='data/rag-eval-suite-test.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_compound_howto_focus.py` -> PASS (`23 passed`)
+
+## 2026-03-18 RAGSVC slice 6 implementation snapshot
+- Follow-up slice selected after removing the literal title boost:
+  - reduce the remaining route-level `sync/build` pair bias inside compound HOWTO scoring.
+- Runtime changes completed:
+  - `backend/api/routes/rag.py` now derives procedural family match terms from the current query, preferring distinctive terms when available and falling back to generic action terms only for action-only requests,
+  - legacy HOWTO route boosts now score title/path/text coverage from those query-derived match terms instead of dedicated `sync` and `build` branches.
+- Regression coverage added/extended:
+  - `tests/test_rag_compound_howto_focus.py` now checks a `previewer/master` family case in addition to the existing `sync/build` and misleading-title protections.
+- Focused verification passed with hermetic local DB env:
+  - `python -m py_compile backend/api/routes/rag.py tests/test_rag_compound_howto_focus.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/rag-route-generalize-test.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_compound_howto_focus.py` -> PASS (`4 passed`)

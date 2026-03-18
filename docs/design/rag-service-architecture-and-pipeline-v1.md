@@ -448,10 +448,11 @@ Architectural choices should be validated through diagnostics and eval, not only
 
 #### Phase B, slice 4 implemented on 2026-03-18
 - route-level HOWTO boosts no longer hardcode the literal `Sync&Build` page name;
-- broad procedural ranking now relies on generic field coverage and family support, so a misleading title match cannot outrank a stronger procedural family on name alone;
+- broad procedural ranking now relies on query-derived field coverage and family support, with action-only queries falling back to generic action terms instead of corpus names, so a misleading title match cannot outrank a stronger procedural family on name alone;
 - focused regressions cover:
   - misleading title match losing to stronger procedural evidence,
-  - existing compound-HOWTO family-focus behavior remaining green.
+  - existing compound-HOWTO family-focus behavior remaining green,
+  - a `previewer/master` query family that wins on distinctive query terms rather than the old `sync/build` pair.
 
 ### Phase C. Context and fallback hardening
 - make context/fallback family-bounded
