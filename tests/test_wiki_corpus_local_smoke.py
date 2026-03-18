@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from types import SimpleNamespace
 
 from scripts import wiki_corpus_local_smoke as smoke
@@ -83,7 +84,7 @@ def test_run_remote_queries_uses_backend_api_key(monkeypatch):
 
     args = SimpleNamespace(
         backend_url="http://localhost:8000",
-        api_key="test-key",
+        api_key="example-test-token",
         top_k=4,
     )
 
@@ -94,9 +95,26 @@ def test_run_remote_queries_uses_backend_api_key(monkeypatch):
     )
 
     assert captured["url"] == "http://localhost:8000/api/v1/rag/query"
-    assert captured["headers"][0]["X-API-Key"] == "test-key"
+    assert captured["headers"][0]["X-API-Key"] == "example-test-token"
     assert captured["json"][0]["knowledge_base_id"] == 17
     assert results[0]["top_sources"] == [
         "https://gitee.com/rri_opensource/arkuiwiki/wikis/CustomComponent"
     ]
     assert results[0]["request_id"] == "req-1"
+
+
+def test_emit_payload_falls_back_to_utf8_buffer(monkeypatch):
+    captured = BytesIO()
+
+    class FakeStdout:
+        def __init__(self):
+            self.buffer = captured
+
+        def write(self, _text):
+            raise UnicodeEncodeError("cp1251", "т", 0, 1, "boom")
+
+    monkeypatch.setattr(smoke.sys, "stdout", FakeStdout())
+
+    smoke._emit_payload('{"message":"тест"}')
+
+    assert captured.getvalue().decode("utf-8") == '{"message":"тест"}\n'

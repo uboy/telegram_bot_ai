@@ -40,6 +40,8 @@ coordination/state/*.local.md
 data/debug/
 data/*-smoke.json
 data/*openharmony*.json
+data/*-local-smoke.zip
+data/*-smoke-cases.json
 
 open-harmony.zip
 open-harmony/*

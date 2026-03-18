@@ -437,3 +437,50 @@ def test_search_generalized_mode_orders_by_family_support_without_reranker(monke
 
     assert [row["content"] for row in results] == ["supported-family-primary", "singleton-dense"]
     assert results[0]["source_path"] == "doc://supported"
+
+
+def test_search_generalized_mode_promotes_distinctive_field_match_over_generic_consensus(monkeypatch):
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+    monkeypatch.setattr(rag_module, "HAS_EMBEDDINGS", True, raising=False)
+    monkeypatch.setattr(rag_module, "HAS_RERANKER", False, raising=False)
+    exact_doc = _candidate(
+        "xts-specific",
+        "https://kb.local/Testing/XTS%20build%20and%20run",
+        distance=0.40,
+        metadata={"doc_title": "XTS build and run", "section_path": "Testing > XTS build and run"},
+        origin="field",
+    )
+    generic_doc = _candidate(
+        "e2e-generic",
+        "https://kb.local/Testing/How%20to%20build%20and%20run%20e2e%20tests",
+        distance=0.10,
+        metadata={"doc_title": "How to build and run e2e tests", "section_path": "Testing > e2e"},
+        origin="qdrant",
+    )
+    previewer_doc = _candidate(
+        "previewer-generic",
+        "https://kb.local/Previewer/Previewer_Standalone_Mode_build_and_run",
+        distance=0.12,
+        metadata={"doc_title": "Previewer Standalone build and run", "section_path": "Previewer > Standalone"},
+        origin="qdrant",
+    )
+    rag, _calls = _build_test_system(
+        dense_budget=3,
+        bm25_budget=3,
+        rerank_top_n=3,
+        rerank_scores=[],
+        is_howto=True,
+        enable_rerank=False,
+        dense_candidates=[generic_doc, previewer_doc],
+        bm25_chunks=[
+            _chunk("e2e-generic", generic_doc["source_path"], metadata=generic_doc["metadata"]),
+            _chunk("previewer-generic", previewer_doc["source_path"], metadata=previewer_doc["metadata"]),
+        ],
+        bm25_ranked=[0, 1],
+        field_candidates=[exact_doc, generic_doc, previewer_doc],
+    )
+
+    results = rag_module.RAGSystem.search(rag, "how to build and run xts", knowledge_base_id=1, top_k=1)
+
+    assert results[0]["content"] == "xts-specific"
+    assert "XTS%20build%20and%20run" in results[0]["source_path"]
