@@ -86,6 +86,19 @@ python scripts/rag_eval_baseline_runner.py --suite rag-general-v1 --label local_
 - When answer metrics are enabled, the run artifact records `available_metrics`, `answer_provider`, `judge_provider`, `answer_model`, `judge_model`, sanitized `effective_ollama_base_url` only when Ollama is in use, `git_sha`, `git_dirty`, `screening_summary`, `security_summary`, `case_failures`, and `suspicious_events`.
 - The same local-only answer lane now also records `case_analysis` entries for failed/suspicious cases with compact query/answer previews, failure reasons, suspicious events, score snapshots, and source-path hints; use these entries for commit-to-commit triage instead of embedding real corpus excerpts in committed tests.
 - When answer metrics are disabled, retrieval-only artifacts must not render answer-lane provider/model/base-url metadata.
+- The eval service now ships a committed public-safe multi-corpus suite name, `rag-multicorpus-v1`, for retrieval-contract checks across OpenHarmony and ArkUI without embedding local mirror paths in repo fixtures.
+- Developer-local corpora for that suite are supplied only through env overrides in the source manifest:
+  - `RAG_EVAL_LOCAL_OPENHARMONY_PATH`
+  - `RAG_EVAL_LOCAL_ARKUIWIKI_PATH`
+- Typical focused local run:
+```powershell
+$env:MYSQL_URL=""
+$env:DB_PATH="data/rag-eval-local.db"
+$env:RAG_EVAL_LOCAL_OPENHARMONY_PATH="C:\Users\devl\proj\PycharmProjects\telegram_bot_ai\open-harmony"
+$env:RAG_EVAL_LOCAL_ARKUIWIKI_PATH="C:\Users\devl\proj\wiki_refactoring\arkuiwiki.wiki"
+.venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_dataset_contract.py
+```
+- When extending this suite, keep committed cases public-safe and corpus-agnostic enough to exercise retrieval behavior rather than one private mirror layout.
 
 Note: wrapper auto-starts `backend redis qdrant` when `telegram_rag_backend` is not running.
 Note: wrapper fails by default when retrieval selected-context rate is near zero (`--min-selected-rate 0.01`).
@@ -164,7 +177,7 @@ $env:RAG_OPENHARMONY_WIKI_TOP_K="5"
 
 ```powershell
 $env:RAG_ARKUI_WIKI_LOCAL_SMOKE="1"
-$env:RAG_ARKUI_WIKI_ZIP_PATH="C:\Users\devl\proj\arkuiwiki.wiki.zip"
+$env:RAG_ARKUI_WIKI_ZIP_PATH="C:\Users\devl\proj\wiki_refactoring\arkuiwiki.wiki"
 $env:RAG_ARKUI_WIKI_CASES_JSON='[{"query":"how to create custom component","expected_source_fragment":"CustomComponent","expected_answer_fragments":["@Component"]}]'
 ```
 
@@ -177,13 +190,13 @@ $env:RAG_ARKUI_WIKI_CASES_JSON='[{"query":"how to create custom component","expe
 - Run the helper directly:
 
 ```powershell
-.venv\Scripts\python.exe scripts/arkuiwiki_local_smoke.py --mode zip --zip-path $env:RAG_ARKUI_WIKI_ZIP_PATH --cases-json $env:RAG_ARKUI_WIKI_CASES_JSON --answer-mode extractive --top-k 5
+.venv\Scripts\python.exe scripts/arkuiwiki_local_smoke.py --mode dir --dir-path $env:RAG_ARKUI_WIKI_ZIP_PATH --cases-json $env:RAG_ARKUI_WIKI_CASES_JSON --answer-mode extractive --top-k 5
 ```
 
 - Equivalent generic runner form:
 
 ```powershell
-.venv\Scripts\python.exe scripts/wiki_corpus_local_smoke.py --profile arkuiwiki --mode zip --zip-path $env:RAG_ARKUI_WIKI_ZIP_PATH --cases-json $env:RAG_ARKUI_WIKI_CASES_JSON --answer-mode extractive --top-k 5
+.venv\Scripts\python.exe scripts/wiki_corpus_local_smoke.py --profile arkuiwiki --mode dir --dir-path $env:RAG_ARKUI_WIKI_ZIP_PATH --cases-json $env:RAG_ARKUI_WIKI_CASES_JSON --answer-mode extractive --top-k 5
 ```
 
 - Optional live/backend modes:

@@ -104,3 +104,34 @@ def test_ready_data_eval_corpus_has_no_local_paths_or_raw_export_strings():
         assert re.search(pattern, raw_text) is None, (
             f"committed eval dataset must not embed local corpus marker matching: {pattern}"
         )
+
+
+def test_multicorpus_public_eval_suite_contract():
+    yaml = pytest.importorskip("yaml")
+
+    path = Path(__file__).resolve().parents[1] / "tests" / "data" / "rag_eval_multicorpus_public_v1.yaml"
+    assert path.exists(), "multi-corpus public suite file must exist"
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    assert isinstance(raw, dict)
+    assert str(raw.get("dataset_version") or "").strip() == "rag_eval_multicorpus_public_v1"
+    cases = raw.get("test_cases")
+    assert isinstance(cases, list) and len(cases) >= 4
+
+    source_families = {str(case.get("source_family") or "").strip() for case in cases if isinstance(case, dict)}
+    assert {"open_harmony_docs", "arkuiwiki_docs"} <= source_families
+
+    ids = [str(case.get("id") or "").strip() for case in cases if isinstance(case, dict)]
+    assert len(ids) == len(set(ids))
+
+    raw_text = path.read_text(encoding="utf-8")
+    forbidden_patterns = [
+        r"[A-Za-z]:\\(?:[^\\\r\n]+\\)+[^\\\r\n]+",
+        r"/(?:Users|home)/[^/\r\n]+(?:/[^/\r\n]+)+",
+        r"ChatExport_[0-9]{4}-[0-9]{2}-[0-9]{2}",
+        r"Telegram Desktop[\\/]",
+    ]
+    for pattern in forbidden_patterns:
+        assert re.search(pattern, raw_text) is None

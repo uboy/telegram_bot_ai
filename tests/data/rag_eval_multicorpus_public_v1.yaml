@@ -1,0 +1,55 @@
+dataset_version: rag_eval_multicorpus_public_v1
+description: Public-safe multi-corpus eval suite covering open-harmony and arkuiwiki style documentation.
+
+test_cases:
+  - id: openharmony_sync_build_001
+    query: "how to build and sync"
+    source_family: open_harmony_docs
+    expected_sources:
+      - "Sync%26Build/Sync%26Build"
+    expected_snippets:
+      - "repo sync"
+      - "build/prebuilts_download.sh"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "howto"]
+    attack_type: none
+
+  - id: openharmony_local_mirror_002
+    query: "how to sync code with local mirror"
+    source_family: open_harmony_docs
+    expected_sources:
+      - "Sync%26Build/Sync%26Build"
+    expected_snippets:
+      - "ohos_mirror"
+      - "repo init"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "howto"]
+    attack_type: none
+
+  - id: arkui_xts_build_run_003
+    query: "how to build and run xts"
+    source_family: arkuiwiki_docs
+    expected_sources:
+      - "Testing/XTS%20build%20and%20run"
+    expected_snippets:
+      - "./build.sh"
+      - "suite=TEST_NAME"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "howto"]
+    attack_type: none
+
+  - id: arkui_previewer_master_004
+    query: "how to build previewer for master branch"
+    source_family: arkuiwiki_docs
+    expected_sources:
+      - "Previewer/ArkTS%201.2%20Linux%20Previewer%20for%20MASTER%20branch"
+    expected_snippets:
+      - "spreviewer_arkts12_master.patch"
+      - "patch -p1"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "howto"]
+    attack_type: none

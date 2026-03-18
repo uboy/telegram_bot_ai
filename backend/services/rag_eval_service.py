@@ -72,6 +72,7 @@ def _default_slices() -> List[str]:
         "refusal-expected",
         "pdf",
         "open_harmony_docs",
+        "arkuiwiki_docs",
         "open_harmony_code",
         "telegram_chat",
         "benign",
@@ -110,6 +111,7 @@ def _slice_threshold_policy() -> Dict[str, Dict[str, Dict[str, float]]]:
         "source_families": {
             "pdf": {"recall_at_10": 0.65, "mrr_at_10": 0.50, "ndcg_at_10": 0.55},
             "open_harmony_docs": {"recall_at_10": 0.55, "mrr_at_10": 0.40, "ndcg_at_10": 0.45},
+            "arkuiwiki_docs": {"recall_at_10": 0.55, "mrr_at_10": 0.40, "ndcg_at_10": 0.45},
             "open_harmony_code": {"recall_at_10": 0.50, "mrr_at_10": 0.35, "ndcg_at_10": 0.40},
             "telegram_chat": {"recall_at_10": 0.45, "mrr_at_10": 0.30, "ndcg_at_10": 0.35},
         },
@@ -150,11 +152,17 @@ def _thresholds_for_slice(
     return thresholds
 
 
-def _suite_path() -> Path:
+def _suite_path(suite_name: str = "") -> Path:
     raw = (os.getenv("RAG_EVAL_SUITE_FILE", "") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
-    return Path(__file__).resolve().parents[2] / "tests" / "data" / "rag_eval_ready_data_v2.yaml"
+    base = Path(__file__).resolve().parents[2] / "tests" / "data"
+    suite_key = str(suite_name or "").strip().lower() or "rag-general-v1"
+    suite_map = {
+        "rag-general-v1": "rag_eval_ready_data_v2.yaml",
+        "rag-multicorpus-v1": "rag_eval_multicorpus_public_v1.yaml",
+    }
+    return base / suite_map.get(suite_key, "rag_eval_ready_data_v2.yaml")
 
 
 def _source_manifest_path() -> Path:
@@ -219,8 +227,8 @@ def _normalize_slice_name(value: str) -> str:
     return aliases.get(token, token)
 
 
-def _load_eval_dataset() -> Dict[str, Any]:
-    data = _load_yaml_file(_suite_path())
+def _load_eval_dataset(suite_name: str = "") -> Dict[str, Any]:
+    data = _load_yaml_file(_suite_path(suite_name))
     cases = data.get("test_cases")
     if not isinstance(cases, list):
         cases = []
@@ -257,8 +265,8 @@ def _load_eval_dataset() -> Dict[str, Any]:
     }
 
 
-def _load_yaml_suite() -> List[Dict[str, Any]]:
-    return list(_load_eval_dataset().get("test_cases") or [])
+def _load_yaml_suite(suite_name: str = "") -> List[Dict[str, Any]]:
+    return list(_load_eval_dataset(suite_name).get("test_cases") or [])
 
 
 def _load_source_manifest() -> Dict[str, Any]:
@@ -968,9 +976,9 @@ class RAGEvalService:
         self._update_run(run_id=run_id, status="running", started_at=started_at)
 
         try:
-            dataset = _load_eval_dataset()
+            dataset = _load_eval_dataset(suite_name)
             manifest = _load_source_manifest()
-            cases = _load_yaml_suite()
+            cases = _load_yaml_suite(suite_name)
             if not cases:
                 raise RuntimeError("No eval cases found")
             slices = _resolve_run_slices(

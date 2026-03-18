@@ -2835,3 +2835,19 @@
   - added `tests/test_wiki_corpus_local_smoke.py` for profile, cases, and remote-backend request behavior,
   - added opt-in `tests/test_arkuiwiki_local_smoke.py`,
   - updated `docs/TESTING.md` with both profile workflows and the generic runner form.
+
+## 2026-03-18 RAGSVC slice 5 implementation snapshot
+- Follow-up slice selected after local smoke harness:
+  - make multicorpus validation a first-class eval-service contract and remove one remaining literal corpus-name HOWTO boost.
+- Runtime changes completed:
+  - `backend/services/rag_eval_service.py` now supports named suite selection and includes `arkuiwiki_docs` in default slices and threshold policy,
+  - committed public-safe suite `tests/data/rag_eval_multicorpus_public_v1.yaml` now covers both OpenHarmony and ArkUI retrieval cases,
+  - `tests/data/rag_eval_source_manifest_v1.yaml` now exposes ArkUI local corpus roots only via `RAG_EVAL_LOCAL_ARKUIWIKI_PATH`,
+  - `backend/api/routes/rag.py` no longer gives a literal `Sync&Build` title/path boost inside the HOWTO ranking branch.
+- Regression coverage added/extended:
+  - `tests/test_rag_eval_service.py` for named suite loading and suite-name propagation,
+  - `tests/test_rag_eval_dataset_contract.py` for the public-safe multicorpus fixture contract,
+  - `tests/test_rag_compound_howto_focus.py` for misleading-title regression protection.
+- Focused verification passed with hermetic local DB env:
+  - `python -m py_compile backend/services/rag_eval_service.py backend/api/routes/rag.py tests/test_rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_compound_howto_focus.py` -> PASS
+  - `$env:MYSQL_URL=''; $env:DB_PATH='data/rag-eval-suite-test.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_eval_service.py tests/test_rag_eval_dataset_contract.py tests/test_rag_compound_howto_focus.py` -> PASS (`23 passed`)
