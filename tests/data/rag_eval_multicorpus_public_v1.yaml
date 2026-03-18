@@ -53,3 +53,42 @@ test_cases:
     security_expectation: normal
     tags: ["en", "howto"]
     attack_type: none
+
+  - id: openharmony_capi_definition_005
+    query: "what is c-api"
+    source_family: open_harmony_docs
+    expected_sources:
+      - "Features/C-API/C-API%20Overview"
+    expected_snippets:
+      - "represents a set of generated interfaces in C"
+      - "managing components of the AceEngine graphical subsystem"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "definition"]
+    attack_type: none
+
+  - id: arkui_docs_navigation_006
+    query: "where can i find official openharmony documentation"
+    source_family: arkuiwiki_docs
+    expected_sources:
+      - "Infrastructure/Documentation"
+    expected_snippets:
+      - "Official OpenHarmony documentation"
+      - "ArkUI API Reference"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "navigation"]
+    attack_type: none
+
+  - id: arkui_previewer_troubleshooting_007
+    query: "how to fix previewer white screen"
+    source_family: arkuiwiki_docs
+    expected_sources:
+      - "Previewer/Notes/Previewer%20fix%20rendering"
+    expected_snippets:
+      - "white_screen_003.diff"
+      - "git apply white_screen_003.diff"
+    expected_answer_mode: grounded_answer
+    security_expectation: normal
+    tags: ["en", "troubleshooting"]
+    attack_type: none

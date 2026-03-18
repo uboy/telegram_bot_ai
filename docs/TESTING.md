@@ -87,6 +87,7 @@ python scripts/rag_eval_baseline_runner.py --suite rag-general-v1 --label local_
 - The same local-only answer lane now also records `case_analysis` entries for failed/suspicious cases with compact query/answer previews, failure reasons, suspicious events, score snapshots, and source-path hints; use these entries for commit-to-commit triage instead of embedding real corpus excerpts in committed tests.
 - When answer metrics are disabled, retrieval-only artifacts must not render answer-lane provider/model/base-url metadata.
 - The eval service now ships a committed public-safe multi-corpus suite name, `rag-multicorpus-v1`, for retrieval-contract checks across OpenHarmony and ArkUI without embedding local mirror paths in repo fixtures.
+- That multicorpus suite is no longer HOWTO-only; it should be kept broad enough to cover at least procedural, definition, navigation, and troubleshooting-style retrieval.
 - Developer-local corpora for that suite are supplied only through env overrides in the source manifest:
   - `RAG_EVAL_LOCAL_OPENHARMONY_PATH`
   - `RAG_EVAL_LOCAL_ARKUIWIKI_PATH`
