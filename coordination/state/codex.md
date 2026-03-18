@@ -2863,3 +2863,15 @@
 - Focused verification passed with hermetic local DB env:
   - `python -m py_compile backend/api/routes/rag.py tests/test_rag_compound_howto_focus.py` -> PASS
   - `$env:MYSQL_URL=''; $env:DB_PATH='data/rag-route-generalize-test.db'; .venv\Scripts\python.exe -m pytest -q tests/test_rag_compound_howto_focus.py` -> PASS (`4 passed`)
+
+## 2026-03-18 RAGSVC slice 7 implementation snapshot
+- Follow-up slice selected after attempting live/local corpus validation:
+  - remove the need for external ZIP creation when local wiki corpora already exist unpacked.
+- Tooling changes completed:
+  - `scripts/wiki_corpus_local_smoke.py` now supports `--mode dir` plus profile-specific `*_DIR_PATH` env overrides,
+  - unpacked wiki directories are materialized into a temporary internal ZIP and then passed through the existing ZIP ingest path.
+- Regression coverage added/extended:
+  - `tests/test_wiki_corpus_local_smoke.py` now verifies temp ZIP materialization from a local directory tree.
+- Focused verification passed:
+  - `python -m py_compile scripts/wiki_corpus_local_smoke.py tests/test_wiki_corpus_local_smoke.py` -> PASS
+  - `.venv\Scripts\python.exe -m pytest -q tests/test_wiki_corpus_local_smoke.py` -> PASS (`6 passed`)

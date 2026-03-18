@@ -1,5 +1,7 @@
 import json
+import zipfile
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 from scripts import wiki_corpus_local_smoke as smoke
@@ -118,3 +120,28 @@ def test_emit_payload_falls_back_to_utf8_buffer(monkeypatch):
     smoke._emit_payload('{"message":"тест"}')
 
     assert captured.getvalue().decode("utf-8") == '{"message":"тест"}\n'
+
+
+def test_materialize_zip_input_builds_temp_archive_from_directory(tmp_path):
+    wiki_root = tmp_path / "wiki"
+    page_dir = wiki_root / "Guide"
+    page_dir.mkdir(parents=True)
+    (page_dir / "Setup.md").write_text("# Setup\nrepo sync\n", encoding="utf-8")
+
+    args = SimpleNamespace(
+        mode="dir",
+        dir_path=str(wiki_root),
+        zip_path="",
+        profile="arkuiwiki",
+    )
+
+    zip_path, temp_dir = smoke._materialize_zip_input(args)
+    try:
+        archive = Path(zip_path)
+        assert archive.exists()
+        with zipfile.ZipFile(archive) as zf:
+            assert "Guide/Setup.md" in zf.namelist()
+            assert zf.read("Guide/Setup.md").decode("utf-8").startswith("# Setup")
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
