@@ -74,6 +74,60 @@ def test_metadata_field_search_prefers_sync_code_section_over_incidental_mirror_
     assert results[0]["origin"] == "field"
 
 
+def test_metadata_field_search_uses_content_anchor_for_exact_patch_lookup():
+    chunks = [
+        _chunk(
+            content="Previewer should display an application with data and resources from unpacked hap.",
+            source_path="https://gitee.com/org/repo/wikis/Previewer/Notes/Built-in%20Previewer",
+            doc_title="Built-in Previewer",
+            section_title="Run Built-in Previewer with app data from hap",
+            section_path="Previewer > Notes > Built-in Previewer",
+        ),
+        _chunk(
+            content="Download and apply patch spreviewer_arkts12_master.patch\npatch -p1 < spreviewer_arkts12_master.patch",
+            source_path="https://gitee.com/org/repo/wikis/Previewer/ArkTS%201.2%20Linux%20Previewer%20for%20MASTER%20branch",
+            doc_title="ArkTS 1.2 Linux Previewer for MASTER branch",
+            section_title="Build the Linux Previewer",
+            section_path="Previewer > ArkTS 1.2 Linux Previewer for MASTER branch > Build the Linux Previewer",
+        ),
+    ]
+
+    results = rag_system._metadata_field_search(
+        "what patch should i apply for master branch linux previewer",
+        chunks,
+        top_k=2,
+    )
+
+    assert len(results) == 2
+    assert results[0]["source_path"].endswith("/Previewer/ArkTS%201.2%20Linux%20Previewer%20for%20MASTER%20branch")
+    assert results[0]["origin"] == "field"
+
+
+def test_metadata_field_search_uses_content_anchor_for_repo_tool_lookup():
+    chunks = [
+        _chunk(
+            content="Initialize repository and sync code with repo init and repo sync.",
+            source_path="https://gitee.com/org/repo/wikis/Infrastructure/Build/Platform%20Build%20%28OHOS%29",
+            doc_title="Platform Build (OHOS)",
+            section_title="Initialize repository and sync code",
+            section_path="Infrastructure > Build > Platform Build (OHOS)",
+        ),
+        _chunk(
+            content="For Ubuntu setup install repo tool first, then continue with the rest of the server environment setup.",
+            source_path="https://gitee.com/org/repo/wikis/Infrastructure/Server%20Setup%20%28Linux%29",
+            doc_title="Server Setup (Linux)",
+            section_title="General setup",
+            section_path="Infrastructure > Server Setup (Linux) > General setup",
+        ),
+    ]
+
+    results = rag_system._metadata_field_search("how to install repo tool on ubuntu", chunks, top_k=2)
+
+    assert len(results) == 2
+    assert results[0]["source_path"].endswith("/Infrastructure/Server%20Setup%20%28Linux%29")
+    assert results[0]["origin"] == "field"
+
+
 def test_search_preserves_fused_field_order_without_reranker(monkeypatch):
     monkeypatch.setattr(rag_module, "HAS_EMBEDDINGS", True)
 

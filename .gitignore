@@ -28,14 +28,8 @@ data/*.db-wal
 .claude/settings.local.json
 
 # Agent temporary files only; durable design/review artifacts stay tracked.
-.scratchpad/tmp/
-.scratchpad/*.tmp
-.scratchpad/*.bak
-.scratchpad/*.local.md
-coordination/tmp/
-coordination/state/*.tmp
-coordination/state/*.bak
-coordination/state/*.local.md
+.scratchpad/
+coordination/
 .codex/tmp/
 data/debug/
 data/*-smoke.json

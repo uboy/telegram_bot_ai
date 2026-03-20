@@ -1226,3 +1226,157 @@ The next design artifact should not be another procedural-query document. It sho
 - stage-specific failure modes,
 - stage-specific tests,
 - staged implementation slices.
+
+## 2026-03-19 Analysis: current RAG quality on local OpenHarmony + ArkUI corpora
+
+### Scope of this validation pass
+- Re-read the current service-level RAG design and recent review artifacts.
+- Inspect the real local corpora:
+  - `open-harmony/`
+  - `C:\Users\devl\proj\wiki_refactoring\arkuiwiki.wiki`
+- Build a grounded evaluation set with 26 questions:
+  - procedural,
+  - definition,
+  - navigation,
+  - troubleshooting,
+  - infrastructure/setup.
+- Run the current local-only smoke harness in extractive mode against both corpora.
+- Run the current focused pytest suites for smoke/eval/generalized retrieval behavior.
+
+### Current architecture state
+- The project is no longer at the old `docs/RAG_IMPLEMENTATION_STATUS.md` stage.
+- The current relevant stack already includes:
+  - family-aware candidate ordering in `shared/rag_system.py`,
+  - family-aware route/context/fallback ordering in `backend/api/routes/rag.py`,
+  - additive diagnostics with family metadata,
+  - generalized local wiki smoke tooling,
+  - public-safe multicorpus eval fixtures,
+  - green regression suites for those committed behaviors.
+- The latest independent review still identifies one important residual weakness:
+  - route-level procedural matching retains a fixed EN/RU action vocabulary and therefore remains language-tuned.
+
+### Corpus health
+- OpenHarmony ingest:
+  - `files_processed=88`
+  - `chunks_added=723`
+  - embedding coverage `100%`
+- ArkUI wiki ingest:
+  - `files_processed=108`
+  - `chunks_added=856`
+  - embedding coverage `100%`
+- Conclusion:
+  - ingestion and embedding are healthy on both corpora,
+  - the observed misses are retrieval/ranking/context-selection misses, not corpus-loading failures.
+
+### Local smoke outcome
+
+#### OpenHarmony
+- Case set size: `15`
+- Source-hit failures: `7`
+- Typical failure shapes:
+  - canonical procedural page lost to adjacent procedural/history pages:
+    - `how to build ohos sdk for windows only`
+    - `how to build rk3568`
+  - authoritative conceptual page lost to status/noise-heavy page:
+    - `what is c-api`
+    - `where are UI interfaces and non-ui interfaces placed in c-api`
+    - `DEV_API_STATUS` competes too aggressively with `C-API Overview`
+  - infrastructure/build-system queries drift into semantically related but wrong families:
+    - `how new developer join feature branch using manifests`
+    - `what are the main build framework stages`
+    - `how to pass gn variable enable_cxx`
+  - NDK compilation query drifts back into a broad sync/build page:
+    - `how to compile third party library with openharmony ndk`
+
+#### ArkUI wiki
+- Case set size: `12`
+- Source-hit failures: `7`
+- Typical failure shapes:
+  - distinctive patch/fix pages lose to a broad previewer note:
+    - `what patch should i apply for master branch linux previewer`
+    - `how to fix previewer white screen`
+    - `Built-in Previewer` outranks the exact patch/fix docs
+  - navigation query for official API reference drifts into noisy dev-status content:
+    - `where is arkui api reference`
+  - infrastructure/setup queries partially route to historical or adjacent build pages:
+    - `what host setup is recommended for development`
+    - `how to install repo tool on ubuntu`
+  - one case (`how to build arkui application on linux server`) surfaced the right document, but the expected-fragment assertion still failed because the loader encodes parentheses in the source URL (`%28Linux%29`) while the scratch expectation used raw parentheses.
+
+### Test-vs-live gap
+- Focused pytest suites remained green:
+  - smoke/eval/tooling lane:
+    - `27 passed, 2 skipped`
+  - retrieval/generalization/diagnostics lane:
+    - `41 passed`
+- This means:
+  - existing tests correctly protect the already implemented generalization slices,
+  - but the live local corpora still expose real misses outside the current synthetic/public fixture coverage.
+
+### Additional tooling issue discovered
+- Both smoke commands ended with a Windows temp-file cleanup `PermissionError` on the temporary `smoke.db`.
+- The JSON result files were successfully written before the exception, so the primary signal is still usable.
+- This is a harness reliability problem, not a retrieval-quality problem, but it should be cleaned up because it turns informative smoke failures into noisy command failures.
+
+### Main architectural conclusions from this pass
+1. Candidate-family support helped broad procedural queries, but it is still too weak for:
+   - exact conceptual docs vs noisy status tables,
+   - exact patch/fix notes vs broad neighboring previewer notes,
+   - infra/setup/navigation intents where lexical overlap is broad and many sibling pages look similar.
+2. The system still lacks a stronger notion of document role/type:
+   - overview/reference/status/troubleshooting/howto/setup/changelog.
+3. The eval suite is still too narrow for the real failure surface:
+   - live corpora expose misses on definition, setup, patch-note, and navigation queries.
+4. Some route-level intent and fallback logic is still over-reliant on lexical hints rather than canonical document-role evidence.
+
+### Recommended next improvements
+1. Add document-role classification at ingest time and persist it in canonical metadata.
+   - Examples:
+     - `howto`
+     - `reference`
+     - `overview`
+     - `status`
+     - `troubleshooting`
+     - `setup`
+     - `release_note`
+   - Use role priors during family aggregation and context packing.
+2. Add negative priors / contamination penalties for noisy families.
+   - `DEV_API_STATUS` and similar table-heavy status pages should not outrank conceptual overview pages for definition/navigation queries unless the query explicitly asks for status.
+3. Promote exact title/heading/section evidence into first-class retrieval signals.
+   - Not via hardcoded page names,
+   - but via generic features:
+     - title exactness,
+     - heading exactness,
+     - section-path match specificity,
+     - query-to-title coverage ratio.
+4. Split “broad HOWTO” logic from “exact lookup” logic more explicitly.
+   - The current family-first procedural path works for broad tasks,
+   - but exact doc lookup queries need stronger support for one authoritative page or section.
+5. Expand committed multicorpus eval coverage with the newly observed local misses.
+   - Add cases for:
+     - `where are ui interfaces and non-ui interfaces placed in c-api`
+     - `how to pass gn variable enable_cxx`
+     - `what patch should i apply for master branch linux previewer`
+     - `how to fix previewer white screen`
+     - `where is arkui api reference`
+     - `how to install repo tool on ubuntu`
+6. Harden the local smoke harness cleanup on Windows so it closes the SQLite handle before temp-dir deletion.
+
+### 2026-03-19 Retrieval hardening iteration update
+- Implemented the next generalized slice without adding document-role labels:
+  - exact structural specificity now influences fused ordering before rerank truncation,
+  - the structural lexical channel now reads early content anchors, not only `doc_title/section_title/section_path/source_path`,
+  - route-level context selection follows the same exactness signal.
+- Why this remains universal:
+  - no corpus-name hardcodes were added,
+  - no language-specific document taxonomy was introduced,
+  - all new signals derive from generic chunk metadata plus chunk text already available in any corpus.
+- Result:
+  - OpenHarmony improved from `7/15` to `8/15` source-hit pass,
+  - ArkUI retained the exact previewer build rescue but still sits at `6/12`,
+  - the remaining misses point less to "missing metadata labels" and more to two systemic gaps:
+    - contamination from giant status/archive pages,
+    - insufficient exact-lookup handling for navigation/reference/setup intent.
+- Revised architectural conclusion:
+  - adding manual document-role metadata is not the first mandatory step,
+  - the next universal slice should prefer generic contamination penalties and exact-lookup routing over hand-labeled document types.

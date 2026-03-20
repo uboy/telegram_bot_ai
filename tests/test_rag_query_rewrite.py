@@ -121,6 +121,36 @@ def test_controlled_query_variants_stay_bounded(monkeypatch):
     assert len({item["query"].lower() for item in variants}) == len(variants)
 
 
+def test_infer_query_intent_prefers_definition_hint():
+    from backend.api.routes import rag as rag_module
+
+    query = "Что такое разметка данных?"
+    hints = rag_module._extract_query_hints(query)
+
+    assert hints["definition_term"] == "разметка данных"
+    assert rag_module._infer_query_intent(query, hints) == "DEFINITION"
+
+
+def test_infer_query_intent_prefers_factoid_hints_for_metric_question():
+    from backend.api.routes import rag as rag_module
+
+    query = "Какой целевой ежегодный объем услуг установлен на 2030 год?"
+    hints = rag_module._extract_query_hints(query)
+
+    assert hints["metric_query"] is True
+    assert "2030" in hints["year_tokens"]
+    assert rag_module._infer_query_intent(query, hints) == "FACTOID"
+
+
+def test_infer_query_intent_keeps_troubleshooting_signal():
+    from backend.api.routes import rag as rag_module
+
+    query = "How to fix previewer white screen?"
+    hints = rag_module._extract_query_hints(query)
+
+    assert rag_module._infer_query_intent(query, hints) == "HOWTO"
+
+
 def test_rag_query_generalized_mode_uses_rewrite_variant(monkeypatch):
     from backend.api.routes import rag as rag_module
 

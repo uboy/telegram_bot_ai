@@ -933,3 +933,43 @@ Status: Draft for CC approval
 ### Documentation checklist
 - [ ] Add design doc `docs/design/rag-service-architecture-and-pipeline-v1.md`.
 - [ ] Update coordination tasks/cycle/state for the new design cycle.
+
+## 2026-03-19 Follow-up plan from local corpus validation
+
+### Goal
+- Convert the new real-corpus failures into the next generalized RAG hardening slices without falling back to corpus-name hardcodes.
+
+### Proposed next slices
+- [ ] Slice 1: add canonical document-role metadata and propagate it through retrieval diagnostics.
+- [ ] Slice 2: introduce generic role-aware family scoring and contamination penalties.
+- [ ] Slice 3: add generic exact-title/heading specificity features for exact lookup queries.
+- [ ] Slice 4: expand public/local multicorpus eval fixtures with the newly observed misses.
+- [ ] Slice 5: fix `wiki_corpus_local_smoke.py` temp-DB cleanup on Windows so smoke exit codes are trustworthy.
+
+### Verification checklist for the next implementation cycle
+- [ ] Add focused unit tests for role classification and role-aware family scoring.
+- [ ] Add focused route tests for exact-lookup queries vs noisy status/troubleshooting pages.
+- [ ] Add multicorpus eval fixtures for OpenHarmony and ArkUI misses found on 2026-03-19.
+- [ ] Re-run local directory smoke on both corpora after each slice.
+- [ ] Re-run focused pytest suites for smoke/eval/retrieval/diagnostics.
+
+### Immediate deliverables for the current analysis-only cycle
+- [x] Build a grounded 20+ question set with expected answers and source docs.
+- [x] Run local extractive smoke on OpenHarmony corpus.
+- [x] Run local extractive smoke on ArkUI corpus.
+- [x] Run focused pytest coverage for smoke/eval/generalized retrieval.
+- [ ] Present the observed gaps and recommended next RAG improvements to the user for review.
+
+## 2026-03-19 Current hardening iteration status
+
+### Completed in this iteration
+- [x] Strengthen exact title / heading / path specificity before rerank-window truncation.
+- [x] Extend the structural lexical channel with early-content-anchor scoring.
+- [x] Add regressions for exact previewer patch lookup, navigation lookup, metadata content-anchor lookup, and Windows smoke cleanup.
+- [x] Re-run focused pytest suite (`36 passed`).
+- [x] Re-run local directory smoke on both corpora.
+
+### Next universal slices
+- [ ] Add contamination penalties for giant status/archive families without hardcoding corpus names.
+- [ ] Add stronger exact-lookup routing for navigation/reference/setup intent without relying on manual document roles.
+- [ ] Expand committed multicorpus eval cases with the still-failing live cases from 2026-03-19.

@@ -274,6 +274,11 @@ def _normalize_field_text_value(text: str) -> str:
     return _SPACE_RE.sub(" ", normalized).strip()
 
 
+def _normalized_field_terms(text: str) -> List[str]:
+    normalized = _normalize_field_text_value(text)
+    return [token for token in normalized.split(" ") if token]
+
+
 def _extract_query_specificity_terms(query: str) -> List[str]:
     terms: List[str] = []
     seen = set()
@@ -298,6 +303,30 @@ def _candidate_field_text(candidate: Dict[str, Any]) -> str:
         info.get("section_path") or "",
     ]
     return _normalize_field_text_value(" ".join(str(part or "") for part in parts if part))
+
+
+def _field_match_metrics(field_text: str, query_terms: List[str], normalized_query: str) -> Dict[str, Any]:
+    normalized_field = _normalize_field_text_value(field_text)
+    if not normalized_field:
+        return {
+            "matched_terms": [],
+            "coverage_ratio": 0.0,
+            "precision_ratio": 0.0,
+            "exact_match": False,
+        }
+
+    field_terms = _normalized_field_terms(normalized_field)
+    matched_terms = [term for term in query_terms if term in normalized_field]
+    unique_hits = len({term for term in matched_terms})
+    coverage_ratio = float(unique_hits / float(len(query_terms) or 1))
+    precision_ratio = float(unique_hits / float(len(field_terms) or 1))
+    exact_match = bool(normalized_query and normalized_query in normalized_field)
+    return {
+        "matched_terms": matched_terms,
+        "coverage_ratio": coverage_ratio,
+        "precision_ratio": precision_ratio,
+        "exact_match": exact_match,
+    }
 
 
 def _annotate_candidates_with_query_field_specificity(
@@ -330,15 +359,68 @@ def _annotate_candidates_with_query_field_specificity(
             doc_freq = max(1, int(term_doc_freq.get(term, 0)))
             specificity_score += float(np.log((total_candidates + 1.0) / (doc_freq + 1.0)) + 1.0)
         exact_match = bool(normalized_query and normalized_query in field_text)
+        info = describe_context_chunk(candidate)
+        field_priority = {
+            "doc_title": 1.05,
+            "section_title": 1.15,
+            "section_path": 0.95,
+            "source_path": 0.75,
+        }
+        best_field_name = ""
+        best_coverage = 0.0
+        best_precision = 0.0
+        best_exact = False
+        field_focus_score = 0.0
+        for field_name, weight in field_priority.items():
+            metrics = _field_match_metrics(str(info.get(field_name) or ""), query_terms, normalized_query)
+            coverage = float(metrics["coverage_ratio"])
+            precision = float(metrics["precision_ratio"])
+            if metrics["exact_match"] or coverage > 0.0:
+                field_focus_score += (
+                    (3.0 if metrics["exact_match"] else 0.0)
+                    + (2.2 * coverage)
+                    + (1.8 * precision)
+                ) * weight
+            if (
+                bool(metrics["exact_match"]) > best_exact
+                or coverage > best_coverage
+                or (coverage == best_coverage and precision > best_precision)
+            ):
+                best_field_name = field_name
+                best_coverage = coverage
+                best_precision = precision
+                best_exact = bool(metrics["exact_match"])
+
+        content_anchor = _normalize_field_text_value(
+            " ".join(
+                [
+                    str(info.get("section_title") or ""),
+                    str(info.get("section_path") or ""),
+                    str(candidate.get("content") or "")[:500],
+                ]
+            )
+        )
+        content_focus_hits = sum(1 for term in query_terms if term in content_anchor)
+        content_focus_score = float(
+            min(1.5, 0.3 * content_focus_hits)
+            + (0.8 if normalized_query and normalized_query in content_anchor else 0.0)
+        )
         candidate["_query_field_term_hits"] = int(len(matched_terms))
         candidate["_query_field_coverage_ratio"] = float(len(matched_terms) / float(len(query_terms)))
         candidate["_query_field_distinctive_hits"] = int(len(distinctive_matches))
         candidate["_query_field_exact_match"] = exact_match
+        candidate["_query_field_best_field"] = best_field_name
+        candidate["_query_field_best_coverage"] = float(best_coverage)
+        candidate["_query_field_best_precision"] = float(best_precision)
+        candidate["_query_field_best_exact"] = bool(best_exact)
+        candidate["_query_field_content_hits"] = int(content_focus_hits)
         candidate["_query_field_specificity_score"] = float(
             specificity_score
             + (0.75 * len(matched_terms))
             + (1.5 * len(distinctive_matches))
             + (3.0 if exact_match else 0.0)
+            + field_focus_score
+            + content_focus_score
         )
         annotated.append(candidate)
     return annotated
@@ -350,8 +432,18 @@ def _order_candidates_by_query_field_specificity(
     query: str,
 ) -> List[Dict[str, Any]]:
     annotated = _annotate_candidates_with_query_field_specificity(candidates, query=query)
+    def _has_candidate_signal(candidate: Dict[str, Any]) -> bool:
+        return (
+            bool(candidate.get("_query_field_exact_match"))
+            or bool(candidate.get("_query_field_best_exact"))
+            or int(candidate.get("_query_field_distinctive_hits", 0)) >= 1
+            or float(candidate.get("_query_field_best_coverage", 0.0)) > 0.0
+            or float(candidate.get("_query_field_coverage_ratio", 0.0)) > 0.0
+        )
+
     has_specific_signal = any(
         bool(candidate.get("_query_field_exact_match"))
+        or bool(candidate.get("_query_field_best_exact"))
         or (
             int(candidate.get("_query_field_distinctive_hits", 0)) >= 1
             and int(candidate.get("_query_field_term_hits", 0)) >= 2
@@ -360,15 +452,24 @@ def _order_candidates_by_query_field_specificity(
             float(candidate.get("_query_field_coverage_ratio", 0.0)) >= 0.8
             and int(candidate.get("_query_field_term_hits", 0)) >= 3
         )
+        or (
+            float(candidate.get("_query_field_best_coverage", 0.0)) >= 0.6
+            and float(candidate.get("_query_field_best_precision", 0.0)) >= 0.25
+        )
         for candidate in annotated
     )
     if not has_specific_signal:
         return annotated
 
     indexed = list(enumerate(annotated))
-    indexed.sort(
+    signaled = [(idx, candidate) for idx, candidate in indexed if _has_candidate_signal(candidate)]
+    unsignaled = [candidate for _, candidate in indexed if not _has_candidate_signal(candidate)]
+    signaled.sort(
         key=lambda item: (
             -int(bool(item[1].get("_query_field_exact_match"))),
+            -int(bool(item[1].get("_query_field_best_exact"))),
+            -float(item[1].get("_query_field_best_coverage", 0.0)),
+            -float(item[1].get("_query_field_best_precision", 0.0)),
             -float(item[1].get("_query_field_coverage_ratio", 0.0)),
             -int(item[1].get("_query_field_distinctive_hits", 0)),
             -float(item[1].get("_query_field_specificity_score", 0.0)),
@@ -380,7 +481,271 @@ def _order_candidates_by_query_field_specificity(
             item[0],
         )
     )
-    return [item[1] for item in indexed]
+    return [candidate for _, candidate in signaled] + unsignaled
+
+
+def _query_prefers_broad_status_like_sources(query: str) -> bool:
+    query_lower = _normalize_field_text_value(query)
+    if not query_lower:
+        return False
+    status_markers = (
+        "status",
+        "statuses",
+        "archive",
+        "archived",
+        "history",
+        "historical",
+        "backlog",
+        "roadmap",
+        "release",
+        "releases",
+        "changelog",
+        "inventory",
+        "matrix",
+        "overview",
+        "summary",
+        "note",
+        "notes",
+        "статус",
+        "архив",
+        "история",
+        "релиз",
+        "обзор",
+        "заметки",
+        "список",
+    )
+    return any(marker in query_lower for marker in status_markers)
+
+
+def _candidate_canonicality_broad_markers(candidate: Dict[str, Any]) -> int:
+    info = describe_context_chunk(candidate)
+    marker_text = " ".join(
+        [
+            str(candidate.get("source_path") or ""),
+            str(info.get("doc_title") or ""),
+            str(info.get("section_title") or ""),
+            str(info.get("section_path") or ""),
+        ]
+    ).lower()
+    broad_markers = (
+        "status",
+        "archive",
+        "history",
+        "historical",
+        "overview",
+        "introduction",
+        "summary",
+        "notes",
+        "note",
+        "changelog",
+        "release note",
+        "release notes",
+        "faq",
+        "matrix",
+        "inventory",
+        "backlog",
+        "roadmap",
+        "log",
+        "статус",
+        "архив",
+        "история",
+        "обзор",
+        "заметки",
+        "сводка",
+        "список",
+    )
+    return sum(1 for marker in broad_markers if marker in marker_text)
+
+
+def _annotate_candidates_with_canonicality(
+    candidates: List[Dict[str, Any]],
+    *,
+    query: str,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    query_terms = _extract_query_specificity_terms(query)
+    prefers_broad_status_like = _query_prefers_broad_status_like_sources(query)
+    annotated: List[Dict[str, Any]] = []
+
+    for row in candidates:
+        candidate = dict(row)
+        info = describe_context_chunk(candidate)
+        content = str(candidate.get("content") or "")
+        content_sample = content[:900]
+        lead_sample = content[:280]
+        normalized_content = _normalize_field_text_value(content_sample)
+        normalized_lead = _normalize_field_text_value(lead_sample)
+        source_path = str(candidate.get("source_path") or "")
+        section_path = str(info.get("section_path") or "")
+        structural_scope = " ".join(
+            [
+                source_path,
+                str(info.get("doc_title") or ""),
+                str(info.get("section_title") or ""),
+                section_path,
+            ]
+        )
+
+        field_term_hits = int(candidate.get("_query_field_term_hits", 0))
+        distinctive_hits = int(candidate.get("_query_field_distinctive_hits", 0))
+        best_coverage = float(candidate.get("_query_field_best_coverage", 0.0))
+        best_precision = float(candidate.get("_query_field_best_precision", 0.0))
+        specificity_score = float(candidate.get("_query_field_specificity_score", 0.0))
+        family_channel_count = int(candidate.get("_family_channel_count", 0))
+        family_candidate_count = int(candidate.get("_family_candidate_count", 0))
+        family_support_rrf = float(candidate.get("_family_support_rrf", 0.0))
+        exactish = bool(candidate.get("_query_field_exact_match")) or bool(candidate.get("_query_field_best_exact"))
+
+        lead_hits = sum(1 for term in query_terms if term in normalized_lead)
+        content_hits = sum(1 for term in query_terms if term in normalized_content)
+        spread_hits = max(0, content_hits - field_term_hits)
+
+        content_lines = [line.strip() for line in content_sample.splitlines() if line.strip()]
+        line_count = max(1, len(content_lines))
+        bulletish_lines = sum(
+            1
+            for line in content_lines
+            if re.match(r"^([-*#]|\d+[.)]|[A-Z0-9_]{3,}\s*[:=-])", line)
+            or "|" in line
+        )
+        list_density = float(bulletish_lines / float(line_count))
+
+        structural_tokens = _WORD_RE.findall(structural_scope)
+        content_tokens = _WORD_RE.findall(content_sample)
+        token_count = max(1, len(structural_tokens) + len(content_tokens))
+        identifier_noise = sum(
+            1
+            for token in structural_tokens + content_tokens
+            if re.fullmatch(r"[A-Z0-9_]{4,}", token or "")
+        )
+        identifier_density = float(identifier_noise / float(token_count))
+
+        section_depth = max(
+            section_path.count(">") + 1 if section_path else 0,
+            source_path.count("/") if source_path else 0,
+        )
+        broad_markers = _candidate_canonicality_broad_markers(candidate)
+
+        canonicality_score = 0.0
+        canonicality_reasons: List[str] = []
+        if exactish:
+            canonicality_score += 3.0
+            canonicality_reasons.append("exact_field_match")
+        if best_coverage >= 0.55:
+            canonicality_score += 1.6 * best_coverage
+            canonicality_reasons.append("focused_field_coverage")
+        if best_precision >= 0.25:
+            canonicality_score += 1.4 * best_precision
+            canonicality_reasons.append("field_precision")
+        if lead_hits:
+            canonicality_score += min(1.2, 0.35 * lead_hits)
+            canonicality_reasons.append("lead_match")
+        if distinctive_hits:
+            canonicality_score += min(1.2, 0.45 * distinctive_hits)
+            canonicality_reasons.append("distinctive_terms")
+        if field_term_hits >= 2:
+            canonicality_score += min(1.0, 0.3 * field_term_hits)
+            canonicality_reasons.append("field_term_concentration")
+        if family_channel_count >= 2 or family_candidate_count >= 2:
+            canonicality_score += min(1.2, 0.35 * family_channel_count + 0.2 * family_candidate_count)
+            canonicality_reasons.append("family_support")
+        if family_support_rrf > 0.0 and (exactish or field_term_hits > 0 or best_coverage > 0.0):
+            canonicality_score += min(0.8, family_support_rrf * 4.0)
+        if section_depth and section_depth <= 4 and (exactish or field_term_hits > 0 or best_coverage > 0.0):
+            canonicality_score += 0.2
+            canonicality_reasons.append("bounded_scope")
+
+        contamination_penalty = 0.0
+        contamination_reasons: List[str] = []
+        if list_density >= 0.34:
+            contamination_penalty += min(1.1, list_density * 1.6)
+            contamination_reasons.append("list_or_table_shape")
+        if identifier_density >= 0.06:
+            contamination_penalty += min(1.0, identifier_density * 8.0)
+            contamination_reasons.append("identifier_density")
+        if spread_hits >= 2 and best_precision < 0.3:
+            contamination_penalty += min(1.1, 0.45 * spread_hits)
+            contamination_reasons.append("diffuse_query_match")
+        if broad_markers and not prefers_broad_status_like and best_coverage < 0.8:
+            contamination_penalty += min(1.2, 0.35 * broad_markers)
+            contamination_reasons.append("broad_scope_marker")
+        if field_term_hits == 0 and content_hits >= 2:
+            contamination_penalty += 0.5
+            contamination_reasons.append("content_only_match")
+        if (
+            not exactish
+            and family_channel_count <= 1
+            and family_candidate_count <= 1
+            and best_coverage < 0.45
+            and specificity_score < 4.0
+            and (field_term_hits > 0 or content_hits > 0 or distinctive_hits > 0)
+        ):
+            contamination_penalty += 0.35
+            contamination_reasons.append("weak_family_support")
+
+        if exactish or best_coverage >= 0.85:
+            contamination_penalty = max(0.0, contamination_penalty - 0.55)
+        if lead_hits >= 2:
+            contamination_penalty = max(0.0, contamination_penalty - 0.25)
+
+        candidate["_canonicality_score"] = float(canonicality_score)
+        candidate["_canonicality_reason"] = ",".join(canonicality_reasons[:4])
+        candidate["_contamination_penalty"] = float(contamination_penalty)
+        candidate["_contamination_reason"] = ",".join(contamination_reasons[:4])
+        candidate["_canonicality_net_score"] = float(canonicality_score - contamination_penalty)
+        annotated.append(candidate)
+
+    return annotated
+
+
+def _order_candidates_by_canonicality(
+    candidates: List[Dict[str, Any]],
+    *,
+    query: str,
+) -> List[Dict[str, Any]]:
+    annotated = _annotate_candidates_with_canonicality(candidates, query=query)
+    has_signal = any(
+        bool(candidate.get("_query_field_exact_match"))
+        or bool(candidate.get("_query_field_best_exact"))
+        or float(candidate.get("_query_field_best_coverage", 0.0)) >= 0.55
+        or int(candidate.get("_query_field_distinctive_hits", 0)) >= 1
+        or float(candidate.get("_contamination_penalty", 0.0)) >= 0.35
+        for candidate in annotated
+    )
+    if not has_signal:
+        return annotated
+
+    indexed = list(enumerate(annotated))
+    signaled = [
+        (idx, candidate)
+        for idx, candidate in indexed
+        if float(candidate.get("_canonicality_score", 0.0)) > 0.0
+        or float(candidate.get("_contamination_penalty", 0.0)) > 0.0
+    ]
+    unsignaled = [candidate for _, candidate in indexed if not (
+        float(candidate.get("_canonicality_score", 0.0)) > 0.0
+        or float(candidate.get("_contamination_penalty", 0.0)) > 0.0
+    )]
+    signaled.sort(
+        key=lambda item: (
+            -float(item[1].get("_canonicality_net_score", 0.0)),
+            -float(item[1].get("_canonicality_score", 0.0)),
+            float(item[1].get("_contamination_penalty", 0.0)),
+            -int(bool(item[1].get("_query_field_exact_match"))),
+            -int(bool(item[1].get("_query_field_best_exact"))),
+            -float(item[1].get("_query_field_best_coverage", 0.0)),
+            -float(item[1].get("_query_field_best_precision", 0.0)),
+            int(item[1].get("_family_rank", 999999)),
+            -int(item[1].get("_family_channel_count", 0)),
+            -int(item[1].get("_family_candidate_count", 0)),
+            -float(item[1].get("_family_support_rrf", 0.0)),
+            -_candidate_rank_score(item[1]),
+            item[0],
+        )
+    )
+    return [item[1] for item in signaled] + unsignaled
 
 
 def _annotate_candidates_with_family_support(
@@ -1420,25 +1785,17 @@ class RAGSystem:
 
     def _metadata_field_search(self, query: str, chunks: List[Any], top_k: int) -> List[Dict[str, Any]]:
         """Generic metadata-first retrieval channel over stable document fields."""
-        import re
-
-        query_lower = str(query or "").lower()
+        query_text = str(query or "")
+        query_lower = query_text.lower()
         if not query_lower or not chunks or top_k <= 0:
             return []
 
-        stop_words = {
-            "how", "what", "when", "where", "with", "from", "that", "this", "into", "your",
-            "the", "and", "for", "are", "как", "что", "где", "когда", "для", "или",
-            "это", "эти", "при", "под", "над", "using",
-        }
-        query_words = [
-            word for word in re.findall(r"\w+", query_lower)
-            if len(word) >= 3 and word not in stop_words
-        ]
+        query_words = _extract_query_specificity_terms(query_text)
         if not query_words:
             return []
 
         is_howto = self._is_howto_query(query)
+        normalized_query = _normalize_field_text_value(query_text)
         scored_chunks: List[tuple[float, Any, Dict[str, Any]]] = []
         for chunk in chunks:
             metadata: Dict[str, Any] = {}
@@ -1452,6 +1809,14 @@ class RAGSystem:
             doc_title_lower = (metadata.get("doc_title") or metadata.get("title") or "").lower()
             section_title_lower = (metadata.get("section_title") or "").lower()
             section_path_lower = (metadata.get("section_path") or "").lower()
+            content_anchor_text = " ".join(
+                [
+                    str(metadata.get("section_title") or ""),
+                    str(metadata.get("section_path") or ""),
+                    str(chunk.content or "")[:700],
+                ]
+            )
+            content_anchor_lower = content_anchor_text.lower()
 
             field_hits = 0
             score = 0.0
@@ -1468,6 +1833,9 @@ class RAGSystem:
                 if word in source_path_lower:
                     score += 2.4
                     field_hits += 1
+                if word in content_anchor_lower:
+                    score += 1.6
+                    field_hits += 1
 
             if query_lower in doc_title_lower:
                 score += 8.0
@@ -1477,6 +1845,31 @@ class RAGSystem:
                 score += 7.0
             if query_lower in source_path_lower:
                 score += 6.0
+            if query_lower in content_anchor_lower:
+                score += 5.0
+
+            doc_metrics = _field_match_metrics(doc_title_lower, query_words, normalized_query)
+            section_metrics = _field_match_metrics(section_title_lower, query_words, normalized_query)
+            path_metrics = _field_match_metrics(section_path_lower, query_words, normalized_query)
+            content_metrics = _field_match_metrics(content_anchor_text, query_words, normalized_query)
+            score += (
+                (3.2 * float(doc_metrics["coverage_ratio"]))
+                + (3.8 * float(section_metrics["coverage_ratio"]))
+                + (2.8 * float(path_metrics["coverage_ratio"]))
+                + (2.4 * float(content_metrics["coverage_ratio"]))
+                + (1.8 * float(doc_metrics["precision_ratio"]))
+                + (2.2 * float(section_metrics["precision_ratio"]))
+                + (1.4 * float(path_metrics["precision_ratio"]))
+                + (1.0 * float(content_metrics["precision_ratio"]))
+            )
+            if bool(doc_metrics["exact_match"]):
+                score += 3.5
+            if bool(section_metrics["exact_match"]):
+                score += 4.0
+            if bool(path_metrics["exact_match"]):
+                score += 3.0
+            if bool(content_metrics["exact_match"]):
+                score += 2.5
 
             if field_hits >= 2:
                 score += min(4.0, 0.8 * field_hits)
@@ -2238,8 +2631,8 @@ class RAGSystem:
                     "field": field_candidates,
                 },
             )
-            if not (self.enable_rerank and HAS_RERANKER and self.reranker is not None):
-                merged = _order_candidates_by_query_field_specificity(merged, query=query)
+            merged = _order_candidates_by_query_field_specificity(merged, query=query)
+            merged = _order_candidates_by_canonicality(merged, query=query)
 
         # Если есть reranker – пересчитываем релевантность и берём top_k по score
         if self.enable_rerank and HAS_RERANKER and self.reranker is not None:
@@ -2256,6 +2649,13 @@ class RAGSystem:
                 scored.sort(
                     key=lambda item: (
                         item[3],
+                        int(bool(item[0].get("_query_field_exact_match"))),
+                        int(bool(item[0].get("_query_field_best_exact"))),
+                        float(item[0].get("_query_field_best_coverage", 0.0)),
+                        float(item[0].get("_query_field_best_precision", 0.0)),
+                        float(item[0].get("_query_field_specificity_score", 0.0)),
+                        float(item[0].get("_canonicality_net_score", 0.0)),
+                        -float(item[0].get("_contamination_penalty", 0.0)),
                         -(int(item[0].get("_family_rank", 999999))),
                         int(item[0].get("_family_channel_count", 0)),
                         int(item[0].get("_family_candidate_count", 0)),

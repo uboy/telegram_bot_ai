@@ -38,13 +38,10 @@ def test_load_cases_accepts_json_override():
         ),
     )
 
-    assert cases == [
-        {
-            "query": "how to create custom component",
-            "expected_source_fragment": "CustomComponent",
-            "expected_answer_fragments": ["@Component"],
-        }
-    ]
+    assert len(cases) == 1
+    assert cases[0]["query"] == "how to create custom component"
+    assert cases[0]["expected_source_fragment"] == "CustomComponent"
+    assert cases[0]["expected_answer_fragments"] == ["@Component"]
 
 
 def test_run_remote_queries_uses_backend_api_key(monkeypatch):
@@ -145,3 +142,57 @@ def test_materialize_zip_input_builds_temp_archive_from_directory(tmp_path):
     finally:
         if temp_dir is not None:
             temp_dir.cleanup()
+
+
+def test_parse_cases_payload_accepts_failure_class_and_family_fragment():
+    cases = smoke._parse_cases_payload(
+        json.dumps([
+            {
+                "query": "how to sync code",
+                "expected_source_fragment": "Sync%26Build",
+                "expected_family_fragment": "Sync%26Build",
+                "failure_class": "broad_procedure_miss",
+                "query_mode": "generalized",
+            }
+        ])
+    )
+
+    assert cases[0]["failure_class"] == "broad_procedure_miss"
+    assert cases[0]["expected_family_fragment"] == "Sync%26Build"
+    assert cases[0]["query_mode"] == "generalized"
+
+
+def test_parse_cases_payload_defaults_empty_optional_fields():
+    cases = smoke._parse_cases_payload(json.dumps([{"query": "how to build rk3568"}]))
+
+    assert cases[0]["failure_class"] == ""
+    assert cases[0]["expected_family_fragment"] == ""
+    assert cases[0]["query_mode"] == ""
+
+
+def test_main_uses_tempdir_cleanup_instead_of_manual_rmtree(monkeypatch, tmp_path):
+    cleanup_calls = {"count": 0}
+
+    class FakeTempDir:
+        def __init__(self, *args, **kwargs):  # noqa: ARG002
+            self.name = str(tmp_path / "temp-smoke-root")
+
+        def cleanup(self):
+            cleanup_calls["count"] += 1
+
+    monkeypatch.setattr(smoke.tempfile, "TemporaryDirectory", FakeTempDir)
+    monkeypatch.setattr(
+        smoke,
+        "_parse_args",
+        lambda default_profile=None: SimpleNamespace(  # noqa: ARG005
+            profile="arkuiwiki",
+            db_path="",
+            json_out="",
+        ),
+    )
+    monkeypatch.setattr(smoke, "_run_smoke", lambda args, db_path: {"ok": True, "db_path": db_path})
+
+    exit_code = smoke.main()
+
+    assert exit_code == 0
+    assert cleanup_calls["count"] == 1

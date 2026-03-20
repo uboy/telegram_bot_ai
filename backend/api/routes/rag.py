@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from uuid import uuid4
 from time import perf_counter
@@ -31,6 +31,8 @@ from shared.rag_system import (  # type: ignore
     build_query_focused_excerpt,
     describe_context_chunk,
     merge_multi_query_candidates,
+    _order_candidates_by_query_field_specificity,
+    _order_candidates_by_canonicality,
 )
 from shared.ai_providers import ai_manager  # type: ignore
 from shared.utils import create_prompt_with_language, normalize_wiki_url_for_display  # type: ignore
@@ -61,6 +63,10 @@ _CONTEXT_TRACE_REASON_KEY = "_diag_context_reason"
 _CONTEXT_TRACE_ANCHOR_RANK_KEY = "_diag_context_anchor_rank"
 _FAMILY_TRACE_KEY = "_diag_family_key"
 _FAMILY_TRACE_RANK_KEY = "_diag_family_rank"
+_CANONICALITY_TRACE_SCORE_KEY = "_diag_canonicality_score"
+_CONTAMINATION_TRACE_PENALTY_KEY = "_diag_contamination_penalty"
+_CANONICALITY_TRACE_REASON_KEY = "_diag_canonicality_reason"
+_CONTAMINATION_TRACE_REASON_KEY = "_diag_contamination_reason"
 _PROVIDER_ERROR_PREFIXES = (
     "Ошибка подключения к ",
     "Ошибка при обращении к ",
@@ -449,6 +455,86 @@ def _extract_query_hints(query: str) -> Dict[str, Any]:
         "strict_fact_terms": strict_fact_terms,
         "key_phrases": key_phrases[:5],
     }
+
+
+def _infer_query_intent(query: str, hints: Optional[Dict[str, Any]] = None) -> str:
+    q = _normalize_query_text(query).lower()
+    if not q:
+        return "GENERAL"
+    hints = hints or {}
+    definition_term = str(hints.get("definition_term") or "").strip().lower()
+    point_numbers = [str(v).strip() for v in (hints.get("point_numbers") or []) if str(v).strip()]
+    year_tokens = [str(v).strip() for v in (hints.get("year_tokens") or []) if str(v).strip()]
+    metric_query = bool(hints.get("metric_query"))
+    fact_terms = [str(v).strip().lower() for v in (hints.get("fact_terms") or []) if str(v).strip()]
+
+    if definition_term:
+        return "DEFINITION"
+    if metric_query or point_numbers or year_tokens:
+        return "FACTOID"
+
+    procedural_terms = [
+        "how to",
+        "как ",
+        "build",
+        "run",
+        "install",
+        "setup",
+        "compile",
+        "unit test",
+        "unittest",
+        "tests",
+        "guide",
+        "steps",
+    ]
+    trouble_terms = [
+        "error",
+        "errors",
+        "fail",
+        "failed",
+        "not working",
+        "issue",
+        "issues",
+        "stacktrace",
+        "fix",
+        "debug",
+        "white screen",
+        "troubleshoot",
+    ]
+    definition_terms = [
+        "что такое",
+        "как определяется",
+        "как в документе определяется",
+        "что называется",
+        "что включает",
+        "definition",
+        "defined as",
+        "what is",
+        "define ",
+    ]
+    factoid_terms = [
+        "кто",
+        "какой",
+        "какие",
+        "какая",
+        "сколько",
+        "как часто",
+        "when",
+        "who",
+        "what target",
+        "who decides",
+        "how often",
+    ]
+
+    if any(term in q for term in procedural_terms):
+        return "HOWTO"
+    if any(term in q for term in trouble_terms):
+        return "TROUBLE"
+    if any(term in q for term in definition_terms):
+        return "DEFINITION"
+    if fact_terms or any(term in q for term in factoid_terms):
+        return "FACTOID"
+    return "GENERAL"
 
 
 def _build_controlled_query_variants(
@@ -1392,6 +1478,106 @@ def _focus_compound_howto_rows(query: str, ranked_results: List[dict]) -> List[d
     return ranked_results
 
 
+_EXACT_LOOKUP_NAVIGATION_PHRASES = (
+    "where is",
+    "where can i find",
+    "where do i find",
+    "where do i get",
+    "how to find",
+    "how to get the",
+    "what patch",
+    "which patch",
+    "which page",
+    "what page",
+    "api reference",
+    "official documentation",
+    "official docs",
+    "official guide",
+    "где найти",
+    "где находится",
+    "где скачать",
+    "где взять",
+    "где получить",
+    "какой патч",
+    "официальная документация",
+)
+
+_EXACT_LOOKUP_MIN_FIELD_COVERAGE = 0.45
+_EXACT_LOOKUP_MIN_CANONICALITY = 1.5
+
+
+def _is_exact_lookup_query(query: str) -> bool:
+    """Return True when the query is a navigation or exact artifact lookup request.
+
+    The lane must not fire for open-ended compound procedural HOWTO queries —
+    that lane handles multi-step build/sync/install procedures.
+    """
+    if not query:
+        return False
+    q = _normalize_query_text(query).lower()
+    if not any(phrase in q for phrase in _EXACT_LOOKUP_NAVIGATION_PHRASES):
+        return False
+    if _is_compound_howto_query(query):
+        return False
+    return True
+
+
+def _apply_exact_lookup_lane(
+    query: str,
+    rows: List[dict],
+) -> Tuple[List[dict], str, Optional[str], Optional[str]]:
+    """Apply exact-lookup lane for navigation/reference queries.
+
+    Returns (focused_rows, query_mode, anchor_family, anchor_reason).
+    query_mode is one of:
+      - "generalized"          — lane did not fire (query shape not matched)
+      - "exact_lookup"         — lane fired, anchor found, rows focused
+      - "exact_lookup_degraded" — lane fired but no confident anchor; original order kept
+    """
+    if not rows or not _is_exact_lookup_query(query):
+        return rows, "generalized", None, None
+
+    # Find the best anchor candidate among the top candidates.
+    anchor: Optional[dict] = None
+    anchor_reason: Optional[str] = None
+    for row in rows[:5]:
+        exactish = bool(row.get("_query_field_exact_match")) or bool(row.get("_query_field_best_exact"))
+        coverage = float(row.get("_query_field_best_coverage", 0.0))
+        distinctive_hits = int(row.get("_query_field_distinctive_hits", 0))
+        canonicality = float(row.get("_canonicality_score", 0.0))
+        if exactish:
+            anchor = row
+            anchor_reason = "exact_field_match"
+            break
+        if coverage >= _EXACT_LOOKUP_MIN_FIELD_COVERAGE:
+            anchor = row
+            anchor_reason = f"field_coverage_{coverage:.2f}"
+            break
+        if distinctive_hits >= 1 and canonicality >= _EXACT_LOOKUP_MIN_CANONICALITY:
+            anchor = row
+            anchor_reason = "canonical_distinctive_hit"
+            break
+
+    if anchor is None:
+        # No candidate met the confidence threshold — degrade gracefully.
+        return rows, "exact_lookup_degraded", None, "no_confident_anchor"
+
+    # Identify anchor's document family by source_path.
+    anchor_source = str(anchor.get("source_path") or "").strip()
+    anchor_family = anchor_source or str(
+        (anchor.get("metadata") or {}).get("doc_title") or ""
+    ).strip()
+
+    # Focus: anchor-document rows first, then up to 2 rows from other families
+    # for fallback coverage in case the anchor alone is insufficient.
+    anchor_rows = [r for r in rows if str(r.get("source_path") or "") == anchor_source]
+    other_rows = [r for r in rows if str(r.get("source_path") or "") != anchor_source]
+    focused = anchor_rows + other_rows[:2]
+    if not focused:
+        focused = rows
+    return focused, "exact_lookup", anchor_family, anchor_reason
+
+
 def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict[str, Any]]) -> dict:
     row = dict(candidate) if isinstance(candidate, dict) else {}
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
@@ -1403,6 +1589,10 @@ def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict
         _CONTEXT_TRACE_ANCHOR_RANK_KEY,
         _FAMILY_TRACE_KEY,
         _FAMILY_TRACE_RANK_KEY,
+        _CANONICALITY_TRACE_SCORE_KEY,
+        _CONTAMINATION_TRACE_PENALTY_KEY,
+        _CANONICALITY_TRACE_REASON_KEY,
+        _CONTAMINATION_TRACE_REASON_KEY,
     ):
         metadata_obj.pop(key, None)
 
@@ -1420,14 +1610,26 @@ def _decorate_candidate_with_context_trace(candidate: dict, trace: Optional[Dict
     if family_rank is not None:
         metadata_obj[_FAMILY_TRACE_RANK_KEY] = family_rank
         row["_family_rank"] = family_rank
+    canonicality_score = _metric_to_str(row.get("_canonicality_score"))
+    contamination_penalty = _metric_to_str(row.get("_contamination_penalty"))
+    canonicality_reason = str(row.get("_canonicality_reason") or "").strip()
+    contamination_reason = str(row.get("_contamination_reason") or "").strip()
+    if canonicality_score is not None:
+        metadata_obj[_CANONICALITY_TRACE_SCORE_KEY] = canonicality_score
+    if contamination_penalty is not None:
+        metadata_obj[_CONTAMINATION_TRACE_PENALTY_KEY] = contamination_penalty
+    if canonicality_reason:
+        metadata_obj[_CANONICALITY_TRACE_REASON_KEY] = canonicality_reason[:200]
+    if contamination_reason:
+        metadata_obj[_CONTAMINATION_TRACE_REASON_KEY] = contamination_reason[:200]
 
     row["metadata"] = metadata_obj
     return row
 
 
-def _extract_context_trace_from_metadata(metadata_obj: Optional[Dict[str, Any]]) -> tuple[bool, Optional[int], Optional[str], Optional[int], Optional[str], Optional[int], Optional[Dict[str, Any]]]:
+def _extract_context_trace_from_metadata(metadata_obj: Optional[Dict[str, Any]]) -> tuple[bool, Optional[int], Optional[str], Optional[int], Optional[str], Optional[int], Optional[str], Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]]]:
     if not isinstance(metadata_obj, dict):
-        return False, None, None, None, None, None, metadata_obj
+        return False, None, None, None, None, None, None, None, None, None, metadata_obj
     clean_metadata = dict(metadata_obj)
     included_in_context = _coerce_bool(clean_metadata.pop(_CONTEXT_TRACE_SELECTED_KEY, None))
     context_rank = _coerce_positive_int(clean_metadata.pop(_CONTEXT_TRACE_RANK_KEY, None))
@@ -1437,7 +1639,25 @@ def _extract_context_trace_from_metadata(metadata_obj: Optional[Dict[str, Any]])
     family_key_raw = clean_metadata.pop(_FAMILY_TRACE_KEY, None)
     family_key = str(family_key_raw).strip()[:200] if family_key_raw is not None else None
     family_rank = _coerce_positive_int(clean_metadata.pop(_FAMILY_TRACE_RANK_KEY, None))
-    return bool(included_in_context), context_rank, context_reason, context_anchor_rank, family_key, family_rank, clean_metadata
+    canonicality_score = _metric_to_str(clean_metadata.pop(_CANONICALITY_TRACE_SCORE_KEY, None))
+    contamination_penalty = _metric_to_str(clean_metadata.pop(_CONTAMINATION_TRACE_PENALTY_KEY, None))
+    canonicality_reason_raw = clean_metadata.pop(_CANONICALITY_TRACE_REASON_KEY, None)
+    canonicality_reason = str(canonicality_reason_raw).strip()[:200] if canonicality_reason_raw is not None else None
+    contamination_reason_raw = clean_metadata.pop(_CONTAMINATION_TRACE_REASON_KEY, None)
+    contamination_reason = str(contamination_reason_raw).strip()[:200] if contamination_reason_raw is not None else None
+    return (
+        bool(included_in_context),
+        context_rank,
+        context_reason,
+        context_anchor_rank,
+        family_key,
+        family_rank,
+        canonicality_score,
+        contamination_penalty,
+        canonicality_reason,
+        contamination_reason,
+        clean_metadata,
+    )
 
 
 def _merge_context_diagnostics_candidates(
@@ -1529,15 +1749,27 @@ def _persist_retrieval_logs(
     degraded_mode: bool = False,
     degraded_reason: Optional[str] = None,
     orchestrator_mode: Optional[str] = None,
+    query_mode: Optional[str] = None,
+    lookup_anchor_family: Optional[str] = None,
+    lookup_anchor_reason: Optional[str] = None,
     candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     # Test doubles may pass lightweight DB stubs without persistence APIs.
     if not hasattr(db, "add") or not hasattr(db, "commit"):
         return
     hints_payload = hints if isinstance(hints, dict) else {}
+    extra_hints: Dict[str, str] = {}
     if orchestrator_mode:
+        extra_hints["orchestrator_mode"] = str(orchestrator_mode).strip().lower()
+    if query_mode and query_mode != "generalized":
+        extra_hints["query_mode"] = str(query_mode).strip()[:64]
+    if lookup_anchor_family:
+        extra_hints["lookup_anchor_family"] = str(lookup_anchor_family).strip()[:200]
+    if lookup_anchor_reason:
+        extra_hints["lookup_anchor_reason"] = str(lookup_anchor_reason).strip()[:120]
+    if extra_hints:
         hints_payload = dict(hints_payload)
-        hints_payload["orchestrator_mode"] = str(orchestrator_mode).strip().lower()
+        hints_payload.update(extra_hints)
     try:
         channel_counts: Dict[str, int] = {}
         db.add(
@@ -1570,6 +1802,18 @@ def _persist_retrieval_logs(
                 metadata_obj[_FAMILY_TRACE_KEY] = family_key[:200]
             if family_rank is not None:
                 metadata_obj[_FAMILY_TRACE_RANK_KEY] = family_rank
+            canonicality_score = _metric_to_str(candidate_trace.get("_canonicality_score"))
+            contamination_penalty = _metric_to_str(candidate_trace.get("_contamination_penalty"))
+            canonicality_reason = str(candidate_trace.get("_canonicality_reason") or "").strip()
+            contamination_reason = str(candidate_trace.get("_contamination_reason") or "").strip()
+            if canonicality_score is not None:
+                metadata_obj[_CANONICALITY_TRACE_SCORE_KEY] = canonicality_score
+            if contamination_penalty is not None:
+                metadata_obj[_CONTAMINATION_TRACE_PENALTY_KEY] = contamination_penalty
+            if canonicality_reason:
+                metadata_obj[_CANONICALITY_TRACE_REASON_KEY] = canonicality_reason[:200]
+            if contamination_reason:
+                metadata_obj[_CONTAMINATION_TRACE_REASON_KEY] = contamination_reason[:200]
             metadata_json = _safe_json_dumps(metadata_obj if isinstance(metadata_obj, dict) else {})
             content_preview = ""
             if isinstance(candidate_trace, dict):
@@ -1630,6 +1874,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
     filtered_results: List[dict] = []
     ranked_results: List[dict] = []
     orchestrator_mode: str = "legacy"
+    exact_lookup_mode: str = "generalized"
+    exact_lookup_anchor_family: Optional[str] = None
+    exact_lookup_anchor_reason: Optional[str] = None
 
     try:
         # Настройки RAG
@@ -1760,67 +2007,6 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                     }
                 )
             logger.debug("RAG top results preview: %s", top_preview)
-
-        def detect_intent(query: str) -> str:
-            q = (query or "").lower()
-            howto_terms = [
-                "how to",
-                "build",
-                "run",
-                "install",
-                "setup",
-                "compile",
-                "unit test",
-                "unittest",
-                "tests",
-            ]
-            trouble_terms = [
-                "error",
-                "fail",
-                "failed",
-                "not working",
-                "issue",
-                "stacktrace",
-            ]
-            definition_terms = [
-                "что такое",
-                "как определяется",
-                "как в документе определяется",
-                "что называется",
-                "что включает",
-                "определение",
-                "definition",
-                "defined as",
-                "what is",
-            ]
-            factoid_terms = [
-                "кто",
-                "какой",
-                "какие",
-                "какая",
-                "сколько",
-                "как часто",
-                "какой целевой",
-                "целевой показатель",
-                "установлен на",
-                "принимает решение",
-                "механизмы реализации",
-                "основные принципы",
-                "в пункте",
-                "до 2030 года",
-                "what target",
-                "who decides",
-                "how often",
-            ]
-            if any(term in q for term in howto_terms):
-                return "HOWTO"
-            if any(term in q for term in trouble_terms):
-                return "TROUBLE"
-            if any(term in q for term in definition_terms):
-                return "DEFINITION"
-            if any(term in q for term in factoid_terms):
-                return "FACTOID"
-            return "GENERAL"
 
         def get_doc_id(result: dict) -> str:
             source_path = result.get("source_path") or ""
@@ -2194,7 +2380,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             intent = "GENERAL"
             query_hints = dict(precomputed_query_hints)
         else:
-            intent = detect_intent(payload.query)
+            intent = _infer_query_intent(payload.query, precomputed_query_hints)
             query_hints = dict(precomputed_query_hints)
 
         if use_legacy_query_heuristics and kb_id and (
@@ -2239,6 +2425,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
                 orchestrator_mode=orchestrator_mode,
+                query_mode=exact_lookup_mode,
+                lookup_anchor_family=exact_lookup_anchor_family,
+                lookup_anchor_reason=exact_lookup_anchor_reason,
                 candidates=[],
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -2273,6 +2462,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
                 orchestrator_mode=orchestrator_mode,
+                query_mode=exact_lookup_mode,
+                lookup_anchor_family=exact_lookup_anchor_family,
+                lookup_anchor_reason=exact_lookup_anchor_reason,
                 candidates=results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -2298,8 +2490,13 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         selected_docs = select_docs(intent if use_legacy_query_heuristics else "GENERAL", ranked_results)
         filtered_results = [r for r in ranked_results if r.get("doc_id") in selected_docs] or ranked_results
-        context_candidate_rows = _order_rows_by_family_cohesion(filtered_results)
+        context_candidate_rows = _order_candidates_by_query_field_specificity(filtered_results, query=payload.query)
+        context_candidate_rows = _order_rows_by_family_cohesion(context_candidate_rows)
+        context_candidate_rows = _order_candidates_by_canonicality(context_candidate_rows, query=payload.query)
         context_candidate_rows = _focus_compound_howto_rows(payload.query, context_candidate_rows)
+        context_candidate_rows, exact_lookup_mode, exact_lookup_anchor_family, exact_lookup_anchor_reason = (
+            _apply_exact_lookup_lane(payload.query, context_candidate_rows)
+        )
         if context_candidate_rows:
             filtered_results = context_candidate_rows
         if logger.isEnabledFor(logging.DEBUG):
@@ -2358,6 +2555,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
                 orchestrator_mode=orchestrator_mode,
+                query_mode=exact_lookup_mode,
+                lookup_anchor_family=exact_lookup_anchor_family,
+                lookup_anchor_reason=exact_lookup_anchor_reason,
                 candidates=ranked_results or filtered_results,
             )
             return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -2426,6 +2626,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 degraded_mode=degraded_mode,
                 degraded_reason=degraded_reason,
                 orchestrator_mode=orchestrator_mode,
+                query_mode=exact_lookup_mode,
+                lookup_anchor_family=exact_lookup_anchor_family,
+                lookup_anchor_reason=exact_lookup_anchor_reason,
                 candidates=diagnostics_candidates,
             )
             return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id)
@@ -2513,6 +2716,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
             orchestrator_mode=orchestrator_mode,
+            query_mode=exact_lookup_mode,
+            lookup_anchor_family=exact_lookup_anchor_family,
+            lookup_anchor_reason=exact_lookup_anchor_reason,
             candidates=diagnostics_candidates,
         )
         return RAGAnswer(answer=ai_answer, sources=sources, request_id=request_id, debug_chunks=debug_chunks)
@@ -2546,6 +2752,9 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             degraded_mode=degraded_mode,
             degraded_reason=degraded_reason,
             orchestrator_mode=orchestrator_mode,
+            query_mode=exact_lookup_mode,
+            lookup_anchor_family=exact_lookup_anchor_family,
+            lookup_anchor_reason=exact_lookup_anchor_reason,
             candidates=ranked_results or filtered_results or results,
         )
         return RAGAnswer(answer="", sources=[], request_id=request_id)
@@ -2570,7 +2779,19 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
     candidates: List[RAGDiagnosticsCandidate] = []
     for fallback_rank, row in enumerate(candidate_rows, start=1):
         meta_obj = _safe_json_loads(getattr(row, "metadata_json", None))
-        included_in_context, context_rank, context_reason, context_anchor_rank, family_key, family_rank, meta_obj = _extract_context_trace_from_metadata(meta_obj)
+        (
+            included_in_context,
+            context_rank,
+            context_reason,
+            context_anchor_rank,
+            family_key,
+            family_rank,
+            canonicality_score,
+            contamination_penalty,
+            canonicality_reason,
+            contamination_reason,
+            meta_obj,
+        ) = _extract_context_trace_from_metadata(meta_obj)
         trace = {
             "fusion_score": getattr(row, "fusion_score", None),
             "rerank_score": getattr(row, "rerank_score", None),
@@ -2601,6 +2822,10 @@ def rag_diagnostics(request_id: str, db: Session = Depends(get_db_dep)) -> RAGDi
                 context_anchor_rank=context_anchor_rank,
                 family_key=family_key,
                 family_rank=family_rank,
+                canonicality_score=canonicality_score,
+                contamination_penalty=contamination_penalty,
+                canonicality_reason=canonicality_reason,
+                contamination_reason=contamination_reason,
                 metadata=meta_obj,
                 content_preview=getattr(row, "content_preview", None),
             )
@@ -2742,8 +2967,11 @@ def rag_summary(payload: RAGSummaryQuery, db: Session = Depends(get_db_dep)) -> 
     def load_doc_chunks(doc_id: str) -> List[dict]:
         return _load_doc_chunks_for_context(db, doc_id, kb_id=kb_id)
 
-    context_candidate_rows = _order_rows_by_family_cohesion(results)
+    context_candidate_rows = _order_candidates_by_query_field_specificity(results, query=payload.query)
+    context_candidate_rows = _order_rows_by_family_cohesion(context_candidate_rows)
+    context_candidate_rows = _order_candidates_by_canonicality(context_candidate_rows, query=payload.query)
     context_candidate_rows = _focus_compound_howto_rows(payload.query, context_candidate_rows)
+    context_candidate_rows, _, _, _ = _apply_exact_lookup_lane(payload.query, context_candidate_rows)
 
     selected_context_rows = _select_evidence_pack_rows(
         ranked_results=context_candidate_rows,

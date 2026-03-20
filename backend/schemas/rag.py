@@ -62,6 +62,10 @@ class RAGDiagnosticsCandidate(BaseModel):
     context_anchor_rank: Optional[int] = None
     family_key: Optional[str] = None
     family_rank: Optional[int] = None
+    canonicality_score: Optional[str] = None
+    contamination_penalty: Optional[str] = None
+    canonicality_reason: Optional[str] = None
+    contamination_reason: Optional[str] = None
     metadata: Optional[Dict] = None
     content_preview: Optional[str] = None
 

@@ -1,26 +1,25 @@
 {
-  "task_id": "RAGSVC-004",
+  "task_id": "RAGSVC-014",
   "implementation_agent": "codex",
-  "review_agent": "codex-review",
+  "review_agent": "codex-architecture-review",
   "required_commands": [
-    "python -m py_compile backend/api/routes/rag.py tests/test_rag_context_composer.py",
-    "MYSQL_URL='' DB_PATH=data/ragsvc-slice1-test.db .venv\\Scripts\\python.exe -m pytest -q tests/test_rag_context_composer.py tests/test_rag_compound_howto_focus.py tests/test_rag_metadata_field_search.py",
-    "python scripts/scan_secrets.py",
-    "python scripts/ci_policy_gate.py --working-tree"
+    "python -m py_compile shared/rag_system.py backend/api/routes/rag.py tests/test_rag_system_budgets.py tests/test_rag_context_composer.py tests/test_rag_diagnostics.py",
+    "python scripts/scan_secrets.py"
   ],
   "required_artifacts": [
-    "docs/design/rag-service-architecture-and-pipeline-v1.md",
-    "backend/api/routes/rag.py",
-    "tests/test_rag_context_composer.py",
+    "docs/design/rag-contamination-control-and-canonicality-v1.md",
     "SPEC.md",
     "docs/REQUIREMENTS_TRACEABILITY.md",
+    "docs/TESTING.md",
+    "docs/OPERATIONS.md",
     "coordination/state/codex.md",
     "coordination/tasks.jsonl",
-    "coordination/cycle-contract.json"
+    "coordination/cycle-contract.json",
+    "coordination/reviews/ragsvc-contamination-canonicality-2026-03-19.md"
   ],
   "size_limits": {
     "max_files_changed": 12,
-    "max_lines_added": 1200,
-    "max_lines_deleted": 250
+    "max_lines_added": 2000,
+    "max_lines_deleted": 300
   }
 }

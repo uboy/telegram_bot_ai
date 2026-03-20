@@ -1,6 +1,27 @@
 {
   "entries": [
     {
+      "id": "2026-03-19-ragsvc-architecture-review-and-feature-design-package",
+      "approved_on": "2026-03-19",
+      "approved_by": "user",
+      "reason": "User explicitly requested a new architecture and design package for the remaining RAG features, including critical comparison with Open WebUI and other working systems, plus a separate architecture/design review.",
+      "files": [
+        "docs/design/rag-architecture-gap-review-v1.md",
+        "docs/design/rag-contamination-control-and-canonicality-v1.md",
+        "docs/design/rag-exact-lookup-and-navigation-lane-v1.md",
+        "docs/design/rag-multicorpus-live-failure-regression-expansion-v1.md",
+        "docs/design/rag-source-document-quality-guidelines-v1.md",
+        "docs/design/rag-retrieval-policy-profiles-v1.md",
+        "docs/design/rag-evidence-pack-and-context-budget-policy-v1.md",
+        "docs/design/rag-ingestion-quality-and-parser-degradation-v1.md",
+        "docs/design/rag-architecture-governance-and-anti-hardcode-rules-v1.md",
+        "coordination/approval-overrides.json",
+        "coordination/tasks.jsonl",
+        "coordination/cycle-contract.json",
+        "coordination/state/codex.md"
+      ]
+    },
+    {
       "id": "2026-03-11-botfollow-004-gitee-public-loader-followup",
       "approved_on": "2026-03-11",
       "approved_by": "user",
