@@ -8,6 +8,7 @@ import threading
 import functools
 import hashlib
 import re
+import time
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 from collections import defaultdict
@@ -22,6 +23,22 @@ except Exception:
     pipeline_embed_texts = None
 
 logger = logging.getLogger(__name__)
+
+
+class EmbeddingModelMismatchError(Exception):
+    """Исключение возникает при несовпадении модели эмбеддингов в БД и текущей конфигурации."""
+    
+    def __init__(self, kb_id: int, stored_model: str, current_model: str):
+        self.kb_id = kb_id
+        self.stored_model = stored_model
+        self.current_model = current_model
+        message = (
+            f"Embedding model mismatch: KB {kb_id} was indexed with '{stored_model}', "
+            f"current model is '{current_model}'. "
+            f"Run: python scripts/migrate_embeddings.py --kb-id {kb_id} --new-model {current_model}"
+        )
+        super().__init__(message)
+
 
 # Глобальный lock для всех операций записи в БД (SQLite не любит конкурирующие writers)
 _db_write_lock = threading.Lock()
@@ -1136,6 +1153,27 @@ class RAGSystem:
         self.retrieval_backend = "legacy"
         self.qdrant_backend: Optional[QdrantBackend] = None
         self._qdrant_bootstrap_done = False
+        
+        # Per-document reindex pending queue (RAGIDX-001)
+        self._pending_rebuild_kbs: set[int] = set()
+        self._pending_rebuild_lock = threading.Lock()
+        self._rebuild_debounce_sec = 5  # Default, can be overridden by config
+        
+        try:
+            from shared.config import RAG_REBUILD_DEBOUNCE_SEC
+            self._rebuild_debounce_sec = max(1, int(RAG_REBUILD_DEBOUNCE_SEC or 5))
+        except Exception:
+            self._rebuild_debounce_sec = max(1, int(os.getenv("RAG_REBUILD_DEBOUNCE_SEC", "5")))
+        
+        # Start background debounce thread
+        self._debounce_stop = threading.Event()
+        self._debounce_thread = threading.Thread(
+            target=self._debounce_rebuild_worker,
+            daemon=True,
+            name="rag-debounce-rebuild",
+        )
+        self._debounce_thread.start()
+        
         try:
             from shared.config import (
                 RAG_BACKEND,
@@ -1600,8 +1638,25 @@ class RAGSystem:
         """Загрузить индекс из базы данных (по KB или все)"""
         if not HAS_EMBEDDINGS:
             return
-        
+
         with get_session() as session:
+            # Embedding model mismatch detection (RAGIDX-001)
+            if knowledge_base_id is not None:
+                kb = session.query(KnowledgeBase).filter_by(id=knowledge_base_id).first()
+                if kb and kb.embedding_model:
+                    current_model = self.model_name
+                    if kb.embedding_model != current_model:
+                        logger.error(
+                            "Embedding model mismatch: KB %d was indexed with '%s', "
+                            "current model is '%s'. Run: python scripts/migrate_embeddings.py "
+                            "--kb-id %d --new-model %s",
+                            knowledge_base_id, kb.embedding_model, current_model,
+                            knowledge_base_id, current_model
+                        )
+                        raise EmbeddingModelMismatchError(
+                            knowledge_base_id, kb.embedding_model, current_model
+                        )
+            
             if knowledge_base_id is not None:
                 chunks = (
                     session.query(KnowledgeChunk)
@@ -1616,7 +1671,7 @@ class RAGSystem:
             else:
                 chunks = session.query(KnowledgeChunk).filter_by(is_deleted=False).all()
                 total_chunks = session.query(KnowledgeChunk).filter_by(is_deleted=False).count()
-            
+
             if not chunks:
                 return
 
@@ -3113,6 +3168,152 @@ class RAGSystem:
                             )
 
             return deleted
+
+    def reindex_document(
+        self,
+        document_id: int,
+        knowledge_base_id: int,
+        session: Optional[Session] = None,
+    ) -> Dict[str, Any]:
+        """Re-index a single document by recomputing embeddings for all its chunks.
+        
+        This is part of RAGIDX-001 per-document re-indexing feature.
+        
+        Args:
+            document_id: ID of the document to re-index
+            knowledge_base_id: ID of the KB containing the document
+            session: Optional DB session (creates new one if not provided)
+        
+        Returns:
+            Dict with chunks_updated count and kb_id
+        """
+        if not HAS_EMBEDDINGS:
+            return {"chunks_updated": 0, "kb_id": knowledge_base_id, "error": "embeddings_not_available"}
+        
+        # Use context manager for proper session cleanup
+        if session is None:
+            with get_session() as sess:
+                return self._reindex_document_impl(document_id, knowledge_base_id, sess)
+        else:
+            return self._reindex_document_impl(document_id, knowledge_base_id, session)
+
+    def _reindex_document_impl(
+        self,
+        document_id: int,
+        knowledge_base_id: int,
+        session: Session,
+    ) -> Dict[str, Any]:
+        """Internal implementation of reindex_document with provided session."""
+        try:
+            # Load all chunks for this document
+            chunks = (
+                session.query(KnowledgeChunk)
+                .filter_by(document_id=document_id, knowledge_base_id=knowledge_base_id, is_deleted=False)
+                .all()
+            )
+            
+            if not chunks:
+                return {"chunks_updated": 0, "kb_id": knowledge_base_id}
+            
+            # Re-embed chunks
+            updated_count = 0
+            for chunk in chunks:
+                if not chunk.content:
+                    continue
+                
+                # Compute new embedding
+                embedding = self._get_embedding(chunk.content, is_query=False)
+                if embedding is None:
+                    logger.warning("Failed to embed chunk %d for document %d", chunk.id, document_id)
+                    continue
+                
+                # Update chunk embedding in DB
+                chunk.embedding = json.dumps(embedding.tolist())
+                updated_count += 1
+            
+            session.commit()
+            
+            # Mark KB as pending FAISS rebuild
+            with self._pending_rebuild_lock:
+                self._pending_rebuild_kbs.add(knowledge_base_id)
+            
+            logger.info(
+                "Re-indexed document %d in KB %d: %d chunks updated, FAISS rebuild pending",
+                document_id, knowledge_base_id, updated_count
+            )
+            
+            return {"chunks_updated": updated_count, "kb_id": knowledge_base_id}
+        
+        except Exception as e:
+            logger.error("Failed to re-index document %d in KB %d: %s", document_id, knowledge_base_id, e)
+            session.rollback()
+            raise
+
+    def flush_pending_rebuilds(self, knowledge_base_id: Optional[int] = None) -> Dict[str, Any]:
+        """Flush pending FAISS rebuilds for one or all KBs.
+        
+        This rebuilds the FAISS index for KBs in the pending queue.
+        Used after batch document re-indexing to rebuild once instead of N times.
+        
+        Args:
+            knowledge_base_id: Optional KB ID to flush (flushes all if None)
+        
+        Returns:
+            Dict with rebuilt kb_ids
+        """
+        with self._pending_rebuild_lock:
+            if knowledge_base_id is not None:
+                kbs_to_rebuild = {knowledge_base_id} if knowledge_base_id in self._pending_rebuild_kbs else set()
+            else:
+                kbs_to_rebuild = self._pending_rebuild_kbs.copy()
+            
+            # Clear pending queue
+            for kb_id in kbs_to_rebuild:
+                self._pending_rebuild_kbs.discard(kb_id)
+        
+        if not kbs_to_rebuild:
+            return {"rebuilt_kbs": []}
+        
+        rebuilt = []
+        for kb_id in kbs_to_rebuild:
+            try:
+                # Rebuild index for this KB
+                self._load_index(kb_id)
+                rebuilt.append(kb_id)
+                logger.info("FAISS index rebuilt for KB %d", kb_id)
+            except Exception as e:
+                logger.error("Failed to rebuild FAISS index for KB %d: %s", kb_id, e)
+                # Re-add to pending queue on failure
+                with self._pending_rebuild_lock:
+                    self._pending_rebuild_kbs.add(kb_id)
+        
+        return {"rebuilt_kbs": rebuilt}
+
+    def get_pending_rebuild_kbs(self) -> List[int]:
+        """Get list of KBs pending FAISS rebuild."""
+        with self._pending_rebuild_lock:
+            return list(self._pending_rebuild_kbs)
+
+    def _debounce_rebuild_worker(self) -> None:
+        """Background thread that polls pending rebuilds and flushes them after debounce window."""
+        while not self._debounce_stop.is_set():
+            time.sleep(self._rebuild_debounce_sec)
+            with self._pending_rebuild_lock:
+                if self._pending_rebuild_kbs:
+                    kbs_to_rebuild = list(self._pending_rebuild_kbs)
+                    self._pending_rebuild_kbs.clear()
+                else:
+                    kbs_to_rebuild = []
+            
+            for kb_id in kbs_to_rebuild:
+                try:
+                    self._load_index(kb_id)
+                    logger.info("FAISS index rebuilt for KB %d (debounce)", kb_id)
+                except Exception as e:
+                    logger.error("Failed to rebuild FAISS index for KB %d (debounce): %s", kb_id, e)
+                    # Re-add to pending queue on failure
+                    with self._pending_rebuild_lock:
+                        self._pending_rebuild_kbs.add(kb_id)
 
 
 # Глобальный экземпляр RAG системы

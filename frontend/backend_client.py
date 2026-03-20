@@ -519,6 +519,25 @@ class BackendClient:
             logger.error("Ошибка при перезагрузке моделей RAG через backend: %s", e, exc_info=True)
             return {}
 
+    def rag_feedback(self, request_id: str, vote: str, comment: Optional[str] = None, user_id: Optional[int] = None) -> Dict[str, Any]:
+        """Отправить обратную связь по ответу RAG через backend."""
+        url_api = self._url("/rag/feedback")
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        payload = {
+            "request_id": request_id,
+            "vote": vote,
+            "comment": comment,
+            "user_id": user_id
+        }
+        try:
+            with self._client(timeout=self.timeout, headers=headers) as client:
+                resp = client.post(url_api, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Ошибка при отправке RAG feedback через backend: %s", e, exc_info=True)
+            return {"ok": False}
+
     def list_knowledge_bases(self) -> List[Dict[str, Any]]:
         """Получить список баз знаний из backend."""
         url = self._url("/knowledge-bases/")

@@ -1,25 +1,52 @@
 {
-  "task_id": "RAGSVC-014",
-  "implementation_agent": "codex",
-  "review_agent": "codex-architecture-review",
-  "required_commands": [
-    "python -m py_compile shared/rag_system.py backend/api/routes/rag.py tests/test_rag_system_budgets.py tests/test_rag_context_composer.py tests/test_rag_diagnostics.py",
-    "python scripts/scan_secrets.py"
+  "cycle": "rag-implementation-wave1-4",
+  "implementation_agent": "impl-agent",
+  "review_agent": "team-lead-orchestrator",
+  "roadmap_doc": "docs/design/rag-implementation-roadmap-v1.md",
+  "required_commands_per_commit": [
+    "python -m py_compile <all new/modified .py files>",
+    "python scripts/scan_secrets.py",
+    "pytest -q"
   ],
-  "required_artifacts": [
-    "docs/design/rag-contamination-control-and-canonicality-v1.md",
-    "SPEC.md",
-    "docs/REQUIREMENTS_TRACEABILITY.md",
-    "docs/TESTING.md",
-    "docs/OPERATIONS.md",
-    "coordination/state/codex.md",
-    "coordination/tasks.jsonl",
-    "coordination/cycle-contract.json",
-    "coordination/reviews/ragsvc-contamination-canonicality-2026-03-19.md"
+  "required_artifacts_per_commit": [
+    "coordination/state/codex.md (session entry)",
+    "coordination/tasks.jsonl (task status updated)",
+    "SPEC.md (new endpoints/behaviors documented)",
+    "docs/REQUIREMENTS_TRACEABILITY.md (new ACs added)",
+    "coordination/reviews/<task-id>-review-<date>.md (reviewer produces)"
   ],
   "size_limits": {
     "max_files_changed": 12,
     "max_lines_added": 2000,
     "max_lines_deleted": 300
-  }
+  },
+  "wave_order": [
+    {
+      "wave": 1,
+      "tasks": ["RAGIDX-IMPL-001", "RAGPERF-IMPL-001"],
+      "description": "Foundation — no query-path changes"
+    },
+    {
+      "wave": 2,
+      "tasks": ["RAGIDX-IMPL-002", "RAGEVAL-IMPL-001"],
+      "description": "Operational improvements — new endpoints, offline eval"
+    },
+    {
+      "wave": 3,
+      "tasks": ["RAGPERF-IMPL-002", "RAGCONV-IMPL-001"],
+      "description": "Query path changes — cache and conversation context"
+    },
+    {
+      "wave": 4,
+      "tasks": ["RAGIDX-IMPL-003", "RAGPERF-IMPL-003"],
+      "description": "Heavy ops + experimental — migration CLI, HyDE (gated)"
+    }
+  ],
+  "forbidden_patterns": [
+    "corpus-specific page-name constants in rag_system.py",
+    "if kb_id == X: corpus-specific branches",
+    "unguarded os.remove on .faiss files",
+    "blocking operations in debounce background thread"
+  ],
+  "updated_at": "2026-03-20"
 }

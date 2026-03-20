@@ -232,6 +232,25 @@ Teams and individuals need a Telegram-native assistant that can answer questions
 - Noisy broad pages (status dumps, inventory lists, archive/history pages) stop dominating retrieval for canonical lookup and reference queries when a focused canonical page exists; the mechanism uses generic content and field signals, not page-name hardcodes.
 - Retrieval diagnostics expose per-candidate `canonicality_score`, `contamination_penalty`, `canonicality_reason`, and `contamination_reason` additive to existing family and context-trace fields, and broad-scope contamination penalties are suppressed when the query explicitly asks for status/archive/history/overview content.
 - Live multicorpus retrieval failure shapes must be converted to committed deterministic regressions using synthetic public-safe data; the local smoke case format must support `failure_class`, `expected_family_fragment`, and `query_mode` fields and must report pass/fail broken down by failure class, so quality movement is measurable separately for broad-procedure, contamination, navigation, setup-canonical, exact-lookup-procedural, and source-manifest retrieval misses.
+- **RAG Index Lifecycle (RAGIDX-001):**
+  - `POST /api/v1/ingestion/reindex-document` endpoint re-indexes a single document by recomputing embeddings for all its chunks and queues the KB for debounced FAISS rebuild.
+  - `POST /api/v1/ingestion/flush-index` endpoint triggers immediate FAISS rebuild for pending KBs.
+  - `GET /api/v1/ingestion/pending-rebuilds` returns list of KBs awaiting FAISS rebuild.
+  - `knowledge_bases` table has `embedding_model` column to track which model was used for indexing.
+  - Startup mismatch detection raises `EmbeddingModelMismatchError` when KB's `embedding_model` differs from current `RAG_MODEL_NAME`, with actionable migration command.
+  - `scripts/migrate_embeddings.py` CLI re-embeds all chunks in a KB using a new model, with atomic swap via staging table and progress logging.
+  - `scripts/migrate_kb_embedding_model.py` migration script adds `embedding_model` column and backfills existing KBs.
+  - `scripts/reindex_kb.py` updated to use per-document API with parallel workers and flushes FAISS rebuild at end.
+  - Debounce window (`RAG_REBUILD_DEBOUNCE_SEC`) batches multiple per-document reindex requests into single FAISS rebuild.
+- **RAG Answer Quality Evaluation (RAGEVAL-001):**
+  - Bot displays [👍 Полезно] [👎 Не то] inline buttons after each RAG-based answer.
+  - User feedback (votes and optional comments) is persisted to `rag_answer_feedback` table via `POST /api/v1/rag/feedback`.
+  - Feedback is automatically linked to the corresponding Knowledge Base via `request_id` lookup in query logs.
+  - Evaluation service supports `run_with_judge=True` flag to trigger LLM-as-judge scoring for Faithfulness, Relevance, and Completeness.
+  - Judge logic includes automated "Intentional Refusal" detection to correctly score appropriate refusals when context is missing.
+  - Judge prompt uses truncated context (2000 chars) and returns structured JSON scores.
+  - Quality gate script (`scripts/rag_eval_quality_gate.py`) supports `--threshold-judge` for unified judge metric validation.
+  - Evaluation results persist `judge_scores` JSON column for detailed analysis.
 
 ## Specification maintenance policy
 - `SPEC.md` is the source of truth for user-facing requirements and acceptance criteria.

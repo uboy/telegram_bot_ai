@@ -3120,3 +3120,20 @@
   - all 4 design docs status: APPROVED:v1
   - `python -m py_compile` N/A (design-only cycle; no code modified)
   - no secrets introduced
+
+## 2026-03-20 RAG implementation wave 1-2 (developer cycle)
+- role: impl-agent
+- tasks closed:
+  - RAGIDX-IMPL-001: fixed blocking test isolation issue; tests now use get_session() consistently.
+  - RAGEVAL-IMPL-001: implemented LLM-as-judge scoring + user feedback loop.
+- implementation details:
+  - shared/database.py: added rag_answer_feedback table and judge_scores JSON column.
+  - backend/api/routes/rag.py: added POST /feedback endpoint.
+  - shared/rag_judge.py: new service for LLM-as-judge scoring with refusal detection.
+  - backend/services/rag_eval_service.py: integrated judge into offline eval runner.
+  - frontend/bot_handlers.py: added thumbs feedback keyboard + 10m auto-removal.
+  - scripts/rag_eval_quality_gate.py: added --threshold-judge support.
+- verification:
+  - tests/test_rag_index_lifecycle.py: 12 passed
+  - tests/test_rag_answer_quality.py: 6 passed
+  - python scripts/scan_secrets.py: PASS

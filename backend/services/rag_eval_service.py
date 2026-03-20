@@ -16,6 +16,7 @@ from shared.database import RAGEvalResult, RAGEvalRun, get_session
 from shared.logging_config import logger
 from shared.rag_system import rag_system
 from shared.ai_providers import ai_manager
+from shared.rag_judge import score_answer as judge_score_answer, is_intentional_refusal
 
 
 _URL_RE = re.compile(r"https?://[^\s)>\]]+", flags=re.IGNORECASE)
@@ -499,7 +500,11 @@ def _build_case_analysis_entry(
         },
         "answer_latency_ms": int(answer_result.get("answer_latency_ms") or 0),
         "judge_latency_ms": int(answer_result.get("judge_latency_ms") or 0),
-        "judge_notes": _compact_preview(answer_result.get("judge_notes") or "", max_len=160),
+        "judge_notes": _compact_preview(answer_result.get("judge_notes") or answer_result.get("judge_reasoning") or "", max_len=160),
+        "judge_faithfulness": answer_result.get("judge_faithfulness"),
+        "judge_relevance": answer_result.get("judge_relevance"),
+        "judge_completeness": answer_result.get("judge_completeness"),
+        "judge_skipped": bool(answer_result.get("judge_skipped", False)),
     }
 
 
@@ -782,6 +787,7 @@ def _run_answer_case(
     *,
     eval_config: Dict[str, Any],
     knowledge_base_id: Optional[int],
+    run_with_judge: bool = False,
 ) -> Dict[str, Any]:
     from backend.api.routes.rag import rag_query
     from backend.schemas.rag import RAGQuery
@@ -800,6 +806,11 @@ def _run_answer_case(
         for source in sources
         if str(getattr(source, "source_path", "") or "").strip()
     ]
+    context_snippets = [
+        str(getattr(source, "content", "") or "").strip()
+        for source in sources
+        if str(getattr(source, "content", "") or "").strip()
+    ]
 
     expected_mode = str(case.get("expected_answer_mode") or "").strip().lower()
     gold_facts = list(case.get("gold_facts") or [])
@@ -807,8 +818,12 @@ def _run_answer_case(
     required_entities = list(case.get("required_context_entities") or [])
     allowed_urls = list(case.get("allowed_urls") or [])
     response_non_empty = bool(answer.strip())
-    refusal_detected = _is_refusal_answer(answer)
+    
+    # Use the more robust is_intentional_refusal from rag_judge (RAGEVAL-001)
+    refusal_detected = is_intentional_refusal(answer)
     refusal_accuracy = 1.0 if ((expected_mode == "refusal" and refusal_detected) or (expected_mode != "refusal" and not refusal_detected)) else 0.0
+    
+    # Heuristic scoring
     answer_correctness = _score_expected_matches(answer, gold_facts or expected_snippets or required_entities)
     faithfulness = _score_expected_matches(answer, expected_snippets or gold_facts or required_entities)
     response_relevancy = 1.0 if response_non_empty and (expected_mode != "refusal" or refusal_detected) else 0.0
@@ -820,16 +835,24 @@ def _run_answer_case(
     )
 
     judge_metrics: Dict[str, Any] = {}
-    if bool(eval_config.get("judge_metrics_enabled")):
-        judge_metrics = _judge_answer_case(
-            case=case,
+    if run_with_judge or bool(eval_config.get("judge_metrics_enabled")):
+        # Use new LLM-as-judge scoring (RAGEVAL-001)
+        judge_metrics = judge_score_answer(
+            query=str(case.get("query") or ""),
             answer=answer,
-            source_paths=source_paths,
-            eval_config=eval_config,
+            context_snippets=context_snippets,
+            provider=str(eval_config.get("judge_provider") or "ollama"),
+            model=(str(eval_config.get("judge_model") or "").strip() or None)
         )
-        faithfulness = float(judge_metrics.get("faithfulness", faithfulness))
-        response_relevancy = float(judge_metrics.get("response_relevancy", response_relevancy))
-        answer_correctness = float(judge_metrics.get("answer_correctness", answer_correctness))
+        
+        # Override heuristic metrics with judge metrics if not skipped
+        if not judge_metrics.get("judge_skipped"):
+            faithfulness = float(judge_metrics.get("faithfulness", faithfulness))
+            response_relevancy = float(judge_metrics.get("relevance", response_relevancy))
+            # completeness map to answer_correctness as proxy if needed, 
+            # or we can keep answer_correctness as fact-based heuristic.
+            # Roadmaps says Completeness is a new dimension.
+            answer_correctness = float(judge_metrics.get("completeness", answer_correctness))
 
     failure_reasons: List[str] = []
     if expected_mode == "refusal" and not refusal_detected:
@@ -869,6 +892,12 @@ def _run_answer_case(
         "suspicious_events": suspicious_events,
         "failure_reasons": failure_reasons,
         "judge_notes": str(judge_metrics.get("notes") or ""),
+        # New judge fields (RAGEVAL-001)
+        "judge_faithfulness": judge_metrics.get("faithfulness"),
+        "judge_relevance": judge_metrics.get("relevance"),
+        "judge_completeness": judge_metrics.get("completeness"),
+        "judge_reasoning": judge_metrics.get("reasoning"),
+        "judge_skipped": bool(judge_metrics.get("judge_skipped", False)),
     }
 
 
@@ -901,6 +930,7 @@ class RAGEvalService:
         baseline_run_id: Optional[str] = None,
         slices: Optional[Sequence[str]] = None,
         run_async: bool = True,
+        run_with_judge: bool = False,
     ) -> str:
         run_id = f"eval_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
         slices_norm = self._normalize_slices(slices)
@@ -917,6 +947,7 @@ class RAGEvalService:
                             "slices": slices_norm,
                             "requested_slices": slices_norm if slices_explicit else [],
                             "slices_mode": "explicit" if slices_explicit else "auto",
+                            "run_with_judge": run_with_judge,
                         },
                         ensure_ascii=False,
                     ),
@@ -932,6 +963,7 @@ class RAGEvalService:
                     "baseline_run_id": baseline_run_id,
                     "requested_slices": slices_norm,
                     "slices_explicit": slices_explicit,
+                    "run_with_judge": run_with_judge,
                 },
                 daemon=True,
                 name=f"rag-eval-{run_id}",
@@ -944,6 +976,7 @@ class RAGEvalService:
                 baseline_run_id=baseline_run_id,
                 requested_slices=slices_norm,
                 slices_explicit=slices_explicit,
+                run_with_judge=run_with_judge,
             )
         return run_id
 
@@ -979,6 +1012,7 @@ class RAGEvalService:
         baseline_run_id: Optional[str],
         requested_slices: Sequence[str],
         slices_explicit: bool,
+        run_with_judge: bool = False,
     ) -> None:
         started_at = datetime.now(timezone.utc)
         self._update_run(run_id=run_id, status="running", started_at=started_at)
@@ -998,7 +1032,7 @@ class RAGEvalService:
             eval_config = _answer_eval_config()
             eval_kb_id = _eval_knowledge_base_id()
             retrieval_thresholds = _thresholds()
-            answer_thresholds = _answer_thresholds() if bool(eval_config.get("answer_metrics_enabled")) else {}
+            answer_thresholds = _answer_thresholds() if (run_with_judge or bool(eval_config.get("answer_metrics_enabled"))) else {}
             thresholds = {**retrieval_thresholds, **answer_thresholds}
             threshold_policy = _slice_threshold_policy()
             metric_names = ["recall_at_10", "mrr_at_10", "ndcg_at_10", *list(answer_thresholds.keys())]
@@ -1009,15 +1043,27 @@ class RAGEvalService:
             suspicious_events: List[Dict[str, Any]] = []
             for case in cases:
                 row = _evaluate_case(case, knowledge_base_id=eval_kb_id)
-                if bool(eval_config.get("answer_metrics_enabled")):
+                if run_with_judge or bool(eval_config.get("answer_metrics_enabled")):
+                    answer_case_kwargs = {}
+                    if run_with_judge:
+                        answer_case_kwargs["run_with_judge"] = True
+
                     answer_result = _run_answer_case(
                         case,
                         eval_config=eval_config,
                         knowledge_base_id=eval_kb_id,
+                        **answer_case_kwargs,
                     )
                     row.update(answer_result.get("metrics") or {})
                     row["answer_latency_ms"] = int(answer_result.get("answer_latency_ms") or 0)
                     row["judge_latency_ms"] = int(answer_result.get("judge_latency_ms") or 0)
+                    # New judge fields for row (RAGEVAL-001)
+                    row["judge_faithfulness"] = answer_result.get("judge_faithfulness")
+                    row["judge_relevance"] = answer_result.get("judge_relevance")
+                    row["judge_completeness"] = answer_result.get("judge_completeness")
+                    row["judge_reasoning"] = answer_result.get("judge_reasoning")
+                    row["judge_skipped"] = answer_result.get("judge_skipped")
+
                     if answer_result.get("failure_reasons"):
                         case_failures.append(
                             {
@@ -1097,6 +1143,16 @@ class RAGEvalService:
                         threshold = float(slice_thresholds.get(metric_name, 0.0))
                         value = float(aggregate.get(metric_name, 0.0))
                         passed = bool(sample_size > 0 and value >= threshold)
+                        
+                        # Pack judge details into judge_scores JSON column if available for overall/slice summary
+                        # But RAGEvalResult is per metric. Roadmap says judge_scores is JSON.
+                        # We'll store relevant judge metrics for this slice/metric if it was a judge run.
+                        judge_details = None
+                        if run_with_judge and metric_name in ["faithfulness", "response_relevancy", "answer_correctness"]:
+                            # Aggregate reasoning or other details if needed, but per-case is in case_analysis.
+                            # We'll just mark it as judge-evaluated.
+                            judge_details = json.dumps({"is_judge": True})
+
                         session.add(
                             RAGEvalResult(
                                 run_id=run_id,
@@ -1105,6 +1161,7 @@ class RAGEvalService:
                                 metric_value=value,
                                 threshold_value=threshold,
                                 passed=passed,
+                                judge_scores=judge_details,
                                 details_json=json.dumps(
                                     {
                                         "sample_size": sample_size,
@@ -1128,6 +1185,7 @@ class RAGEvalService:
                 "slices": list(slices),
                 "requested_slices": list(requested_slices) if slices_explicit else [],
                 "slices_mode": "explicit" if slices_explicit else "auto",
+                "run_with_judge": run_with_judge,
                 "thresholds": thresholds,
                 "available_metrics": metric_names,
                 "metric_families": {
@@ -1160,8 +1218,8 @@ class RAGEvalService:
                     "flagged": 0,
                     "quarantined": 0,
                 },
-                "answer_metrics_enabled": bool(eval_config.get("answer_metrics_enabled")),
-                "judge_metrics_enabled": bool(eval_config.get("judge_metrics_enabled")),
+                "answer_metrics_enabled": run_with_judge or bool(eval_config.get("answer_metrics_enabled")),
+                "judge_metrics_enabled": run_with_judge or bool(eval_config.get("judge_metrics_enabled")),
                 "answer_provider": str(eval_config.get("answer_provider") or ""),
                 "judge_provider": str(eval_config.get("judge_provider") or ""),
                 "answer_model": str(eval_config.get("answer_model") or ""),
@@ -1170,7 +1228,7 @@ class RAGEvalService:
                 **_git_metadata(),
                 "slice_summary": slice_summary,
             }
-            if bool(eval_config.get("answer_metrics_enabled")):
+            if run_with_judge or bool(eval_config.get("answer_metrics_enabled")):
                 metrics_payload.update(
                     {
                         "security_summary": {
@@ -1219,6 +1277,29 @@ class RAGEvalService:
             except Exception:
                 metrics_obj = {}
 
+        # Case analysis for new judge fields
+        case_analysis = metrics_obj.get("case_analysis", [])
+        analysis_map = {str(c.get("case_id")): c for c in case_analysis}
+
+        formatted_results = []
+        for row in results:
+            res_dict = {
+                "slice_name": row.slice_name,
+                "metric_name": row.metric_name,
+                "metric_value": float(row.metric_value or 0.0),
+                "threshold_value": (float(row.threshold_value) if row.threshold_value is not None else None),
+                "passed": bool(row.passed),
+                "details": json.loads(row.details_json) if row.details_json else None,
+            }
+            
+            # Note: RAGEvalResult is aggregated per slice/metric. 
+            # Individual case results are in metrics_obj["case_analysis"].
+            # Schema RAGEvalResultRow from schemas/rag.py expects judge_* fields on each row.
+            # We'll pick values from the 'overall' slice if needed, or just leave None for aggregate rows.
+            # Actually, RAGEvalResultRow usually represents the aggregate metric for a slice.
+            
+            formatted_results.append(res_dict)
+
         return {
             "run_id": run.run_id,
             "suite_name": run.suite_name,
@@ -1228,17 +1309,7 @@ class RAGEvalService:
             "finished_at": run.finished_at,
             "metrics": metrics_obj,
             "error_message": run.error_message,
-            "results": [
-                {
-                    "slice_name": row.slice_name,
-                    "metric_name": row.metric_name,
-                    "metric_value": float(row.metric_value or 0.0),
-                    "threshold_value": (float(row.threshold_value) if row.threshold_value is not None else None),
-                    "passed": bool(row.passed),
-                    "details_json": row.details_json,
-                }
-                for row in results
-            ],
+            "results": formatted_results,
         }
 
 

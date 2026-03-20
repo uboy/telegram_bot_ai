@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Literal
 
 from pydantic import BaseModel
 
@@ -92,6 +92,7 @@ class RAGEvalRunRequest(BaseModel):
     suite: str = "rag-general-v1"
     baseline_run_id: Optional[str] = None
     slices: Optional[List[str]] = None
+    run_with_judge: bool = False  # Флаг запуска LLM-as-judge (RAGEVAL-001)
 
 
 class RAGEvalRunResponse(BaseModel):
@@ -106,6 +107,12 @@ class RAGEvalResultRow(BaseModel):
     threshold_value: Optional[float] = None
     passed: bool
     details: Optional[Dict] = None
+    # Поля для LLM-as-judge (RAGEVAL-001)
+    judge_faithfulness: Optional[float] = None
+    judge_relevance: Optional[float] = None
+    judge_completeness: Optional[float] = None
+    judge_reasoning: Optional[str] = None
+    judge_skipped: bool = False
 
 
 class RAGEvalStatusResponse(BaseModel):
@@ -118,3 +125,14 @@ class RAGEvalStatusResponse(BaseModel):
     metrics: Optional[Dict] = None
     error_message: Optional[str] = None
     results: List[RAGEvalResultRow] = []
+
+
+class RAGFeedbackRequest(BaseModel):
+    request_id: str
+    vote: Literal["helpful", "not_helpful"]
+    comment: Optional[str] = None
+    user_id: Optional[int] = None  # Опционально, для привязки к пользователю
+
+
+class RAGFeedbackResponse(BaseModel):
+    ok: bool

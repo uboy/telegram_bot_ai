@@ -306,6 +306,53 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message_text(query, text, reply_markup=reply_markup)
         return
 
+    # Обработка обратной связи по RAG-ответу (RAGEVAL-001)
+    if data.startswith('rag_feedback:'):
+        # Формат: rag_feedback:{request_id}:{vote}
+        parts = data.split(':')
+        if len(parts) < 3:
+            await query.answer("Некорректные данные обратной связи", show_alert=True)
+            return
+            
+        request_id = parts[1]
+        vote = parts[2]
+        
+        # Отправляем на бэкенд (фоном, не блокируя пользователя)
+        async def _send_feedback():
+            try:
+                await asyncio.to_thread(
+                    backend_client.rag_feedback,
+                    request_id=request_id,
+                    vote=vote,
+                    user_id=int(user_id)
+                )
+            except Exception as e:
+                logger.warning("Failed to send RAG feedback: %s", e)
+        
+        asyncio.create_task(_send_feedback())
+        
+        # Обновляем сообщение: убираем кнопки и добавляем текст благодарности
+        vote_text = "👍 Полезно" if vote == "helpful" else "👎 Не то"
+        try:
+            # Получаем текущий текст сообщения (из HTML)
+            current_text = query.message.text_html if query.message.text_html else query.message.text
+            
+            # Убираем кнопки (reply_markup=None)
+            await query.edit_message_text(
+                f"{current_text}\n\n<i>Ваша оценка: {vote_text}. Спасибо за отзыв!</i>",
+                parse_mode='HTML',
+                reply_markup=None
+            )
+        except Exception as e:
+            logger.warning("Could not update message after feedback: %s", e)
+            await query.answer("Спасибо за ваш отзыв!", show_alert=False)
+            # Если не удалось отредактировать, хотя бы уберем кнопки
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return
+
     if data.startswith('kb_select:') and context.user_data.get('state') == 'waiting_kb_for_query':
         kb_id = int(data.split(':')[1])
         kbs = await asyncio.to_thread(backend_client.list_knowledge_bases)

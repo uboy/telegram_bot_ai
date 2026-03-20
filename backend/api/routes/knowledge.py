@@ -21,6 +21,7 @@ from backend.schemas.common import (
 # Временное использование существующих моделей и RAG-системы, позже будут перенесены.
 from shared.database import KnowledgeBase, KnowledgeChunk, KnowledgeImportLog  # type: ignore
 from shared.kb_settings import normalize_kb_settings, dump_kb_settings, default_kb_settings  # type: ignore
+from shared.config import RAG_MODEL_NAME  # type: ignore # For embedding_model tracking (RAGIDX-001)
 from sqlalchemy import func
 from shared.rag_system import rag_system  # type: ignore
 
@@ -88,6 +89,7 @@ def create_knowledge_base(
         name=payload.name,
         description=payload.description,
         settings=dump_kb_settings(default_settings),
+        embedding_model=RAG_MODEL_NAME,  # RAGIDX-001: track model at creation time
     )
     db.add(kb)
     db.commit()
