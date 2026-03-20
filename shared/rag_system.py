@@ -1125,6 +1125,8 @@ class RAGSystem:
                 RAG_BM25_CANDIDATES,
                 RAG_RERANK_TOP_N,
                 RAG_CACHE_ENABLED,
+                RAG_HYDE_ENABLED,
+                RAG_HYDE_MAX_TOKENS,
             )
             self.enable_rerank = RAG_ENABLE_RERANK
             self.max_candidates = _coerce_positive_int(RAG_MAX_CANDIDATES, 100)
@@ -1135,6 +1137,8 @@ class RAGSystem:
                 max(self.dense_candidate_budget, self.bm25_candidate_budget),
             )
             self.cache_enabled = RAG_CACHE_ENABLED
+            self.hyde_enabled = RAG_HYDE_ENABLED
+            self.hyde_max_tokens = RAG_HYDE_MAX_TOKENS
         except ImportError:
             self.enable_rerank = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
             self.max_candidates = _coerce_positive_int(os.getenv("RAG_MAX_CANDIDATES", "100"), 100)
@@ -1154,6 +1158,8 @@ class RAGSystem:
                 max(self.dense_candidate_budget, self.bm25_candidate_budget),
             )
             self.cache_enabled = os.getenv("RAG_CACHE_ENABLED", "true").lower() == "true"
+            self.hyde_enabled = os.getenv("RAG_HYDE_ENABLED", "false").lower() == "true"
+            self.hyde_max_tokens = int(os.getenv("RAG_HYDE_MAX_TOKENS", "80") or "80")
 
         # Retrieval backend switch (v3)
         self.retrieval_backend = "legacy"
@@ -1754,6 +1760,26 @@ class RAGSystem:
             logger.warning("Failed to load FAISS index from disk: %s", e)
             return None
     
+    def _hyde_generate_hypothetical_doc(self, query: str) -> Optional[np.ndarray]:
+        """RAGPERF-003: Генерирует гипотетический документ через LLM и возвращает его эмбеддинг.
+        Возвращает None при любой ошибке — вызывающий код должен использовать оригинальный запрос."""
+        try:
+            from shared.ai_providers import ai_manager
+            prompt = (
+                "Write a short factual passage (2-4 sentences) that directly answers this question. "
+                "Output only the passage text, no preamble.\n\n"
+                f"Question: {query}"
+            )
+            hypothetical_doc = ai_manager.query(prompt, max_tokens=getattr(self, 'hyde_max_tokens', 80))
+            if not hypothetical_doc or len(hypothetical_doc.strip()) < 10:
+                return None
+            embedding = self._get_embedding(hypothetical_doc.strip(), is_query=False)
+            logger.debug("HyDE generated doc for query %r: %r", query[:60], hypothetical_doc[:80])
+            return embedding
+        except Exception as e:
+            logger.warning("HyDE generation failed, falling back to query embedding: %s", e)
+            return None
+
     def _delete_disk_index(self, kb_id: Optional[int]):
         """Удалить индекс с диска (RAGPERF-001)."""
         if not self.persist_enabled:
@@ -2720,6 +2746,12 @@ class RAGSystem:
         query_embedding = self._get_embedding(query, is_query=True)
         if query_embedding is None:
             return self._simple_search(query, knowledge_base_id, top_k)
+
+        # RAGPERF-003: HyDE — заменяем эмбеддинг запроса на эмбеддинг гипотетического документа
+        if getattr(self, 'hyde_enabled', False):
+            hyde_embedding = self._hyde_generate_hypothetical_doc(query)
+            if hyde_embedding is not None:
+                query_embedding = hyde_embedding
 
         # В generalized режиме how-to определяется только как hint, но не меняет ranking.
         is_howto_query = self._is_howto_query(query)

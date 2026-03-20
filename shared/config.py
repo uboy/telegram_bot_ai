@@ -139,6 +139,13 @@ try:
 except ValueError:
     RAG_CACHE_SIM_THRESHOLD = 0.97
 
+# HyDE — Hypothetical Document Embeddings (RAGPERF-003)
+RAG_HYDE_ENABLED = os.getenv("RAG_HYDE_ENABLED", "false").lower() == "true"
+try:
+    RAG_HYDE_MAX_TOKENS = int(os.getenv("RAG_HYDE_MAX_TOKENS", "80"))
+except ValueError:
+    RAG_HYDE_MAX_TOKENS = 80
+
 # Orchestrator switch (Phase D cutover)
 # false -> legacy route-level intent boosts/fallback ranking
 # true  -> v4 primary path without query-specific hardcoded boosts
