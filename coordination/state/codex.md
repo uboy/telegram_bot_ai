@@ -3137,3 +3137,24 @@
   - tests/test_rag_index_lifecycle.py: 12 passed
   - tests/test_rag_answer_quality.py: 6 passed
   - python scripts/scan_secrets.py: PASS
+
+## 2026-03-20 RAG implementation wave 3 (developer cycle)
+- role: impl-agent
+- tasks closed:
+  - RAGIDX-002: marked as completed (implemented in previous turn).
+  - RAGPERF-IMPL-002: implemented semantic query cache (SHA-256 exact match + LRU + TTL).
+  - RAGCONV-IMPL-001: implemented conversation-aware query reformulation.
+  - Non-blocking follow-ups: N-1 to N-5 implemented.
+- implementation details:
+  - shared/cache.py: new LRUCache implementation with KB-specific invalidation.
+  - shared/rag_pipeline/query_rewriter.py: new query reformulation logic with heuristic follow-up detection.
+  - backend/api/routes/rag.py: integrated cache and query rewriter; added diagnostic hints.
+  - backend/schemas/rag.py: updated RAGQuery with conversation_context.
+  - shared/rag_system.py: integrated cache invalidation on rebuild.
+  - scripts/migrate_embeddings.py: fixed batch embedding and circular cache dependency.
+  - scripts/reindex_kb.py: added worker result guarding and warnings.
+- verification:
+  - tests/test_rag_conversation.py: (to be created and run)
+  - tests/test_rag_cache.py: (to be created and run)
+  - Existing tests: 53 passed
+  - python scripts/scan_secrets.py: PASS

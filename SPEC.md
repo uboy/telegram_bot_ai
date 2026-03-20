@@ -242,6 +242,21 @@ Teams and individuals need a Telegram-native assistant that can answer questions
   - `scripts/migrate_kb_embedding_model.py` migration script adds `embedding_model` column and backfills existing KBs.
   - `scripts/reindex_kb.py` updated to use per-document API with parallel workers and flushes FAISS rebuild at end.
   - Debounce window (`RAG_REBUILD_DEBOUNCE_SEC`) batches multiple per-document reindex requests into single FAISS rebuild.
+- **RAG Query Acceleration (RAGPERF-001):**
+  - FAISS indices are persisted to disk (`RAG_INDEX_DIR`) as `.faiss` and `.pkl` (metadata) files.
+  - Indices are loaded from disk at startup if they match current embedding model and chunk count in DB.
+  - Persistence uses atomic write pattern (write to `.tmp` then rename) to prevent corruption.
+  - Disk indices are automatically cleaned up when Knowledge Base is deleted.
+- **Conversation-Aware Retrieval (RAGCONV-001):**
+  - RAG API accepts `conversation_context` (list of prior user/assistant turns).
+  - Follow-up queries are detected via heuristics (pronouns, phrases, length).
+  - Detected follow-ups are reformulated into self-contained search queries using an LLM before retrieval.
+  - Diagnostics track reformulation status, turns used, and the original query.
+- **Semantic Query Cache (RAGPERF-002):**
+  - In-process semantic cache stores retrieval results by SHA-256 of KB ID and normalized query.
+  - Cache uses LRU eviction and configurable TTL (default 30 min).
+  - Cache is invalidated when a Knowledge Base is rebuilt or cleared.
+  - Diagnostics expose `cache_hit` signal for performance monitoring.
 - **RAG Answer Quality Evaluation (RAGEVAL-001):**
   - Bot displays [👍 Полезно] [👎 Не то] inline buttons after each RAG-based answer.
   - User feedback (votes and optional comments) is persisted to `rag_answer_feedback` table via `POST /api/v1/rag/feedback`.
