@@ -116,6 +116,29 @@ RAG_BACKEND = os.getenv("RAG_BACKEND", "legacy").strip().lower()
 if RAG_BACKEND not in {"legacy", "qdrant"}:
     RAG_BACKEND = "legacy"
 
+# RAG Index Persistence (RAGPERF-001)
+RAG_INDEX_PERSIST_ENABLED = os.getenv("RAG_INDEX_PERSIST_ENABLED", "true").lower() == "true"
+RAG_INDEX_DIR = os.getenv("RAG_INDEX_DIR", os.path.join(os.getenv("BOT_DATA_DIR", "data"), "faiss_indexes"))
+
+# RAG Semantic Cache (RAGPERF-002)
+RAG_CACHE_ENABLED = os.getenv("RAG_CACHE_ENABLED", "true").lower() == "true"
+try:
+    RAG_CACHE_CAPACITY = int(os.getenv("RAG_CACHE_CAPACITY", "256"))
+except ValueError:
+    RAG_CACHE_CAPACITY = 256
+try:
+    RAG_CACHE_MAX_ENTRIES = int(os.getenv("RAG_CACHE_MAX_ENTRIES", "2048"))
+except ValueError:
+    RAG_CACHE_MAX_ENTRIES = 2048
+try:
+    RAG_CACHE_TTL_SEC = int(os.getenv("RAG_CACHE_TTL_SEC", "1800"))
+except ValueError:
+    RAG_CACHE_TTL_SEC = 1800
+try:
+    RAG_CACHE_SIM_THRESHOLD = float(os.getenv("RAG_CACHE_SIM_THRESHOLD", "0.97"))
+except ValueError:
+    RAG_CACHE_SIM_THRESHOLD = 0.97
+
 # Orchestrator switch (Phase D cutover)
 # false -> legacy route-level intent boosts/fallback ranking
 # true  -> v4 primary path without query-specific hardcoded boosts

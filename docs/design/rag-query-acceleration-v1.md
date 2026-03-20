@@ -1,8 +1,8 @@
 # RAG Query Acceleration v1
 
-Date: 2026-03-19
-Status: APPROVED:v1
-Task: `RAGPERF-001`
+Date: 2026-03-20
+Status: COMPLETED:v1
+Task: `RAGPERF-001`, `RAGPERF-002`
 
 ## 1. Summary
 

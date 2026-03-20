@@ -528,3 +528,138 @@ class TestEmbeddingModelColumn:
         """KB with NULL embedding_model should skip mismatch detection."""
         # The mismatch detection logic is tested indirectly via test_no_mismatch_when_models_match
         pass
+
+
+class TestIndexPersistence:
+    """Tests for FAISS index persistence to disk (RAGPERF-001)."""
+
+    def test_index_is_saved_to_disk_on_load(self, tmp_path):
+        """FAISS index should be saved to disk after building from DB."""
+        # Mock index_dir to a temp path
+        persist_dir = str(tmp_path / "faiss_indexes")
+        
+        with patch.object(rag_system, 'index_dir', persist_dir), \
+             patch.object(rag_system, 'persist_enabled', True):
+            
+            with get_session() as session:
+                kb = KnowledgeBase(
+                    name="test_persist_save_kb",
+                    embedding_model=rag_system.model_name,
+                )
+                session.add(kb)
+                session.commit()
+                kb_id = kb.id
+                
+                chunk = KnowledgeChunk(
+                    knowledge_base_id=kb_id,
+                    content="Test content for persistence",
+                    embedding=json.dumps([0.1] * rag_system.dimension),
+                    source_type="text",
+                    source_path="test.txt",
+                )
+                session.add(chunk)
+                session.commit()
+            
+            try:
+                # Force rebuild from DB
+                rag_system._delete_disk_index(kb_id)
+                rag_system._load_index(kb_id)
+                
+                # Check files exist
+                index_path = os.path.join(persist_dir, f"kb_{kb_id}.faiss")
+                meta_path = os.path.join(persist_dir, f"kb_{kb_id}.pkl")
+                assert os.path.exists(index_path)
+                assert os.path.exists(meta_path)
+                
+                # Verify meta content
+                import pickle
+                with open(meta_path, "rb") as f:
+                    payload = pickle.load(f)
+                    assert payload["meta"]["chunk_count"] == 1
+                    assert payload["meta"]["model_name"] == rag_system.model_name
+            finally:
+                with get_session() as session:
+                    session.query(KnowledgeChunk).filter_by(knowledge_base_id=kb_id).delete()
+                    session.query(KnowledgeBase).filter_by(id=kb_id).delete()
+                    session.commit()
+
+    def test_index_is_loaded_from_disk_if_valid(self, tmp_path):
+        """FAISS index should be loaded from disk if model and chunk count match."""
+        persist_dir = str(tmp_path / "faiss_indexes")
+        
+        with patch.object(rag_system, 'index_dir', persist_dir), \
+             patch.object(rag_system, 'persist_enabled', True):
+            
+            with get_session() as session:
+                kb = KnowledgeBase(
+                    name="test_persist_load_kb",
+                    embedding_model=rag_system.model_name,
+                )
+                session.add(kb)
+                session.commit()
+                kb_id = kb.id
+                
+                chunk = KnowledgeChunk(
+                    knowledge_base_id=kb_id,
+                    content="Test content",
+                    embedding=json.dumps([0.1] * rag_system.dimension),
+                    source_type="text",
+                    source_path="test.txt",
+                )
+                session.add(chunk)
+                session.commit()
+            
+            try:
+                # 1. Build and save
+                rag_system._load_index(kb_id)
+                assert kb_id in rag_system.index_by_kb
+                
+                # 2. Clear memory cache
+                if kb_id in rag_system.index_by_kb: del rag_system.index_by_kb[kb_id]
+                if kb_id in rag_system.chunks_by_kb: del rag_system.chunks_by_kb[kb_id]
+                
+                # 3. Load again - should use disk
+                with patch.object(rag_system, '_load_index_from_disk', wraps=rag_system._load_index_from_disk) as mock_load:
+                    rag_system._load_index(kb_id)
+                    assert mock_load.called
+                    assert kb_id in rag_system.index_by_kb
+                    assert len(rag_system.chunks_by_kb[kb_id]) == 1
+            finally:
+                with get_session() as session:
+                    session.query(KnowledgeChunk).filter_by(knowledge_base_id=kb_id).delete()
+                    session.query(KnowledgeBase).filter_by(id=kb_id).delete()
+                    session.commit()
+
+    def test_index_is_deleted_from_disk_on_kb_delete(self, tmp_path):
+        """Disk index files should be removed when KB is deleted."""
+        persist_dir = str(tmp_path / "faiss_indexes")
+        
+        with patch.object(rag_system, 'index_dir', persist_dir), \
+             patch.object(rag_system, 'persist_enabled', True):
+            
+            with get_session() as session:
+                kb = KnowledgeBase(name="test_persist_delete_kb", embedding_model=rag_system.model_name)
+                session.add(kb); session.commit(); kb_id = kb.id
+                chunk = KnowledgeChunk(
+                    knowledge_base_id=kb_id, content="c", 
+                    embedding=json.dumps([0.1]*rag_system.dimension)
+                )
+                session.add(chunk); session.commit()
+            
+            try:
+                # Build and save
+                rag_system._load_index(kb_id)
+                index_path = os.path.join(persist_dir, f"kb_{kb_id}.faiss")
+                meta_path = os.path.join(persist_dir, f"kb_{kb_id}.pkl")
+                assert os.path.exists(index_path)
+                assert os.path.exists(meta_path)
+                
+                # Delete KB
+                rag_system.delete_knowledge_base(kb_id)
+                assert not os.path.exists(index_path)
+                assert not os.path.exists(meta_path)
+            finally:
+                with get_session() as session:
+                    session.query(KnowledgeChunk).filter_by(knowledge_base_id=kb_id).delete()
+                    session.query(KnowledgeBase).filter_by(id=kb_id).delete()
+                    session.commit()

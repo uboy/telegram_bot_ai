@@ -470,8 +470,7 @@ def reindex_document_endpoint(
     except EmbeddingModelMismatchError as e:
         raise HTTPException(
             status_code=409,
-            detail=str(e),
-            headers={"X-Error-Code": "embedding_model_mismatch"},
+            detail={"message": str(e), "error_code": "embedding_model_mismatch"},
         )
 
 

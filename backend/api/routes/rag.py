@@ -36,6 +36,7 @@ from shared.rag_system import (  # type: ignore
     _order_candidates_by_query_field_specificity,
     _order_candidates_by_canonicality,
 )
+from shared.rag_pipeline.query_rewriter import reformulate_query
 from shared.ai_providers import ai_manager  # type: ignore
 from shared.utils import create_prompt_with_language, normalize_wiki_url_for_display  # type: ignore
 from shared.rag_safety import (  # type: ignore
@@ -1879,6 +1880,21 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
     exact_lookup_mode: str = "generalized"
     exact_lookup_anchor_family: Optional[str] = None
     exact_lookup_anchor_reason: Optional[str] = None
+    
+    # RAGCONV-001: Переформулировка запроса на основе контекста диалога
+    conv_original_query = payload.query
+    conv_reformulation_applied = False
+    conv_turns_used = 0
+    effective_query = payload.query
+
+    if payload.conversation_context:
+        history = [turn.dict() for turn in payload.conversation_context]
+        rewritten, applied, turns = reformulate_query(payload.query, history)
+        if applied:
+            effective_query = rewritten
+            conv_reformulation_applied = True
+            conv_turns_used = turns
+            logger.debug("Query reformulated: %r -> %r", payload.query, effective_query)
 
     try:
         # Настройки RAG
@@ -1891,6 +1907,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
                 RAG_DEBUG_RETURN_CHUNKS,
                 RAG_ORCHESTRATOR_V4,
                 RAG_LEGACY_QUERY_HEURISTICS,
+                RAG_CACHE_ENABLED,
             )
             top_k_search = payload.top_k or RAG_TOP_K
             top_k_for_context = RAG_TOP_K
@@ -1900,6 +1917,7 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             debug_return_chunks = RAG_DEBUG_RETURN_CHUNKS
             orchestrator_v4_enabled = bool(RAG_ORCHESTRATOR_V4)
             legacy_query_heuristics_enabled = bool(RAG_LEGACY_QUERY_HEURISTICS)
+            cache_enabled = bool(RAG_CACHE_ENABLED)
         except Exception:  # noqa: BLE001
             top_k_search = payload.top_k or 10
             top_k_for_context = 8
@@ -1909,7 +1927,24 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
             debug_return_chunks = False
             orchestrator_v4_enabled = False
             legacy_query_heuristics_enabled = False
+            cache_enabled = True
         orchestrator_mode = "v4" if orchestrator_v4_enabled else "legacy"
+
+        # RAGPERF-002: Проверка семантического кэша (SHA-256 exact match)
+        from shared.cache import rag_cache
+        if cache_enabled and rag_cache and kb_id is not None:
+            cached_res = rag_cache.get(int(kb_id), effective_query)
+            if cached_res:
+                logger.debug("Semantic cache hit for KB %s, query: %r", kb_id, effective_query)
+                # Быстрый выход: формируем ответ из кэша
+                # Важно: кэшируем именно кандидатов (results), а не готовый текст, 
+                # т.к. фильтры/LLM могут меняться.
+                # Однако Roadmap §4.1 говорит про exact-match cache.
+                # Для простоты кэшируем кандидатов retrieval-этапа.
+                results = cached_res
+                query_hints["cache_hit"] = True
+            else:
+                query_hints["cache_hit"] = False
 
         # Настройки KB (single-page и контекст)
         kb_settings = {}
@@ -1927,26 +1962,36 @@ def rag_query(payload: RAGQuery, db: Session = Depends(get_db_dep)) -> RAGAnswer
 
         use_legacy_query_heuristics = (not orchestrator_v4_enabled) and legacy_query_heuristics_enabled
         retrieval_core_mode = "legacy_heuristic" if use_legacy_query_heuristics else "generalized"
-        precomputed_query_hints = _extract_query_hints(payload.query)
+        precomputed_query_hints = _extract_query_hints(effective_query)
         precomputed_query_hints["retrieval_core_mode"] = retrieval_core_mode
+        precomputed_query_hints["conv_reformulation_applied"] = conv_reformulation_applied
+        precomputed_query_hints["conv_turns_used"] = conv_turns_used
+        if conv_reformulation_applied:
+            precomputed_query_hints["conv_original_query"] = conv_original_query
 
-        # Поиск кандидатов в RAG (dense + keyword + optional rerank)
-        logger.debug("RAG query: query=%r, kb_id=%s, top_k=%s", payload.query, kb_id, top_k_search)
-        if use_legacy_query_heuristics:
-            results = rag_system.search(
-                query=payload.query,
-                knowledge_base_id=kb_id,
-                top_k=top_k_search,
-            ) or []
-        else:
-            results, rewrite_trace = _run_controlled_multi_query_search(
-                query=payload.query,
-                knowledge_base_id=kb_id,
-                top_k=top_k_search,
-                hints=precomputed_query_hints,
-                enable_rewrites=_should_enable_controlled_rewrites(payload.query, precomputed_query_hints),
-            )
-            precomputed_query_hints.update(rewrite_trace)
+        # Поиск кандидатов в RAG (если нет в кэше)
+        if not results:
+            logger.debug("RAG query: query=%r, effective=%r, kb_id=%s, top_k=%s", payload.query, effective_query, kb_id, top_k_search)
+            if use_legacy_query_heuristics:
+                results = rag_system.search(
+                    query=effective_query,
+                    knowledge_base_id=kb_id,
+                    top_k=top_k_search,
+                ) or []
+            else:
+                results, rewrite_trace = _run_controlled_multi_query_search(
+                    query=effective_query,
+                    knowledge_base_id=kb_id,
+                    top_k=top_k_search,
+                    hints=precomputed_query_hints,
+                    enable_rewrites=_should_enable_controlled_rewrites(effective_query, precomputed_query_hints),
+                )
+                precomputed_query_hints.update(rewrite_trace)
+            
+            # Сохраняем в кэш
+            if cache_enabled and rag_cache and kb_id is not None and results:
+                rag_cache.set(int(kb_id), effective_query, results)
+                
         logger.debug("RAG search returned %d results", len(results))
         def _parse_dt(value: Optional[str]) -> Optional[datetime]:
             if not value:

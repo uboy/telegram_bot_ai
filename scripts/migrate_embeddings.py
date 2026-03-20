@@ -157,12 +157,9 @@ def rebuild_faiss_and_purge_cache(rag: RAGSystem, kb_id: int, engine: Engine) ->
     """Rebuild FAISS index and purge semantic cache for KB."""
     rag._load_index(kb_id)
     
-    # Purge semantic cache if enabled
-    try:
-        from shared.cache import rag_cache
-        rag_cache.clear_kb_cache(kb_id)
-    except Exception:
-        pass  # Cache may not be enabled
+    # Purge semantic cache if enabled (RAGPERF-002)
+    # TODO: from shared.cache import rag_cache; rag_cache.clear_kb_cache(kb_id)
+    pass
 
 
 def migrate_embeddings(
@@ -247,24 +244,28 @@ def migrate_embeddings(
         print(f"Created staging table: {staging_table.name}")
         
         # Re-embed in batches
-        chunk_embeddings: List[tuple[int, str]] = []
+        chunk_ids_batch: List[int] = []
+        chunk_texts_batch: List[str] = []
+        
         last_progress_time = time.time()
         
         for i, chunk in enumerate(chunks):
             if not chunk.content:
                 continue
             
-            embedding = rag._get_embedding(chunk.content, is_query=False)
-            if embedding is None:
-                print(f"Warning: Failed to embed chunk {chunk.id}, skipping")
-                continue
-            
-            chunk_embeddings.append((chunk.id, json.dumps(embedding.tolist())))
+            chunk_ids_batch.append(chunk.id)
+            chunk_texts_batch.append(chunk.content)
             
             # Write in batches
-            if len(chunk_embeddings) >= batch_size:
+            if len(chunk_ids_batch) >= batch_size:
+                embeddings = embed_batch(rag, chunk_texts_batch, batch_size)
+                chunk_embeddings = [
+                    (cid, json.dumps(emb)) 
+                    for cid, emb in zip(chunk_ids_batch, embeddings)
+                ]
                 write_to_staging(engine, staging_table, chunk_embeddings)
-                chunk_embeddings = []
+                chunk_ids_batch = []
+                chunk_texts_batch = []
             
             # Progress logging
             now = time.time()
@@ -276,7 +277,12 @@ def migrate_embeddings(
                 last_progress_time = now
         
         # Write remaining
-        if chunk_embeddings:
+        if chunk_ids_batch:
+            embeddings = embed_batch(rag, chunk_texts_batch, batch_size)
+            chunk_embeddings = [
+                (cid, json.dumps(emb)) 
+                for cid, emb in zip(chunk_ids_batch, embeddings)
+            ]
             write_to_staging(engine, staging_table, chunk_embeddings)
         
         # Atomic swap

@@ -9,14 +9,17 @@ import functools
 import hashlib
 import re
 import time
+import pickle
 from typing import Any, List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
 from urllib.parse import unquote
+from types import SimpleNamespace
 import numpy as np
 from shared.database import Base, Session, KnowledgeBase, KnowledgeChunk, KnowledgeImportLog, engine, get_session
 from sqlalchemy import text, or_
 from shared.qdrant_backend import QdrantBackend
+from shared.cache import rag_cache
 try:
     from shared.rag_pipeline.embedder import embed_texts as pipeline_embed_texts
 except Exception:
@@ -1121,6 +1124,7 @@ class RAGSystem:
                 RAG_DENSE_CANDIDATES,
                 RAG_BM25_CANDIDATES,
                 RAG_RERANK_TOP_N,
+                RAG_CACHE_ENABLED,
             )
             self.enable_rerank = RAG_ENABLE_RERANK
             self.max_candidates = _coerce_positive_int(RAG_MAX_CANDIDATES, 100)
@@ -1130,6 +1134,7 @@ class RAGSystem:
                 RAG_RERANK_TOP_N,
                 max(self.dense_candidate_budget, self.bm25_candidate_budget),
             )
+            self.cache_enabled = RAG_CACHE_ENABLED
         except ImportError:
             self.enable_rerank = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
             self.max_candidates = _coerce_positive_int(os.getenv("RAG_MAX_CANDIDATES", "100"), 100)
@@ -1148,6 +1153,7 @@ class RAGSystem:
                 ),
                 max(self.dense_candidate_budget, self.bm25_candidate_budget),
             )
+            self.cache_enabled = os.getenv("RAG_CACHE_ENABLED", "true").lower() == "true"
 
         # Retrieval backend switch (v3)
         self.retrieval_backend = "legacy"
@@ -1159,6 +1165,17 @@ class RAGSystem:
         self._pending_rebuild_lock = threading.Lock()
         self._rebuild_debounce_sec = 5  # Default, can be overridden by config
         
+        # RAG index persistence (RAGPERF-001)
+        self.persist_enabled = True
+        self.index_dir = "data/faiss_indexes"
+        try:
+            from shared.config import RAG_INDEX_PERSIST_ENABLED, RAG_INDEX_DIR
+            self.persist_enabled = RAG_INDEX_PERSIST_ENABLED
+            self.index_dir = RAG_INDEX_DIR
+        except Exception:
+            self.persist_enabled = os.getenv("RAG_INDEX_PERSIST_ENABLED", "true").lower() == "true"
+            self.index_dir = os.getenv("RAG_INDEX_DIR", os.path.join(os.getenv("BOT_DATA_DIR", "data"), "faiss_indexes"))
+
         try:
             from shared.config import RAG_REBUILD_DEBOUNCE_SEC
             self._rebuild_debounce_sec = max(1, int(RAG_REBUILD_DEBOUNCE_SEC or 5))
@@ -1633,11 +1650,170 @@ class RAGSystem:
         except Exception as e:
             logger.warning("Qdrant dense search failed, fallback to legacy: %s", e)
             return []
+
+    def _get_index_path(self, kb_id: Optional[int]) -> str:
+        name = f"kb_{kb_id}" if kb_id is not None else "all"
+        return os.path.join(self.index_dir, f"{name}.faiss")
+
+    def _get_meta_path(self, kb_id: Optional[int]) -> str:
+        name = f"kb_{kb_id}" if kb_id is not None else "all"
+        return os.path.join(self.index_dir, f"{name}.pkl")
+
+    def _save_index_to_disk(self, kb_id: Optional[int], index: Any, chunks: List[Any]):
+        if not self.persist_enabled or not HAS_EMBEDDINGS or index is None:
+            return
+        
+        try:
+            if not os.path.exists(self.index_dir):
+                os.makedirs(self.index_dir, exist_ok=True)
+            
+            index_path = self._get_index_path(kb_id)
+            meta_path = self._get_meta_path(kb_id)
+            
+            # Metadata
+            meta = {
+                "kb_id": kb_id,
+                "model_name": self.model_name,
+                "dimension": getattr(index, "d", 0),
+                "chunk_count": len(chunks),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            
+            # Chunk data (we only need fields required for search results)
+            chunks_data = []
+            for c in chunks:
+                chunks_data.append({
+                    "id": getattr(c, "id", None),
+                    "content": getattr(c, "content", ""),
+                    "chunk_metadata": getattr(c, "chunk_metadata", "{}"),
+                    "source_type": getattr(c, "source_type", ""),
+                    "source_path": getattr(c, "source_path", ""),
+                    "knowledge_base_id": getattr(c, "knowledge_base_id", None),
+                })
+            
+            payload = {
+                "meta": meta,
+                "chunks": chunks_data
+            }
+            
+            # Atomic write for meta
+            tmp_meta = meta_path + ".tmp"
+            with open(tmp_meta, "wb") as f:
+                pickle.dump(payload, f)
+            
+            # FAISS write
+            tmp_index = index_path + ".tmp"
+            faiss.write_index(index, tmp_index)
+            
+            # Rename
+            if os.path.exists(meta_path): os.remove(meta_path)
+            if os.path.exists(index_path): os.remove(index_path)
+            os.rename(tmp_meta, meta_path)
+            os.rename(tmp_index, index_path)
+            
+            logger.info("Saved FAISS index for KB %s to disk (%d chunks)", kb_id, len(chunks))
+        except Exception as e:
+            logger.warning("Failed to save FAISS index to disk: %s", e)
+
+    def _load_index_from_disk(self, kb_id: Optional[int]) -> Optional[tuple]:
+        if not self.persist_enabled or not HAS_EMBEDDINGS:
+            return None
+            
+        index_path = self._get_index_path(kb_id)
+        meta_path = self._get_meta_path(kb_id)
+        
+        if not os.path.exists(index_path) or not os.path.exists(meta_path):
+            return None
+            
+        try:
+            with open(meta_path, "rb") as f:
+                payload = pickle.load(f)
+            
+            meta = payload.get("meta", {})
+            # Verify compatibility
+            if meta.get("model_name") != self.model_name:
+                logger.info("Disk index model mismatch for KB %s, skipping", kb_id)
+                return None
+            
+            index = faiss.read_index(index_path)
+            if index.d != meta.get("dimension"):
+                logger.warning("Disk index dimension mismatch for KB %s, skipping", kb_id)
+                return None
+            
+            chunks_data = payload.get("chunks", [])
+            if len(chunks_data) != index.ntotal:
+                logger.warning("Disk index chunk count mismatch for KB %s, skipping", kb_id)
+                return None
+                
+            # Reconstruct chunks as SimpleNamespace
+            chunks = [SimpleNamespace(**d) for d in chunks_data]
+            
+            logger.info("Loaded FAISS index for KB %s from disk (%d chunks)", kb_id, len(chunks))
+            return index, chunks
+        except Exception as e:
+            logger.warning("Failed to load FAISS index from disk: %s", e)
+            return None
     
+    def _delete_disk_index(self, kb_id: Optional[int]):
+        """Удалить индекс с диска (RAGPERF-001)."""
+        if not self.persist_enabled:
+            return
+        try:
+            index_path = self._get_index_path(kb_id)
+            meta_path = self._get_meta_path(kb_id)
+            if os.path.exists(index_path):
+                os.remove(index_path)
+            if os.path.exists(meta_path):
+                os.remove(meta_path)
+            logger.debug("Deleted disk index for KB %s", kb_id)
+        except Exception as e:
+            logger.warning("Failed to delete disk index for KB %s: %s", kb_id, e)
+
     def _load_index(self, knowledge_base_id: Optional[int] = None):
         """Загрузить индекс из базы данных (по KB или все)"""
         if not HAS_EMBEDDINGS:
             return
+
+        # RAGPERF-001: Попробовать загрузить с диска с валидацией
+        if self.persist_enabled:
+            disk_meta = None
+            meta_path = self._get_meta_path(knowledge_base_id)
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "rb") as f:
+                        disk_meta = pickle.load(f).get("meta", {})
+                except Exception:
+                    pass
+            
+            if disk_meta and disk_meta.get("model_name") == self.model_name:
+                # Проверить актуальность индекса (по количеству чанков в БД)
+                try:
+                    with get_session() as session:
+                        query = session.query(KnowledgeChunk).filter_by(is_deleted=False)
+                        if knowledge_base_id is not None:
+                            query = query.filter_by(knowledge_base_id=knowledge_base_id)
+                        
+                        db_count = query.filter(KnowledgeChunk.embedding.isnot(None)).count()
+                        
+                        if db_count > 0 and db_count == disk_meta.get("chunk_count"):
+                            disk_res = self._load_index_from_disk(knowledge_base_id)
+                            if disk_res:
+                                index, chunks = disk_res
+                                if knowledge_base_id is not None:
+                                    self.index_by_kb[knowledge_base_id] = index
+                                    self.index_dimension_by_kb[knowledge_base_id] = index.d
+                                    self.chunks_by_kb[knowledge_base_id] = chunks
+                                    # BM25 строится в памяти из загруженных чанков
+                                    self.bm25_chunks_by_kb[knowledge_base_id] = chunks
+                                    self.bm25_index_by_kb[knowledge_base_id] = self._build_bm25_index(chunks)
+                                else:
+                                    self.index = index
+                                    self.chunks = chunks
+                                    self.bm25_chunks_all = chunks
+                                    self.bm25_index_all = self._build_bm25_index(chunks)
+                                return
+                except Exception as e:
+                    logger.debug("Validation of disk index failed, rebuilding from DB: %s", e)
 
         with get_session() as session:
             # Embedding model mismatch detection (RAGIDX-001)
@@ -1657,6 +1833,10 @@ class RAGSystem:
                             knowledge_base_id, kb.embedding_model, current_model
                         )
             
+            # RAGPERF-002: Инвалидировать кэш при пересборке индекса
+            if getattr(self, 'cache_enabled', False) and rag_cache and knowledge_base_id is not None:
+                rag_cache.clear_kb(int(knowledge_base_id))
+
             if knowledge_base_id is not None:
                 chunks = (
                     session.query(KnowledgeChunk)
@@ -1745,6 +1925,9 @@ class RAGSystem:
             self.chunks_by_kb[kb_id] = valid_chunks
             self.bm25_chunks_by_kb[kb_id] = all_chunks_by_kb.get(kb_id, [])
             self.bm25_index_by_kb[kb_id] = self._build_bm25_index(self.bm25_chunks_by_kb[kb_id])
+            
+            # RAGPERF-001: Сохранить на диск
+            self._save_index_to_disk(kb_id, index, valid_chunks)
         
         # Построить BM25 индексы для KB без эмбеддингов
         for kb_id, kb_chunks in all_chunks_by_kb.items():
@@ -1774,6 +1957,8 @@ class RAGSystem:
                 self.dimension = all_embeddings.shape[1]
                 self.index = faiss.IndexFlatIP(self.dimension)
                 self.index.add(all_embeddings)
+                # RAGPERF-001: Сохранить на диск
+                self._save_index_to_disk(None, self.index, self.chunks)
     
 
     def _tokenize(self, text: str) -> List[str]:
@@ -2513,6 +2698,16 @@ class RAGSystem:
         if not HAS_EMBEDDINGS or not self.encoder:
             return self._simple_search(query, knowledge_base_id, top_k)
         
+        # RAGPERF-002: Проверить семантический кэш
+        if getattr(self, 'cache_enabled', False) and rag_cache and knowledge_base_id is not None:
+            cached_res = rag_cache.get(int(knowledge_base_id), query)
+            if cached_res:
+                logger.debug("Semantic cache hit for KB %s, query: %r", knowledge_base_id, query)
+                # Пометить результаты как из кэша
+                for r in cached_res:
+                    r["cache_hit"] = True
+                return cached_res[:top_k]
+
         # Загрузить кэши поиска если не загружены
         if knowledge_base_id is not None:
             if knowledge_base_id not in self.bm25_index_by_kb or knowledge_base_id not in self.bm25_chunks_by_kb:
@@ -2676,6 +2871,12 @@ class RAGSystem:
 
         if not merged:
             return []
+
+        # RAGPERF-002: Сохранить в кэш перед финальным top_k/rerank, 
+        # но обычно кэшируют уже готовые к выдаче результаты.
+        # Для простоты кэшируем именно merged (уже отфильтрованные и ранжированные RRF).
+        if getattr(self, 'cache_enabled', False) and rag_cache and knowledge_base_id is not None:
+            rag_cache.set(int(knowledge_base_id), query, merged)
 
         if not use_legacy_howto_ranking:
             merged = _order_candidates_by_family_support(
@@ -2991,6 +3192,7 @@ class RAGSystem:
             self.bm25_index_all = None
             self.bm25_chunks_by_kb.clear()
             self.bm25_chunks_all = []
+            self._delete_disk_index(knowledge_base_id)
             self._load_index()
             if self._qdrant_enabled():
                 try:
@@ -3023,6 +3225,7 @@ class RAGSystem:
             self.bm25_index_all = None
             self.bm25_chunks_by_kb.clear()
             self.bm25_chunks_all = []
+            self._delete_disk_index(knowledge_base_id)
             self._load_index()
             if self._qdrant_enabled():
                 try:

@@ -102,6 +102,8 @@ def upload_dir(client: httpx.Client, api_url: str, kb_id: int, source_dir: str, 
         doc_id = result.get("doc_id") or result.get("document_id")
         if doc_id:
             document_ids.append(int(doc_id))
+        else:
+            print(f"Warning: No document ID in response for {path.name}. API returned: {result}")
         print(f"Uploaded: {path.name}")
     
     return document_ids
@@ -192,10 +194,14 @@ def main() -> int:
                 }
                 
                 for future in as_completed(futures):
-                    doc_id, success = future.result()
-                    if success:
-                        success_count += 1
-                    else:
+                    try:
+                        doc_id, success = future.result()
+                        if success:
+                            success_count += 1
+                        else:
+                            failure_count += 1
+                    except Exception as e:
+                        print(f"  Worker failed with unexpected error: {e}")
                         failure_count += 1
             
             elapsed = time.time() - start_time

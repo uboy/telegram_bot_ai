@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from shared.database import Base, KnowledgeBase, KnowledgeChunk, Document
+from shared import cache as _cache_module
 
 
 # Use SQLite for tests to avoid MySQL dependency
@@ -45,7 +46,15 @@ def test_db_session():
 
 @pytest.fixture(autouse=True)
 def cleanup_test_db():
-    """Cleanup test database after each test."""
+    """Cleanup test database and semantic cache after each test."""
+    # Clear semantic cache before each test to prevent cross-test pollution (RAGPERF-002)
+    if _cache_module.rag_cache is not None:
+        with _cache_module.rag_cache._lock:
+            _cache_module.rag_cache._cache.clear()
     yield
     # Drop all tables after test
     Base.metadata.drop_all(bind=_test_engine)
+    # Clear semantic cache after test
+    if _cache_module.rag_cache is not None:
+        with _cache_module.rag_cache._lock:
+            _cache_module.rag_cache._cache.clear()

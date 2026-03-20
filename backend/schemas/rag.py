@@ -3,6 +3,11 @@ from typing import Optional, List, Dict, Literal
 from pydantic import BaseModel
 
 
+class ConversationTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    text: str
+
+
 class RAGQuery(BaseModel):
     telegram_id: Optional[str] = None
     query: str
@@ -13,6 +18,8 @@ class RAGQuery(BaseModel):
     path_prefixes: Optional[List[str]] = None
     date_from: Optional[str] = None
     date_to: Optional[str] = None
+    # Контекст диалога для переформулировки (RAGCONV-001)
+    conversation_context: Optional[List[ConversationTurn]] = None
 
 
 class RAGSource(BaseModel):
