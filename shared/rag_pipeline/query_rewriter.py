@@ -101,6 +101,7 @@ def reformulate_query(
             prompt,
             model=model,
             provider_name=provider,
+            max_tokens=60,
             telemetry_meta={"feature": "query_rewriter"}
         ).strip().strip('"')
         
