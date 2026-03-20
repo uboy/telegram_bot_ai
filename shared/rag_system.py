@@ -2749,7 +2749,11 @@ class RAGSystem:
 
         # RAGPERF-003: HyDE — заменяем эмбеддинг запроса на эмбеддинг гипотетического документа
         if getattr(self, 'hyde_enabled', False):
-            hyde_embedding = self._hyde_generate_hypothetical_doc(query)
+            try:
+                hyde_embedding = self._hyde_generate_hypothetical_doc(query)
+            except Exception as e:
+                logger.warning("HyDE failed in search(), using original embedding: %s", e)
+                hyde_embedding = None
             if hyde_embedding is not None:
                 query_embedding = hyde_embedding
 
