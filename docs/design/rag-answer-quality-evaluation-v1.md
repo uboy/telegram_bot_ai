@@ -1,7 +1,7 @@
 # RAG Answer Quality Evaluation v1
 
-Date: 2026-03-19
-Status: APPROVED:v1
+Date: 2026-03-20
+Status: COMPLETED
 Task: `RAGEVAL-001`
 
 ## 1. Summary
@@ -74,13 +74,13 @@ KB areas are invisible until reported manually.
 
 ### 4.1 LLM-as-judge scoring
 
-**Three metrics, scored 1–5:**
+**Three metrics, scored 0.0–1.0 (float):**
 
 | Metric | Definition |
 |---|---|
-| `faithfulness` | Is every claim in the answer supported by the retrieved context? (1 = major hallucination, 5 = fully grounded) |
-| `relevance` | Does the answer address what the user asked? (1 = off-topic, 5 = directly answers the question) |
-| `completeness` | Does the answer cover the key steps/points needed? (1 = critically incomplete, 5 = covers all key points) |
+| `faithfulness` | Is every claim in the answer supported by the retrieved context? (0.0 = major hallucination, 1.0 = fully grounded) |
+| `relevance` | Does the answer address what the user asked? (0.0 = off-topic, 1.0 = directly answers the question) |
+| `completeness` | Does the answer cover the key steps/points needed? (0.0 = critically incomplete, 1.0 = covers all key points) |
 
 **Judge prompt (single call per answer, returns JSON):**
 
@@ -91,7 +91,7 @@ The evidence pack is truncated to 2000 characters total (sum across all
 chunks) to fit within a compact judge call.
 
 If the answer is a system refusal ("Информация не найдена" / "I don't have
-information about that"), the judge should score faithfulness=5 and
+information about that"), the judge should score faithfulness=1.0 and
 completeness=N/A (mark as intentional_refusal=true in output). The prompt
 instructs the judge to detect this case.
 
@@ -116,13 +116,13 @@ ANSWER:
 If the answer is an intentional refusal (e.g. "I don't have information"),
 set intentional_refusal=true and skip completeness scoring.
 
-Score each dimension from 1 to 5:
+Score each dimension from 0.0 to 1.0:
 - faithfulness: is the answer fully supported by the context?
 - relevance: does the answer address the question?
 - completeness: does the answer cover the key points?
 
 Respond with valid JSON only:
-{"faithfulness": <int>, "relevance": <int>, "completeness": <int>, "reasoning": "<one sentence>"}
+{"faithfulness": <float>, "relevance": <float>, "completeness": <float>, "reasoning": "<one sentence>"}
 ```
 
 The eval runner calls the judge after each case and stores scores alongside

@@ -430,3 +430,13 @@ def asr_models_menu(current_model: str):
     buttons.append([InlineKeyboardButton("✏️ Свой вариант (Hugging Face)", callback_data='asr_model_custom')])
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data='admin_asr')])
     return InlineKeyboardMarkup(buttons)
+
+
+def rag_feedback_menu(request_id: str):
+    """Меню обратной связи для RAG-ответа (RAGEVAL-001)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👍 Полезно", callback_data=f"rag_feedback:{request_id}:helpful"),
+            InlineKeyboardButton("👎 Не то", callback_data=f"rag_feedback:{request_id}:not_helpful"),
+        ]
+    ])

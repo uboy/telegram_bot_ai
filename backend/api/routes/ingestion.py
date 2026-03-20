@@ -7,6 +7,7 @@ import os
 from backend.api.deps import get_db_dep, require_api_key
 from backend.services.ingestion_service import IngestionService
 from backend.services.indexing_service import IndexingService
+from shared.rag_system import rag_system, EmbeddingModelMismatchError  # type: ignore
 
 
 class WebIngestionRequest(BaseModel):
@@ -83,6 +84,21 @@ class CodeIngestionResponse(BaseModel):
     files_updated: int
     chunks_added: int
     job_id: int | None = None
+
+
+class ReindexDocumentRequest(BaseModel):
+    document_id: int
+    knowledge_base_id: int
+
+
+class ReindexDocumentResponse(BaseModel):
+    chunks_updated: int
+    kb_id: int
+    faiss_rebuild: str = "pending"
+
+
+class FlushIndexResponse(BaseModel):
+    rebuilt_kbs: list[int]
 
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
@@ -405,5 +421,84 @@ def ingest_codebase_git(
         chunks_added=0,
         job_id=job.id,
     )
+
+
+@router.post(
+    "/reindex-document",
+    response_model=ReindexDocumentResponse,
+    summary="Переиндексировать один документ (пересчитать эмбеддинги)",
+    description="Per-document re-indexing (RAGIDX-001). Пересчитывает эмбеддинги для всех чанков документа и ставит KB в очередь на rebuild FAISS индекса.",
+    dependencies=[Depends(require_api_key)],
+)
+def reindex_document_endpoint(
+    payload: ReindexDocumentRequest,
+    db: Session = Depends(get_db_dep),
+) -> ReindexDocumentResponse:
+    """Re-index a single document by recomputing embeddings."""
+    try:
+        result = rag_system.reindex_document(
+            document_id=payload.document_id,
+            knowledge_base_id=payload.knowledge_base_id,
+            session=db,
+        )
+        
+        if "error" in result:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Embeddings not available: {result['error']}"
+            )
+        
+        if result["chunks_updated"] == 0:
+            # Check if document exists
+            from shared.database import Document
+            doc = db.query(Document).filter_by(
+                id=payload.document_id,
+                knowledge_base_id=payload.knowledge_base_id
+            ).first()
+            if not doc:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Document {payload.document_id} not found in KB {payload.knowledge_base_id}"
+                )
+        
+        return ReindexDocumentResponse(
+            chunks_updated=result["chunks_updated"],
+            kb_id=result["kb_id"],
+            faiss_rebuild="pending",
+        )
+    
+    except EmbeddingModelMismatchError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+            headers={"X-Error-Code": "embedding_model_mismatch"},
+        )
+
+
+@router.post(
+    "/flush-index",
+    response_model=FlushIndexResponse,
+    summary="Принудительно пересобрать FAISS индекс для pending KBs",
+    description="Flush pending FAISS rebuilds (RAGIDX-001). Пересобирает FAISS индекс для всех KB в очереди pending rebuild.",
+    dependencies=[Depends(require_api_key)],
+)
+def flush_index_endpoint(
+    knowledge_base_id: int | None = None,
+    db: Session = Depends(get_db_dep),
+) -> FlushIndexResponse:
+    """Flush pending FAISS rebuilds."""
+    result = rag_system.flush_pending_rebuilds(knowledge_base_id=knowledge_base_id)
+    return FlushIndexResponse(rebuilt_kbs=result["rebuilt_kbs"])
+
+
+@router.get(
+    "/pending-rebuilds",
+    response_model=list[int],
+    summary="Получить список KB в очереди на rebuild FAISS",
+    dependencies=[Depends(require_api_key)],
+)
+def get_pending_rebuilds_endpoint() -> list[int]:
+    """Get list of KBs pending FAISS rebuild."""
+    return rag_system.get_pending_rebuild_kbs()
 
 

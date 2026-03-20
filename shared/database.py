@@ -54,11 +54,12 @@ class AppSettings(Base):
 class KnowledgeBase(Base):
     """База знаний"""
     __tablename__ = 'knowledge_bases'
-    
+
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True)
     description = Column(Text)
     settings = Column(Text)  # JSON строка с настройками БЗ
+    embedding_model = Column(Text, nullable=True)  # Модель эмбеддингов, использованная при индексации
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -487,10 +488,28 @@ class RAGEvalResult(Base):
     threshold_value = Column(Float, nullable=True)
     passed = Column(Boolean, default=False, nullable=False)
     details_json = Column(Text, nullable=True)
+    judge_scores = Column(Text, nullable=True)  # JSON с оценками судьи (RAGEVAL-001)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     __table_args__ = (
         Index('ix_rag_eval_results_run_slice_metric', 'run_id', 'slice_name', 'metric_name'),
+    )
+
+
+class RAGAnswerFeedback(Base):
+    """Обратная связь пользователя по ответам RAG (RAGEVAL-001)."""
+    __tablename__ = 'rag_answer_feedback'
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(String(64), ForeignKey('retrieval_query_logs.request_id'), nullable=False, index=True)
+    user_id = Column(Integer, nullable=True)
+    kb_id = Column(Integer, nullable=True, index=True)
+    vote = Column(String(20), nullable=False)  # "helpful" | "not_helpful"
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('request_id', 'user_id', name='uq_rag_feedback_user'),
     )
 
 
@@ -996,6 +1015,53 @@ def migrate_database():
                     session.commit()
                     logger.info("✅ Migration: added 'rerank_delta' to retrieval_candidate_logs")
         except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Add judge_scores to rag_eval_results (RAGEVAL-001)
+        try:
+            if 'rag_eval_results' in inspector.get_table_names():
+                columns = [col['name'] for col in inspector.get_columns('rag_eval_results')]
+                if 'judge_scores' not in columns:
+                    session.execute(text("""
+                        ALTER TABLE rag_eval_results
+                        ADD COLUMN judge_scores TEXT
+                    """))
+                    session.commit()
+                    logger.info("✅ Migration: added 'judge_scores' to rag_eval_results")
+        except Exception:
+            try:
+                session.rollback()
+            except:
+                pass
+
+        # Create rag_answer_feedback table if missing (RAGEVAL-001)
+        try:
+            if 'rag_answer_feedback' not in inspector.get_table_names():
+                # Use standard DDL that works for both MySQL and SQLite
+                # TEXT for SQLite is comparable to VARCHAR in MySQL for indexed columns
+                # though some MySQL versions might need length for index.
+                # Since request_id is 64 chars, it should be fine.
+                session.execute(text("""
+                    CREATE TABLE rag_answer_feedback (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        request_id VARCHAR(64) NOT NULL,
+                        user_id INTEGER,
+                        kb_id INTEGER,
+                        vote VARCHAR(20) NOT NULL,
+                        comment TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                session.execute(text("CREATE INDEX idx_rag_feedback_request_id ON rag_answer_feedback(request_id)"))
+                session.execute(text("CREATE INDEX idx_rag_feedback_kb_id ON rag_answer_feedback(kb_id)"))
+                session.execute(text("CREATE UNIQUE INDEX uq_rag_feedback_user ON rag_answer_feedback(request_id, user_id)"))
+                session.commit()
+                logger.info("✅ Migration: created table 'rag_answer_feedback'")
+        except Exception as e:
+            logger.warning("Migration failed for rag_answer_feedback: %s", e)
             try:
                 session.rollback()
             except:

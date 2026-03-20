@@ -40,7 +40,8 @@ from frontend.templates.buttons import (
     main_menu, admin_menu, settings_menu, ai_providers_menu,
     user_management_menu, knowledge_base_menu, knowledge_base_search_menu, kb_actions_menu,
     confirm_menu, search_options_menu,
-    asr_models_menu, ai_context_choice_menu
+    asr_models_menu, ai_context_choice_menu,
+    rag_feedback_menu,
 )
 from shared.config import ADMIN_IDS, AI_PROGRESS_THRESHOLD_SEC
 from shared.n8n_client import n8n_client
@@ -166,10 +167,11 @@ async def check_user(update: Update) -> Optional[UserContext]:
     return user_context
 
 
-def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) -> tuple[str, bool]:
+def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) -> tuple[str, bool, Optional[str]]:
     backend_answer = (backend_result.get("answer") or "").strip()
     backend_sources = backend_result.get("sources") or []
-    if not backend_answer: return "", False
+    request_id = backend_result.get("request_id")
+    if not backend_answer: return "", False, request_id
     
     ai_answer_html = format_for_telegram_answer(backend_answer, enable_citations=enable_citations)
 
@@ -209,11 +211,11 @@ def render_rag_answer_html(backend_result: dict, enable_citations: bool = True) 
 
     if sources_html_list:
         sources_html = "\n".join(f"• {s}" for s in sources_html_list)
-        return f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n📎 <b>Источники:</b>\n{sources_html}", True
-    return f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}", True
+        return f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}\n\n📎 <b>Источники:</b>\n{sources_html}", True, request_id
+    return f"🤖 <b>Ответ:</b>\n\n{ai_answer_html}", True, request_id
 
 
-async def perform_rag_query_and_render(query: str, kb_id: int, user: UserContext, filters: dict = None) -> tuple[str, bool]:
+async def perform_rag_query_and_render(query: str, kb_id: int, user: UserContext, filters: dict = None) -> tuple[str, bool, Optional[str]]:
     backend_result = await asyncio.to_thread(backend_client.rag_query, query=query, knowledge_base_id=kb_id, **(filters or {}))
     if (backend_result.get("answer") or "").strip():
         return render_rag_answer_html(backend_result)
@@ -221,7 +223,7 @@ async def perform_rag_query_and_render(query: str, kb_id: int, user: UserContext
     prompt = create_prompt_with_language(query, None, task="answer")
     ai_answer = await asyncio.to_thread(ai_manager.query, prompt, provider_name=user.preferred_provider, model=user.preferred_model)
     ai_html = format_for_telegram_answer(ai_answer, enable_citations=False)
-    return f"🤖 <b>Ответ:</b>\n\n{ai_html}\n\n<i>(Основано на общих знаниях ИИ)</i>", True
+    return f"🤖 <b>Ответ:</b>\n\n{ai_html}\n\n<i>(Основано на общих знаниях ИИ)</i>", True, None
 
 
 def _build_kb_progress_text(step: int) -> str:
@@ -241,7 +243,7 @@ async def _run_rag_query_with_progress(
     kb_id: int,
     user: UserContext,
     filters: dict | None = None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Optional[str]]:
     threshold_sec = max(0.8, float(AI_PROGRESS_THRESHOLD_SEC))
     progress_message = None
     progress_task = None
@@ -342,6 +344,22 @@ async def enter_kb_search_mode(context: ContextTypes.DEFAULT_TYPE) -> Tuple[str,
     return "📚 Выберите базу знаний для поиска:", knowledge_base_search_menu(kbs)
 
 
+async def _delayed_remove_feedback_keyboard(message, wait_sec: int = 600):
+    """Убирает клавиатуру обратной связи через 10 минут, если пользователь не проголосовал."""
+    try:
+        await asyncio.sleep(wait_sec)
+        # Если в тексте сообщения уже есть "Ваша оценка", значит пользователь проголосовал 
+        # и кнопки уже убраны.
+        if message and hasattr(message, 'edit_reply_markup'):
+            # Проверяем текущее состояние сообщения перед удалением кнопок
+            # В python-telegram-bot лучше просто попробовать убрать reply_markup.
+            # Если кнопок нет, это не вызовет ошибки.
+            await message.edit_reply_markup(reply_markup=None)
+            logger.debug("Feedback keyboard removed after timeout for message_id=%s", getattr(message, 'message_id', 'unknown'))
+    except Exception as e:
+        logger.debug("Failed to remove feedback keyboard after timeout: %s", e)
+
+
 async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         while True:
@@ -365,8 +383,9 @@ async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
             if not message or not query or not kb_id or not isinstance(user, UserContext):
                 continue
 
+            request_id = None
             try:
-                html, _ = await _run_rag_query_with_progress(
+                html, _, request_id = await _run_rag_query_with_progress(
                     message=message,
                     query=query,
                     kb_id=int(kb_id),
@@ -380,11 +399,22 @@ async def _process_kb_query_queue(context: ContextTypes.DEFAULT_TYPE) -> None:
                     "Попробуйте повторить запрос немного позже."
                 )
 
-            await reply_html_safe(
-                message,
+            # Формируем клавиатуру с обратной связью (RAGEVAL-001)
+            reply_markup = None
+            if request_id:
+                reply_markup = rag_feedback_menu(request_id)
+
+            sent_msg = await message.reply_text(
                 html,
-                reply_to_message_id=reply_to_message_id,
+                parse_mode='HTML',
+                reply_markup=reply_markup,
+                reply_to_message_id=reply_to_message_id
             )
+
+            # Запускаем таймер на удаление кнопок (10 минут)
+            if reply_markup and sent_msg:
+                asyncio.create_task(_delayed_remove_feedback_keyboard(sent_msg))
+
     finally:
         context.user_data["kb_query_worker"] = None
 

@@ -23,7 +23,10 @@ DEFAULT_REQUIRED_SLICES = [
     "long-context",
     "refusal-expected",
 ]
-DEFAULT_METRICS = ["recall_at_10", "mrr_at_10", "ndcg_at_10"]
+DEFAULT_METRICS = [
+    "recall_at_10", "mrr_at_10", "ndcg_at_10", 
+    "faithfulness", "response_relevancy", "answer_correctness"
+]
 DEFAULT_THRESHOLDS = {
     "recall_at_10": 0.6,
     "mrr_at_10": 0.45,
@@ -459,6 +462,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold-recall-at10", type=float, default=0.6)
     parser.add_argument("--threshold-mrr-at10", type=float, default=0.45)
     parser.add_argument("--threshold-ndcg-at10", type=float, default=0.5)
+    parser.add_argument("--threshold-judge", type=float, help="Unified threshold for judge metrics (faithfulness, relevance, correctness)")
     parser.add_argument("--min-sample-size", type=int, default=100)
     parser.add_argument("--negative-margin", type=float, default=-0.01)
     parser.add_argument("--bootstrap-samples", type=int, default=2000)
@@ -563,6 +567,13 @@ def main() -> int:
             "ndcg_at_10": float(args.threshold_ndcg_at10),
         }
     )
+    if args.threshold_judge is not None:
+        val = float(args.threshold_judge)
+        thresholds.update({
+            "faithfulness": val,
+            "response_relevancy": val,
+            "answer_correctness": val
+        })
 
     report = evaluate_gate(
         run_id=run_id or "unknown",

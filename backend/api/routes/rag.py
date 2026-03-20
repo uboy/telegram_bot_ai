@@ -23,6 +23,8 @@ from backend.schemas.rag import (
     RAGEvalRunResponse,
     RAGEvalStatusResponse,
     RAGEvalResultRow,
+    RAGFeedbackRequest,
+    RAGFeedbackResponse,
 )
 
 # Используем существующую RAG-систему и AI-менеджер из основного проекта.
@@ -3085,3 +3087,44 @@ def rag_reload_models(db: Session = Depends(get_db_dep)) -> Dict[str, Any]:  # n
         "embedding": bool(result.get("embedding")),
         "reranker": bool(result.get("reranker")),
     }
+
+
+@router.post(
+    "/feedback",
+    response_model=RAGFeedbackResponse,
+    summary="Обратная связь пользователя по ответу RAG",
+    dependencies=[Depends(require_api_key)],
+)
+def rag_feedback(payload: RAGFeedbackRequest, db: Session = Depends(get_db_dep)) -> RAGFeedbackResponse:
+    """
+    Сохраняет оценку пользователя (helpful/not_helpful) для конкретного RAG-ответа.
+    Ошибки базы данных игнорируются (пользователь всегда получает ok: true).
+    """
+    from shared.database import RAGAnswerFeedback, RetrievalQueryLog  # type: ignore
+
+    try:
+        # Найти kb_id по request_id (если есть)
+        kb_id = None
+        log_entry = db.query(RetrievalQueryLog).filter_by(request_id=payload.request_id).first()
+        if log_entry:
+            kb_id = log_entry.knowledge_base_id
+
+        # Создать запись
+        feedback = RAGAnswerFeedback(
+            request_id=payload.request_id,
+            user_id=payload.user_id,
+            kb_id=kb_id,
+            vote=payload.vote,
+            comment=payload.comment
+        )
+        db.add(feedback)
+        db.commit()
+    except Exception as e:
+        logger.warning("Failed to save RAG feedback for request_id=%s: %s", payload.request_id, e)
+        # Глотаем ошибки БД согласно спецификации
+        try:
+            db.rollback()
+        except Exception:
+            pass
+            
+    return RAGFeedbackResponse(ok=True)
