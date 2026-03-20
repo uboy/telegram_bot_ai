@@ -249,7 +249,17 @@ def test_rag_diagnostics_openapi_schema_exposes_required_trace_fields():
     assert {"origin", "channel", "channel_rank", "fusion_rank", "fusion_score", "included_in_context"} <= set(
         candidate_schema.get("required") or []
     )
-    assert {"context_rank", "context_reason", "context_anchor_rank", "family_key", "family_rank"} <= set(candidate_schema["properties"])
+    assert {
+        "context_rank",
+        "context_reason",
+        "context_anchor_rank",
+        "family_key",
+        "family_rank",
+        "canonicality_score",
+        "contamination_penalty",
+        "canonicality_reason",
+        "contamination_reason",
+    } <= set(candidate_schema["properties"])
 
 
 def test_persist_retrieval_logs_keeps_family_trace_in_diagnostics_metadata():
@@ -277,6 +287,10 @@ def test_persist_retrieval_logs_keeps_family_trace_in_diagnostics_metadata():
                 "content": "Deployment checklist step 1",
                 "_family_key": "doc://deploy::section:deployment guide > checklist",
                 "_family_rank": 1,
+                "_canonicality_score": 1.25,
+                "_contamination_penalty": 0.15,
+                "_canonicality_reason": "focused_field_coverage",
+                "_contamination_reason": "list_or_table_shape",
             }
         ],
     )
@@ -285,3 +299,7 @@ def test_persist_retrieval_logs_keeps_family_trace_in_diagnostics_metadata():
 
     assert result.candidates[0].family_key == "doc://deploy::section:deployment guide > checklist"
     assert result.candidates[0].family_rank == 1
+    assert result.candidates[0].canonicality_score == "1.250000"
+    assert result.candidates[0].contamination_penalty == "0.150000"
+    assert result.candidates[0].canonicality_reason == "focused_field_coverage"
+    assert result.candidates[0].contamination_reason == "list_or_table_shape"

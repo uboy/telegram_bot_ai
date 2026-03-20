@@ -88,11 +88,14 @@ def _parse_cases_payload(raw: str) -> list[dict[str, Any]]:
         normalized = {
             "query": query,
             "expected_source_fragment": str(item.get("expected_source_fragment") or "").strip(),
+            "expected_family_fragment": str(item.get("expected_family_fragment") or "").strip(),
             "expected_answer_fragments": [
                 str(fragment).strip()
                 for fragment in (item.get("expected_answer_fragments") or [])
                 if str(fragment).strip()
             ],
+            "failure_class": str(item.get("failure_class") or "").strip(),
+            "query_mode": str(item.get("query_mode") or "").strip(),
         }
         cases.append(normalized)
     return cases
@@ -310,19 +313,44 @@ def _run_smoke(args: argparse.Namespace, db_path: str) -> dict[str, Any]:
     if chunks_added < args.min_chunks:
         failures.append(f"chunks_added {chunks_added} < {args.min_chunks}")
 
+    # Per-class counters: {class: {"pass": int, "fail": int, "family_hit": int}}
+    class_breakdown: dict[str, dict[str, int]] = {}
+
     for case, result in zip(cases, query_results):
+        failure_class = str(case.get("failure_class") or "").strip() or "unclassified"
+        if failure_class not in class_breakdown:
+            class_breakdown[failure_class] = {"pass": 0, "fail": 0, "family_hit": 0}
+
+        case_pass = True
         expected_source = str(case.get("expected_source_fragment") or "").strip()
         if expected_source:
             source_hits = [path for path in result["top_sources"] if expected_source in path]
             if not source_hits:
-                failures.append(f"{case['query']}: expected source fragment `{expected_source}` not found in top sources")
+                failures.append(f"[{failure_class}] {case['query']}: expected source fragment `{expected_source}` not found in top sources")
+                case_pass = False
+
+        expected_family = str(case.get("expected_family_fragment") or "").strip()
+        if expected_family:
+            family_hits = [path for path in result["top_sources"] if expected_family in path]
+            if family_hits:
+                class_breakdown[failure_class]["family_hit"] += 1
+            elif case_pass:
+                failures.append(f"[{failure_class}] {case['query']}: expected family fragment `{expected_family}` not found in top sources")
+                case_pass = False
+
         expected_answer_fragments = [str(fragment).strip() for fragment in (case.get("expected_answer_fragments") or []) if str(fragment).strip()]
         if expected_answer_fragments:
             answer_text = result["answer_preview"].lower()
             if not any(fragment.lower() in answer_text for fragment in expected_answer_fragments):
                 failures.append(
-                    f"{case['query']}: answer preview missing expected fragments {expected_answer_fragments}"
+                    f"[{failure_class}] {case['query']}: answer preview missing expected fragments {expected_answer_fragments}"
                 )
+                case_pass = False
+
+        if case_pass:
+            class_breakdown[failure_class]["pass"] += 1
+        else:
+            class_breakdown[failure_class]["fail"] += 1
 
     return {
         "ok": not failures,
@@ -341,6 +369,7 @@ def _run_smoke(args: argparse.Namespace, db_path: str) -> dict[str, Any]:
         "cases_count": len(cases),
         "queries": query_results,
         "failures": failures,
+        "failure_class_breakdown": class_breakdown,
     }
 
 
@@ -377,7 +406,7 @@ def main(default_profile: Optional[str] = None) -> int:
     finally:
         if temp_dir_obj is not None:
             try:
-                shutil.rmtree(temp_dir_obj.name, ignore_errors=True)
+                temp_dir_obj.cleanup()
             except Exception:
                 pass
 

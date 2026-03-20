@@ -744,6 +744,113 @@ def test_rag_query_howto_demotes_troubleshooting_pages(monkeypatch):
     assert all(source.source_path != "doc://stable-build-issues" for source in result.sources[:1])
 
 
+def test_rag_query_prefers_exact_navigation_doc_over_status_dump(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+
+    results = [
+        {
+            "content": "status table with many API component rows",
+            "metadata": {
+                "doc_title": "DEV_API_STATUS",
+                "section_title": "DEV_API_STATUS",
+                "section_path": "C-API > DEV_API_STATUS",
+                "section_path_norm": "c-api > dev_api_status",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://dev-api-status",
+            "source_type": "markdown",
+            "rerank_score": 0.93,
+            "distance": 0.07,
+        },
+        {
+            "content": "Official OpenHarmony documentation and ArkUI API Reference links.",
+            "metadata": {
+                "doc_title": "Documentation",
+                "section_title": "ArkUI API EN",
+                "section_path": "Infrastructure > Documentation > ArkUI API EN",
+                "section_path_norm": "infrastructure > documentation > arkui api en",
+                "chunk_no": 2,
+                "chunk_kind": "list",
+            },
+            "source_path": "doc://documentation",
+            "source_type": "markdown",
+            "rerank_score": 0.89,
+            "distance": 0.11,
+        },
+    ]
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(lambda query, knowledge_base_id=None, top_k=8: list(results))})(),
+    )
+    monkeypatch.setattr(rag_module, "_load_doc_chunks_for_context", lambda db, doc_id, kb_id=None: [])  # noqa: ARG005
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    result = rag_query(RAGQuery(query="where is arkui api reference", knowledge_base_id=1), db=DummyDB())
+
+    assert "ArkUI API Reference" in result.answer
+    assert result.sources[0].source_path == "doc://documentation"
+
+
+def test_rag_query_prefers_exact_patch_doc_over_broad_previewer_note(monkeypatch):
+    from backend.api.routes import rag as rag_module
+
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+
+    results = [
+        {
+            "content": "Previewer should display unpacked hap data and resources.",
+            "metadata": {
+                "doc_title": "Built-in Previewer",
+                "section_title": "Run Built-in Previewer with app data from hap",
+                "section_path": "Previewer > Notes > Built-in Previewer",
+                "section_path_norm": "previewer > notes > built-in previewer",
+                "chunk_no": 1,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://built-in-previewer",
+            "source_type": "markdown",
+            "rerank_score": 0.94,
+            "distance": 0.06,
+        },
+        {
+            "content": "Download and apply patch spreviewer_arkts12_master.patch\npatch -p1 < spreviewer_arkts12_master.patch",
+            "metadata": {
+                "doc_title": "ArkTS 1.2 Linux Previewer for MASTER branch",
+                "section_title": "Build the Linux Previewer",
+                "section_path": "Previewer > ArkTS 1.2 Linux Previewer for MASTER branch > Build the Linux Previewer",
+                "section_path_norm": "previewer > arkts 1.2 linux previewer for master branch > build the linux previewer",
+                "chunk_no": 2,
+                "chunk_kind": "text",
+            },
+            "source_path": "doc://previewer-master",
+            "source_type": "markdown",
+            "rerank_score": 0.90,
+            "distance": 0.10,
+        },
+    ]
+
+    monkeypatch.setattr(
+        rag_module,
+        "rag_system",
+        type("X", (), {"search": staticmethod(lambda query, knowledge_base_id=None, top_k=8: list(results))})(),
+    )
+    monkeypatch.setattr(rag_module, "_load_doc_chunks_for_context", lambda db, doc_id, kb_id=None: [])  # noqa: ARG005
+    monkeypatch.setattr(rag_module, "ai_manager", type("Y", (), {"query": staticmethod(lambda prompt: prompt)})())
+
+    result = rag_query(
+        RAGQuery(query="what patch should i apply for master branch linux previewer", knowledge_base_id=1),
+        db=DummyDB(),
+    )
+
+    assert "spreviewer_arkts12_master.patch" in result.answer
+    assert result.sources[0].source_path == "doc://previewer-master"
+
+
 def test_rag_query_fallback_expands_neighboring_procedural_chunks(monkeypatch):
     from backend.api.routes import rag as rag_module
 

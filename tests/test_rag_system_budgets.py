@@ -484,3 +484,95 @@ def test_search_generalized_mode_promotes_distinctive_field_match_over_generic_c
 
     assert results[0]["content"] == "xts-specific"
     assert "XTS%20build%20and%20run" in results[0]["source_path"]
+
+
+def test_search_generalized_mode_rerank_preserves_exact_manual_match_over_noisy_neighbor(monkeypatch):
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+    monkeypatch.setattr(rag_module, "HAS_EMBEDDINGS", True, raising=False)
+    monkeypatch.setattr(rag_module, "HAS_RERANKER", True, raising=False)
+    exact_doc = _candidate(
+        "spreviewer_arkts12_master.patch\npatch -p1 < spreviewer_arkts12_master.patch",
+        "https://kb.local/Previewer/ArkTS%201.2%20Linux%20Previewer%20for%20MASTER%20branch",
+        distance=0.30,
+        metadata={
+            "doc_title": "ArkTS 1.2 Linux Previewer for MASTER branch",
+            "section_title": "Build the Linux Previewer",
+            "section_path": "Previewer > ArkTS 1.2 Linux Previewer for MASTER branch > Build the Linux Previewer",
+        },
+        origin="field",
+    )
+    noisy_doc = _candidate(
+        "Previewer should display an application with data and resources from unpacked hap.",
+        "https://kb.local/Previewer/Notes/Built-in%20Previewer",
+        distance=0.10,
+        metadata={
+            "doc_title": "Built-in Previewer",
+            "section_title": "Run Built-in Previewer with app data from hap",
+            "section_path": "Previewer > Notes > Built-in Previewer",
+        },
+        origin="qdrant",
+    )
+    rag, _calls = _build_test_system(
+        dense_budget=2,
+        bm25_budget=2,
+        rerank_top_n=2,
+        rerank_scores=[0.82, 0.82],
+        is_howto=True,
+        dense_candidates=[noisy_doc],
+        bm25_chunks=[_chunk("built-in-noisy", noisy_doc["source_path"], metadata=noisy_doc["metadata"])],
+        bm25_ranked=[0],
+        field_candidates=[exact_doc, noisy_doc],
+    )
+
+    results = rag_module.RAGSystem.search(
+        rag,
+        "what patch should i apply for master branch linux previewer",
+        knowledge_base_id=1,
+        top_k=1,
+    )
+
+    assert "MASTER%20branch" in results[0]["source_path"]
+
+
+def test_search_generalized_mode_demotes_noisy_status_like_page_for_exact_lookup(monkeypatch):
+    _set_legacy_heuristics(monkeypatch, enabled=False)
+    monkeypatch.setattr(rag_module, "HAS_EMBEDDINGS", True, raising=False)
+    monkeypatch.setattr(rag_module, "HAS_RERANKER", False, raising=False)
+    exact_doc = _candidate(
+        "The C API overview explains the public API surface and related references.",
+        "https://kb.local/Features/C-API/C-API%20Overview",
+        distance=0.34,
+        metadata={
+            "doc_title": "C API Overview",
+            "section_title": "Overview",
+            "section_path": "Features > C-API > Overview",
+        },
+        origin="field",
+    )
+    noisy_doc = _candidate(
+        "API_STATUS_OK | API_STATUS_FAIL | DEV_API_STATUS_2026\nAPI item matrix\nrelease log\nhistory",
+        "https://kb.local/Notes/DEV_API_STATUS_2026",
+        distance=0.08,
+        metadata={
+            "doc_title": "DEV_API_STATUS_2026",
+            "section_title": "Status Matrix",
+            "section_path": "Notes > Status Matrix",
+        },
+        origin="qdrant",
+    )
+    rag, _calls = _build_test_system(
+        dense_budget=2,
+        bm25_budget=2,
+        rerank_top_n=2,
+        rerank_scores=[],
+        is_howto=False,
+        enable_rerank=False,
+        dense_candidates=[noisy_doc],
+        bm25_chunks=[_chunk("status-matrix", noisy_doc["source_path"], metadata=noisy_doc["metadata"])],
+        bm25_ranked=[0],
+        field_candidates=[exact_doc],
+    )
+
+    results = rag_module.RAGSystem.search(rag, "c api overview", knowledge_base_id=1, top_k=1)
+
+    assert results[0]["source_path"].endswith("C-API%20Overview")
