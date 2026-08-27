@@ -39,3 +39,6 @@ data/*-smoke-cases.json
 
 open-harmony.zip
 open-harmony/*
+
+# Built vector indexes are artifacts, rebuilt from the corpus
+data/faiss_indexes/
